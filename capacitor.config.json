@@ -1,0 +1,11 @@
+{
+  "appId": "com.sombra.game",
+  "appName": "SOMBRA",
+  "webDir": ".",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
