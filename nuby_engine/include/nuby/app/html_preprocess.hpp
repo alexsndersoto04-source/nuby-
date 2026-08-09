@@ -9,8 +9,8 @@
 //     (modo "raw text": su contenido puede contener '<' sin romper nada)
 //   • <img>, <svg>, <video>, <audio>, <iframe> → placeholders honestos con
 //     su texto alt/src visible (la build no enlaza decodificadores)
-//   • <input> → representación estática visible (los formularios remotos
-//     son solo lectura por ahora; se documenta)
+//   • <input>, <textarea>, <button> → pasan REALES al DOM: el motor los
+//     pinta, enfoca, edita y envía (GET y POST) sin simulación
 //   • Entities HTML reales: &aacute; &#241; &#xF1; &nbsp; etc. → UTF-8
 //   • <base href> respetado para resolver enlaces relativos
 //   • Strip de @media/@import/@keyframes/@font-face en CSS externo (el
@@ -274,25 +274,10 @@ static PreparedPage prepare(const std::string& raw, const std::string& page_url)
             continue;
         }
 
-        // <input ...> → representación estática honesta (solo lectura)
-        if (ieq_at(raw, i, "<input")) {
-            size_t end = raw.find('>', i);
-            if (end == std::string::npos) break;
-            std::string tag = raw.substr(i, end - i + 1);
-            std::string type = core::StringUtils::to_lower(attr_value(tag, "type"));
-            if (type == "hidden") { i = end + 1; continue; }
-            if (type == "submit" || type == "button") {
-                std::string v = attr_value(tag, "value");
-                out += "<span data-nuby-ph=\"btn\">[boton: " + decode_entities(v.empty() ? "enviar" : v) + "]</span>";
-            } else {
-                std::string v = attr_value(tag, "value");
-                if (v.empty()) v = attr_value(tag, "placeholder");
-                if (v.empty()) v = "campo de texto";
-                out += "<span data-nuby-ph=\"input\">" + decode_entities(core::StringUtils::trim(v).substr(0, 60)) + " ✎</span>";
-            }
-            i = end + 1;
-            continue;
-        }
+        // <input> REAL (2026-08-09): ANTES aquí se REEMPLAZABA cada input por
+        // un texto estático "[boton: X]" / "campo de texto ✎" — era una
+        // simulación. Ya no: los inputs llegan íntegros al DOM y Nuby los
+        // pinta, enfoca, edita y envía de verdad (ver browser_shell.hpp).
 
         // <base href="...">
         if (ieq_at(raw, i, "<base")) {

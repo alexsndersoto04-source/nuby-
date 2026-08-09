@@ -87,6 +87,15 @@ public:
     bool handle_char(uint32_t codepoint) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (focus_ == Focus::NONE) return false;
+        // Campo de formulario REAL de la página web: el texto vive en el
+        // atributo `value` del propio elemento del DOM (como en los navegadores)
+        if (focus_ == Focus::WEBFIELD) {
+            auto el = web_field_.lock();
+            if (!el) { focus_ = Focus::NONE; return false; }
+            el->set_attribute("value", el->get_attribute("value") + utf8_encode(codepoint));
+            refresh_content();
+            return true;
+        }
         std::string& field = (focus_ == Focus::URL) ? input_url_ : input_search_;
         if (select_all_) { field.clear(); select_all_ = false; } // comportamiento real de url-bar
         field += utf8_encode(codepoint);
@@ -99,6 +108,16 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (key == "Backspace") {
             if (focus_ == Focus::NONE) return false;
+            if (focus_ == Focus::WEBFIELD) {
+                auto el = web_field_.lock();
+                if (!el) { focus_ = Focus::NONE; return false; }
+                std::string v = el->get_attribute("value");
+                if (v.empty()) return false;
+                pop_utf8(v);
+                el->set_attribute("value", v);
+                refresh_content();
+                return true;
+            }
             std::string& field = (focus_ == Focus::URL) ? input_url_ : input_search_;
             if (select_all_) { field.clear(); select_all_ = false; }
             if (field.empty()) return false;
@@ -108,6 +127,22 @@ public:
             return true;
         }
         if (key == "Enter") {
+            if (focus_ == Focus::WEBFIELD) {
+                auto el = web_field_.lock();
+                if (!el) { focus_ = Focus::NONE; return false; }
+                if (el->get_tag_name() == "textarea") {
+                    // textarea real: Enter es salto de línea, no envío
+                    el->set_attribute("value", el->get_attribute("value") + "\n");
+                    refresh_content();
+                    return true;
+                }
+                // Enter dentro de un <form>: envío IMPLÍCITO real (submit)
+                auto clicked = el;
+                focus_ = Focus::NONE;
+                unfocus_webfield();
+                submit_form(clicked);
+                return true;
+            }
             if (focus_ == Focus::URL) {
                 focus_ = Focus::NONE;
                 std::string target = normalize_user_input(input_url_);
@@ -126,6 +161,12 @@ public:
         }
         if (key == "Escape") {
             if (focus_ == Focus::NONE) return false;
+            if (focus_ == Focus::WEBFIELD) {
+                focus_ = Focus::NONE;
+                unfocus_webfield();
+                refresh_content();
+                return true;
+            }
             focus_ = Focus::NONE;
             input_url_ = current_url_;
             input_search_.clear();
@@ -178,7 +219,7 @@ public:
     std::string status() { std::lock_guard<std::mutex> lock(mutex_); return status_; }
 
 private:
-    enum class Focus { NONE, URL, SEARCH };
+    enum class Focus { NONE, URL, SEARCH, WEBFIELD }; // WEBFIELD: <input>/<textarea> REALES de la página
     enum class Mode { HOME, WEB, RESULTS, ERROR_PAGE, ABOUT, HISTORY };
 
     // ---------------- Estado ----------------
@@ -215,6 +256,8 @@ private:
     std::shared_ptr<RenderResult> content_result_; // para hit-testing
     std::shared_ptr<js::Interpreter> js_;          // intérprete de la página actual
     std::string page_css_;                          // CSS de la página web actual (para re-renders)
+    std::weak_ptr<html::Element> web_field_;        // campo de formulario enfocado (si hay)
+    html::Element* caret_el_obs_ = nullptr;         // elemento que lleva el marcador de caret (observado, no poseído)
     std::vector<std::string> page_scripts_;        // scripts inline de la página
 
     // ---------------- Utilidades ----------------
@@ -480,9 +523,11 @@ private:
         while (node) {
             if (node->is_element()) {
                 auto el = std::static_pointer_cast<html::Element>(node);
+                const std::string& tag = el->get_tag_name();
                 if (el->has_attribute("data-action") || el->has_attribute("data-nuby-input") ||
-                    (el->get_tag_name() == "a" && el->has_attribute("href")) ||
-                    el->has_attribute("onclick"))
+                    (tag == "a" && el->has_attribute("href")) ||
+                    el->has_attribute("onclick") ||
+                    tag == "input" || tag == "textarea" || tag == "button" || tag == "select")
                     return el;
             }
             node = node->get_parent();
@@ -535,8 +580,66 @@ private:
         if (!box) { focus_ = Focus::NONE; rebuild_chrome(); return false; }
         auto el = actionable_ancestor(box->node);
         focus_ = Focus::NONE;
+        unfocus_webfield();
         rebuild_chrome();
         if (!el) return false;
+
+        // -------- Controles de formulario REALES de la página web --------
+        {
+            const std::string& tag = el->get_tag_name();
+            if (tag == "input" || tag == "textarea" || tag == "button") {
+                std::string type = core::StringUtils::to_lower(el->get_attribute("type"));
+                if (type == "checkbox" || type == "radio") {
+                    // guarda el default para <input type=reset> (primer toggle)
+                    if (!el->has_attribute("data-nuby-default-checked"))
+                        el->set_attribute("data-nuby-default-checked",
+                                          el->has_attribute("checked") ? "1" : "0");
+                    // toggle REAL: el atributo checked del DOM es la verdad
+                    if (type == "radio") {
+                        // radio real: desmarca los del mismo `name` en el formulario
+                        std::string myname = el->get_attribute("name");
+                        for (auto& cand : collect_elements(el, "input")) {
+                            if (cand != el && cand->get_attribute("name") == myname &&
+                                core::StringUtils::to_lower(cand->get_attribute("type")) == "radio")
+                                cand->remove_attribute("checked");
+                        }
+                        el->set_attribute("checked", "");
+                    } else if (el->has_attribute("checked")) {
+                        el->remove_attribute("checked");
+                    } else {
+                        el->set_attribute("checked", "");
+                    }
+                    refresh_content();
+                    return true;
+                }
+                if (type == "submit" || type == "button" || type == "reset" || tag == "button") {
+                    if (type == "reset") { reset_form(el); refresh_content(); return true; }
+                    submit_form(el);
+                    return true;
+                }
+                if (type == "hidden" || type == "file" || type == "image") return false;
+                // Campo de texto (text/search/email/url/password/number/tel/vacío):
+                // foco REAL + caret visible. Guarda el valor inicial para reset.
+                if (!el->has_attribute("data-nuby-default"))
+                    el->set_attribute("data-nuby-default", el->get_attribute("value"));
+                focus_ = Focus::WEBFIELD;
+                web_field_ = el;
+                el->set_attribute("data-nuby-caret", "1");
+                caret_el_obs_ = el.get();
+                caret_on_ = true;
+                status_ = "Editando campo '" +
+                          (el->get_attribute("name").empty() ? std::string("sin-nombre") : el->get_attribute("name")) +
+                          "' — Enter envía el formulario, Esc sale";
+                refresh_content();
+                return true;
+            }
+            if (tag == "select") {
+                // select honesto: aún no interactivo (documentado)
+                status_ = "<select> no interactivo todavía — documentado";
+                rebuild_chrome();
+                return true;
+            }
+        }
 
         // Input propio de Nuby (caja de búsqueda en la home)
         if (el->has_attribute("data-nuby-input")) {
@@ -584,15 +687,14 @@ private:
     void render_after_js() {
         if (js_ && js_->dom_mutated() && content_result_ && content_result_->document) {
             js_->clear_mutation();
+            // Documento VIVO (no serializar+re-parsear): el intérprete y su
+            // estado JS (funciones, variables, handlers) SOBREVIVEN al repintado.
             auto res = std::make_shared<RenderResult>(
-                engine_content_->render_page(serialize_body(content_result_->document),
-                                             page_css_.empty() ? UA_EXTRA_CSS : page_css_));
+                engine_content_->render_document(content_result_->document,
+                                                 page_css_.empty() ? UA_EXTRA_CSS : page_css_));
             content_result_ = res;
             content_fb_ = res->pixels;
-            // El re-render creó un documento NUEVO: el intérprete viejo quedaba
-            // apuntando a un documento muerto y los siguientes clicks caían en un
-            // fantasma. Re-bind al documento vivo. Limitación honesta: aquí el
-            // ESTADO JS (funciones/variables de la carga inicial) se reinicia.
+            // re-bind (mismo documento → mismo intérprete conservado)
             {
                 auto eng = engine_content_->get_js_engine();
                 js_ = eng ? eng->interpreter() : nullptr;
@@ -624,16 +726,30 @@ private:
         if (url == "nuby://history") { show_history(); return; }
         if (url == "nuby://clear-history") { history_.clear(); show_history(); return; }
 
+        load_web(url, "GET", "");
+    }
+
+    // Envío de formulario REAL por POST (application/x-www-form-urlencoded)
+    void navigate_post(const std::string& url, const std::string& body) {
+        if (!current_url_.empty() && current_url_ != url) {
+            back_stack_.push_back(current_url_);
+            fwd_stack_.clear();
+        }
+        load_web(url, "POST", body);
+    }
+
+    // Descarga y render REAL de una URL (compartido por GET y POST)
+    void load_web(const std::string& url, const std::string& method, const std::string& req_body) {
         // --- Web real ---
         mode_ = Mode::WEB;
         current_url_ = url;
         input_url_ = url;
-        status_ = "Descargando " + url + " …";
+        status_ = method + " " + url + " …";
         scroll_y_ = 0;
         rebuild_chrome();
 
         auto t0 = now_ms();
-        auto res = net::Fetcher::fetch(url);
+        auto res = net::Fetcher::fetch(url, 5, method, req_body);
         long ms = now_ms() - t0;
 
         if (!res.error.empty()) {
@@ -728,6 +844,170 @@ private:
             }
         }
 
+        compose();
+        rebuild_chrome();
+    }
+
+    // ---------------- Formularios REALES ----------------
+
+    void unfocus_webfield() {
+        if (caret_el_obs_) { caret_el_obs_->remove_attribute("data-nuby-caret"); caret_el_obs_ = nullptr; }
+        web_field_.reset();
+    }
+
+    // DFS REAL sobre el DOM: recoge elementos por nombre de etiqueta
+    static std::vector<std::shared_ptr<html::Element>> collect_elements(
+            std::shared_ptr<html::Node> start, const std::string& tag) {
+        // subir a la raíz del documento
+        while (start && start->get_parent()) start = start->get_parent();
+        std::vector<std::shared_ptr<html::Element>> out;
+        std::function<void(std::shared_ptr<html::Node>)> walk = [&](std::shared_ptr<html::Node> n) {
+            if (!n) return;
+            if (n->is_element() &&
+                std::static_pointer_cast<html::Element>(n)->get_tag_name() == tag)
+                out.push_back(std::static_pointer_cast<html::Element>(n));
+            for (auto& c : n->get_children()) walk(c);
+        };
+        walk(start);
+        return out;
+    }
+
+    static std::shared_ptr<html::Element> find_form(std::shared_ptr<html::Element> el) {
+        auto p = el ? el->get_parent() : nullptr;
+        while (p) {
+            if (p->is_element() &&
+                std::static_pointer_cast<html::Element>(p)->get_tag_name() == "form")
+                return std::static_pointer_cast<html::Element>(p);
+            p = p->get_parent();
+        }
+        return nullptr;
+    }
+
+    // application/x-www-form-urlencoded REAL (espacio → '+', resto → %HH)
+    static std::string form_encode(const std::string& s) {
+        static const char* ok = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._*";
+        std::string out;
+        char hex[4];
+        for (unsigned char c : s) {
+            if (c == ' ') out += '+';
+            else if (strchr(ok, c)) out += (char)c;
+            else { snprintf(hex, sizeof hex, "%%%02X", c); out += hex; }
+        }
+        return out;
+    }
+
+    // Recoge los "successful controls" del formulario (regla HTML real):
+    // - con name; checkbox/radio solo si checked; solo el submit presionado viaja
+    static std::string collect_form_fields(const std::shared_ptr<html::Element>& form,
+                                           const std::shared_ptr<html::Element>& clicked) {
+        std::string qs;
+        std::function<void(std::shared_ptr<html::Node>)> walk = [&](std::shared_ptr<html::Node> n) {
+            if (!n) return;
+            if (n->is_element()) {
+                auto el = std::static_pointer_cast<html::Element>(n);
+                const std::string& tag = el->get_tag_name();
+                if (tag == "input" || tag == "textarea" || tag == "button" || tag == "select") {
+                    std::string name = el->get_attribute("name");
+                    std::string type = core::StringUtils::to_lower(el->get_attribute("type"));
+                    if (!name.empty()) {
+                        bool include = true;
+                        std::string val = el->get_attribute("value");
+                        if (type == "checkbox" || type == "radio") {
+                            include = el->has_attribute("checked");
+                            if (val.empty()) val = "on";
+                        } else if (tag == "textarea") {
+                            val = el->get_attribute("value"); // edición vive en value (nuestro modelo)
+                        } else if (type == "submit" || type == "button" || type == "reset" || tag == "button") {
+                            include = (el == clicked);
+                        } else if (tag == "select") {
+                            include = false; // select no interactivo todavía (honesto)
+                        }
+                        if (include) {
+                            if (!qs.empty()) qs += '&';
+                            qs += form_encode(name) + "=" + form_encode(val);
+                        }
+                    }
+                }
+            }
+            for (auto& c : n->get_children()) walk(c);
+        };
+        walk(form);
+        return qs;
+    }
+
+    void submit_form(std::shared_ptr<html::Element> ctrl) {
+        auto form = find_form(ctrl);
+        if (!form) {
+            // HTML real: control sin <form> no envía nada; lo decimos claro
+            status_ = "El control no pertenece a un <form> — nada que enviar";
+            rebuild_chrome();
+            return;
+        }
+        std::string qs = collect_form_fields(form, ctrl);
+        std::string action = core::StringUtils::trim(form->get_attribute("action"));
+        std::string method = core::StringUtils::to_lower(core::StringUtils::trim(form->get_attribute("method")));
+        unfocus_webfield();
+        focus_ = Focus::NONE;
+
+        if (method == "post") {
+            std::string target = net::Fetcher::resolve_url(current_url_, action.empty() ? current_url_ : action);
+            status_ = "POST " + target + " — " + std::to_string(qs.size()) + " bytes de formulario";
+            rebuild_chrome();
+            navigate_post(target, qs);
+        } else {
+            std::string target = net::Fetcher::resolve_url(current_url_, action.empty() ? current_url_ : action);
+            if (!qs.empty())
+                target += (target.find('?') == std::string::npos ? "?" : "&") + qs;
+            navigate(target);
+        }
+    }
+
+    // reset REAL: restaura value/checked al estado guardado al primer foco.
+    // (Modelo honesto: al enfocar guardamos el default en data-nuby-default.)
+    void reset_form(std::shared_ptr<html::Element> ctrl) {
+        auto form = find_form(ctrl);
+        if (!form) return;
+        std::function<void(std::shared_ptr<html::Node>)> walk = [&](std::shared_ptr<html::Node> n) {
+            if (!n) return;
+            if (n->is_element()) {
+                auto el = std::static_pointer_cast<html::Element>(n);
+                const std::string& tag = el->get_tag_name();
+                if (tag == "input" || tag == "textarea") {
+                    std::string type = core::StringUtils::to_lower(el->get_attribute("type"));
+                    if (type == "checkbox" || type == "radio") {
+                        if (el->get_attribute("data-nuby-default-checked") == "1")
+                            el->set_attribute("checked", "");
+                        else el->remove_attribute("checked");
+                    } else if (el->has_attribute("data-nuby-default")) {
+                        el->set_attribute("value", el->get_attribute("data-nuby-default"));
+                    } else {
+                        el->set_attribute("value", "");
+                    }
+                }
+            }
+            for (auto& c : n->get_children()) walk(c);
+        };
+        walk(form);
+    }
+
+    // Re-render del documento vivo (tras editar campos/toggles SIN tocar JS).
+    // CLAVE: render_document trabaja sobre el MISMO DOM → el foco
+    // (web_field_) y el intérprete sobreviven a todos los re-renders.
+    void refresh_content() {
+        if (!content_result_ || !content_result_->document) { compose(); rebuild_chrome(); return; }
+        auto res = std::make_shared<RenderResult>(
+            engine_content_->render_document(content_result_->document,
+                                             page_css_.empty() ? UA_EXTRA_CSS : page_css_));
+        content_result_ = res;
+        content_fb_ = res->pixels;
+        if (res->layout_tree) {
+            float mb = 0; walk_bottom(res->layout_tree, mb);
+            content_height_ = std::max(H - CHROME_H, std::min((int)mb + 12, CONTENT_CAP));
+        }
+        // el intérprete ligado a ESTE documento se conserva (render_document)
+        auto eng = engine_content_->get_js_engine();
+        js_ = eng ? eng->interpreter() : nullptr;
+        if (js_) js_->clear_mutation();
         compose();
         rebuild_chrome();
     }
@@ -931,6 +1211,13 @@ private:
         tr { display: block; }
         table { display: block; border-top-width: 1px; border-color: #cccccc; margin: 8px 0; }
         [data-nuby-ph] { display: inline-block; background-color: #ececec; color: #666666; border: 1px solid #cccccc; border-radius: 4px; padding: 2px 6px; font-size: 12px; margin: 1px; }
+        input, textarea, select, button { display: inline-block; background-color: #ffffff; color: #1a1a1a; border: 1px solid #9aa0a6; border-radius: 4px; padding: 3px 6px; font-size: 15px; line-height: 20px; margin: 2px 0; }
+        input { width: 220px; height: 26px; }
+        textarea { width: 380px; height: 72px; }
+        input[type="checkbox"], input[type="radio"] { width: 14px; height: 14px; padding: 2px; }
+        input[type="radio"] { border-radius: 9px; }
+        input[type="submit"], input[type="button"], input[type="reset"], button { width: 120px; height: 30px; background-color: #e8f0fe; color: #0b57d0; border: 1px solid #aec7ee; border-radius: 6px; }
+        input[type="hidden"], input[type="file"], input[type="image"] { display: none; }
     )CSS";
 
     // frame compuesto

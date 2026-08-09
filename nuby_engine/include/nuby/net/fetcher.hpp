@@ -64,7 +64,11 @@ class Fetcher {
 public:
     static constexpr size_t MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB de tope honesto
 
-    static FetchResult fetch(const std::string& raw_url, int max_redirects = 5) {
+    static FetchResult fetch(const std::string& raw_url, int max_redirects = 5,
+                             const std::string& method = "GET",
+                             const std::string& body = "") {
+        // method/body REALES: los formularios POST envían su cuerpo de verdad
+        std::string cur_method = method, cur_body = body;
         auto t0 = now_ms();
         FetchResult res;
         std::string current = core::StringUtils::trim(raw_url);
@@ -79,9 +83,9 @@ public:
 
             std::string raw;
             if (url.scheme == "https") {
-                raw = fetch_via_openssl(url, res.error);
+                raw = fetch_via_openssl(url, cur_method, cur_body, res.error);
             } else if (url.scheme == "http" || url.scheme.empty()) {
-                raw = fetch_via_socket(url, res.error);
+                raw = fetch_via_socket(url, cur_method, cur_body, res.error);
             } else {
                 res.error = "Esquema no soportado: " + url.scheme;
                 res.elapsed_ms = now_ms() - t0;
@@ -105,6 +109,11 @@ public:
                 std::string loc = res.header("Location");
                 if (!loc.empty()) {
                     current = resolve_url(current, loc);
+                    // Semántica HTTP real: 301/302/303 degradan a GET;
+                    // 307/308 conservan método y cuerpo.
+                    if (res.status_code != 307 && res.status_code != 308) {
+                        cur_method = "GET"; cur_body.clear();
+                    }
                     res.headers.clear();
                     continue;
                 }
@@ -159,7 +168,8 @@ private:
     }
 
     // ---- http:// : socket POSIX propio ------------------------------------
-    static std::string fetch_via_socket(const URL& url, std::string& err) {
+    static std::string fetch_via_socket(const URL& url, const std::string& method,
+                                        const std::string& body, std::string& err) {
         struct addrinfo hints{}, *res_info = nullptr;
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
@@ -188,7 +198,7 @@ private:
             return "";
         }
 
-        std::string req = build_request(url);
+        std::string req = build_request(url, method, body);
         if (send(sock, req.c_str(), req.size(), 0) < 0) {
             close(sock); err = "Fallo al enviar la peticion"; return "";
         }
@@ -201,7 +211,8 @@ private:
     // ---- https:// : TLS real via openssl s_client --------------------------
     // Abrimos dos pipes: escribimos la petición HTTP al stdin del proceso
     // openssl y leemos la respuesta TLS-descifrada de su stdout.
-    static std::string fetch_via_openssl(const URL& url, std::string& err) {
+    static std::string fetch_via_openssl(const URL& url, const std::string& method,
+                                         const std::string& body, std::string& err) {
         int in_pipe[2], out_pipe[2];
         if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
             err = "No se pudieron crear pipes para TLS";
@@ -229,7 +240,7 @@ private:
 
         // PADRE
         close(in_pipe[0]); close(out_pipe[1]);
-        std::string req = build_request(url);
+        std::string req = build_request(url, method, body);
         ssize_t w = write(in_pipe[1], req.c_str(), req.size());
         (void)w;
         close(in_pipe[1]); // EOF → openssl envía y espera respuesta
@@ -251,15 +262,21 @@ private:
         return raw;
     }
 
-    static std::string build_request(const URL& url) {
+    static std::string build_request(const URL& url, const std::string& method,
+                                     const std::string& body) {
         std::ostringstream req;
-        req << "GET " << url.path << (url.query.empty() ? "" : "?" + url.query) << " HTTP/1.1\r\n";
+        req << method << " " << url.path << (url.query.empty() ? "" : "?" + url.query) << " HTTP/1.1\r\n";
         req << "Host: " << url.host << "\r\n";
         req << "User-Agent: Nuby/2.0 (motor propio C++20; renderizado real)\r\n";
         req << "Accept: text/html,application/xhtml+xml,text/css,*/*;q=0.5\r\n";
         req << "Accept-Encoding: identity\r\n"; // honesto: sin gzip mientras no haya zlib
         req << "Accept-Language: es,en;q=0.6\r\n";
+        if (!body.empty()) {
+            req << "Content-Type: application/x-www-form-urlencoded\r\n";
+            req << "Content-Length: " << body.size() << "\r\n";
+        }
         req << "Connection: close\r\n\r\n";
+        if (!body.empty()) req << body;
         return req.str();
     }
 

@@ -550,6 +550,8 @@ public:
         global_ = std::make_shared<Env>();
     }
 
+    std::shared_ptr<html::Document> document() const { return doc_; }
+
     const std::vector<std::string>& logs() const { return logs_; }
     bool dom_mutated() const { return dom_mutated_; }
     void clear_mutation() { dom_mutated_ = false; }

@@ -84,39 +84,64 @@ public:
         return declarations;
     }
 
+    // Construye UN SimpleSelector real a partir de un token de selector.
+    // Cubre: *  tag  .clase  #id  :pseudo  [attr]  [attr="v"]  tag[attr]  tag[attr="v"]
+    // (ANTES: los tokens con corchetes guardaban el texto CRUDO "[data-x]" y
+    //  jamás casaban — la regla UA [data-nuby-ph] estaba muerta; bug latente.)
+    static void flush_token(CompoundSelector& compound, std::string token) {
+        auto bpos = token.find('[');
+        if (bpos != std::string::npos && bpos != 0) {
+            SimpleSelector t;
+            t.type = SimpleSelectorType::TYPE;
+            t.value = core::StringUtils::to_lower(token.substr(0, bpos));
+            compound.simple_selectors.push_back(t);
+            token = token.substr(bpos);
+        }
+        SimpleSelector simple;
+        if (token[0] == '.')      { simple.type = SimpleSelectorType::CLASS;  simple.value = token.substr(1); }
+        else if (token[0] == '#') { simple.type = SimpleSelectorType::ID;     simple.value = token.substr(1); }
+        else if (token[0] == ':') { simple.type = SimpleSelectorType::PSEUDO_CLASS; simple.value = token.substr(1); }
+        else if (token == "*")    { simple.type = SimpleSelectorType::UNIVERSAL; }
+        else if (token[0] == '[') {
+            std::string inner = token.substr(1);
+            if (!inner.empty() && inner.back() == ']') inner.pop_back();
+            auto eq = inner.find('=');
+            if (eq != std::string::npos) {
+                std::string name = core::StringUtils::trim(
+                    core::StringUtils::to_lower(inner.substr(0, eq)));
+                std::string val = core::StringUtils::trim(inner.substr(eq + 1));
+                if (val.size() >= 2 && (val.front() == '"' || val.front() == '\''))
+                    val = val.substr(1, val.size() - 2);
+                simple.type = SimpleSelectorType::ATTRIBUTE;
+                simple.value = name + "=" + core::StringUtils::to_lower(val);
+            } else {
+                simple.type = SimpleSelectorType::ATTRIBUTE;
+                simple.value = core::StringUtils::to_lower(inner);
+            }
+        } else {
+            simple.type = SimpleSelectorType::TYPE;
+            simple.value = core::StringUtils::to_lower(token);
+        }
+        compound.simple_selectors.push_back(simple);
+    }
+
     ComplexSelector parse_complex_selector(const std::string& raw_sel) {
         ComplexSelector complex;
         std::string s = core::StringUtils::trim(raw_sel);
         if (s.empty()) return complex;
 
-        // Split tokens by combinators '>', '+', '~', ' '
+        // Split por combinadores '>', '+', '~', ' ' — pero NUNCA dentro de [...]
         CompoundSelector current_compound;
         std::string current_token;
+        bool in_bracket = false;
 
         for (size_t i = 0; i < s.length(); ++i) {
             char c = s[i];
-            if (c == ' ' || c == '>' || c == '+' || c == '~') {
+            if (c == '[') in_bracket = true;
+            if (c == ']') in_bracket = false;
+            if (!in_bracket && (c == ' ' || c == '>' || c == '+' || c == '~')) {
                 if (!current_token.empty()) {
-                    SimpleSelector simple;
-                    if (current_token[0] == '.') {
-                        simple.type = SimpleSelectorType::CLASS;
-                        simple.value = current_token.substr(1);
-                    } else if (current_token[0] == '#') {
-                        simple.type = SimpleSelectorType::ID;
-                        simple.value = current_token.substr(1);
-                    } else if (current_token[0] == ':') {
-                        simple.type = SimpleSelectorType::PSEUDO_CLASS;
-                        simple.value = current_token.substr(1);
-                    } else if (current_token[0] == '[') {
-                        simple.type = SimpleSelectorType::ATTRIBUTE;
-                        simple.value = current_token;
-                    } else if (current_token == "*") {
-                        simple.type = SimpleSelectorType::UNIVERSAL;
-                    } else {
-                        simple.type = SimpleSelectorType::TYPE;
-                        simple.value = core::StringUtils::to_lower(current_token);
-                    }
-                    current_compound.simple_selectors.push_back(simple);
+                    flush_token(current_compound, std::move(current_token));
                     current_token.clear();
                 }
 
@@ -137,23 +162,7 @@ public:
         }
 
         if (!current_token.empty()) {
-            SimpleSelector simple;
-            if (current_token[0] == '.') {
-                simple.type = SimpleSelectorType::CLASS;
-                simple.value = current_token.substr(1);
-            } else if (current_token[0] == '#') {
-                simple.type = SimpleSelectorType::ID;
-                simple.value = current_token.substr(1);
-            } else if (current_token[0] == ':') {
-                simple.type = SimpleSelectorType::PSEUDO_CLASS;
-                simple.value = current_token.substr(1);
-            } else if (current_token == "*") {
-                simple.type = SimpleSelectorType::UNIVERSAL;
-            } else {
-                simple.type = SimpleSelectorType::TYPE;
-                simple.value = core::StringUtils::to_lower(current_token);
-            }
-            current_compound.simple_selectors.push_back(simple);
+            flush_token(current_compound, std::move(current_token));
             complex.compound_selectors.push_back(current_compound);
         }
 

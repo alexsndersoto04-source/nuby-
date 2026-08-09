@@ -195,8 +195,15 @@ private:
                 return elem->has_class(sel.value);
             case SimpleSelectorType::ID:
                 return elem->get_id() == sel.value;
-            case SimpleSelectorType::ATTRIBUTE:
-                return elem->has_attribute(sel.value);
+            case SimpleSelectorType::ATTRIBUTE: {
+                // [attr] por presencia, o [attr="valor"] por igualdad real
+                auto eq = sel.value.find('=');
+                if (eq == std::string::npos) return elem->has_attribute(sel.value);
+                std::string name = sel.value.substr(0, eq);
+                return elem->has_attribute(name) &&
+                       core::StringUtils::to_lower(elem->get_attribute(name)) ==
+                           sel.value.substr(eq + 1);
+            }
             case SimpleSelectorType::PSEUDO_CLASS:
                 return true; // Simplified pseudo matching
             default:

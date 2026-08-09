@@ -177,6 +177,66 @@ void test_herencia_color_css() {
     std::cout << "  [✔] herencia de color OK\n";
 }
 
+// Regresión REAL (bug 2026-08-09 noche): el preproceso SUSTITUÍA los <input>
+// por textos estáticos ("campo de texto ✎") — simulación. Ahora pasan reales
+// al DOM y se pintan como controles.
+void test_inputs_reales_en_dom() {
+    std::cout << "[Test] <input> llega real al DOM y se pinta como control...\n";
+    auto res = NubyBrowserEngine(400, 200).render_page(
+        "<html><body><input type=\"text\" name=\"n\" placeholder=\"pon algo\"></body></html>",
+        "input { display: inline-block; background-color: #ffffff; color: #1a1a1a; border: 1px solid #9aa0a6; padding: 3px 6px; width: 220px; height: 26px; }");
+    CHECK(res.document != nullptr, "sin documento");
+    bool found_input = false;
+    if (res.document) {
+        auto inputs = res.document->get_elements_by_tag_name("input");
+        found_input = !inputs.empty();
+        CHECK(found_input, "el <input> NO existe en el DOM (¿lo tragó un placeholder?)");
+        if (found_input)
+            CHECK(inputs[0]->get_attribute("name") == "n", "atributos del input perdidos");
+    }
+    // y se pintó: la esquina del campo tiene el borde #9aa0a6 (body margin 8)
+    bool border_px = false;
+    for (int y = 6; y < 60 && !border_px; ++y)
+        for (int x = 6; x < 250 && !border_px; ++x) {
+            uint32_t p = res.pixels[y * 400 + x];
+            uint8_t r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+            if (r > 145 && r < 165 && g > 150 && g < 170 && b > 155 && b < 175) border_px = true;
+        }
+    CHECK(border_px, "el control no se pintó (no hay borde de input)");
+    std::cout << "  [✔] inputs reales OK\n";
+}
+
+// Regresión REAL (bug latente del parser CSS): los tokens con corchetes se
+// guardaban CRUDOS ("[data-x]") y jamás casaban; [type="x"] ni existía.
+void test_selector_atributo_igualdad() {
+    std::cout << "[Test] Selectores [attr] y [attr=\"valor\"] reales...\n";
+    auto res = NubyBrowserEngine(400, 200).render_page(
+        "<html><body><input type=\"radio\" name=\"g\"><input type=\"text\" name=\"t\"></body></html>",
+        "input { width: 200px; height: 20px; }\n"
+        "input[type=\"radio\"] { width: 14px; height: 14px; }\n"
+        "[dummy-inexistente] { display: none; }");
+    CHECK(res.document != nullptr, "sin documento");
+    // compara el WIDTH COMPUTADO (la cascada): radio=14 (regla con igualdad),
+    // text=200 (regla genérica). Así no dependemos del padding UA.
+    bool radio_small = false, text_wide = false;
+    std::function<void(std::shared_ptr<layout::LayoutBox>)> walk =
+        [&](std::shared_ptr<layout::LayoutBox> b) {
+            if (!b || !b->node || !b->node->is_element()) { if (b) for (auto& c : b->children) walk(c); return; }
+            auto el = std::static_pointer_cast<html::Element>(b->node);
+            if (el->get_tag_name() == "input") {
+                std::string t = core::StringUtils::to_lower(el->get_attribute("type"));
+                float w = b->style.width.is_auto() ? -1.0f : b->style.width.value;
+                if (t == "radio" && w > 10.0f && w < 20.0f) radio_small = true;
+                if (t == "text" && w > 150.0f) text_wide = true;
+            }
+            for (auto& c : b->children) walk(c);
+        };
+    walk(res.layout_tree);
+    CHECK(radio_small, "input[type=\"radio\"] no casó (usó el width genérico)");
+    CHECK(text_wide, "el width de input text no aplicó");
+    std::cout << "  [✔] selectores de atributo OK\n";
+}
+
 void test_search_bm25() {
     std::cout << "[Test] Índice invertido + BM25 reales...\n";
     search::SearchIndex idx;
@@ -260,12 +320,14 @@ int main() {
     test_texto_no_duplica_borde();
     test_js_muta_dom_antes_del_layout();
     test_herencia_color_css();
+    test_inputs_reales_en_dom();
+    test_selector_atributo_igualdad();
     test_search_bm25();
     test_js_interpreter();
     test_fetcher_unidades();
     std::cout << "========================================\n";
     if (failures == 0) {
-        std::cout << "\033[1;32mTODO PASA — 10/10 suites reales (100%)\033[0m\n";
+        std::cout << "\033[1;32mTODO PASA — 12/12 suites reales (100%)\033[0m\n";
         return 0;
     }
     std::cout << "\033[1;31m" << failures << " comprobaciones fallaron\033[0m\n";

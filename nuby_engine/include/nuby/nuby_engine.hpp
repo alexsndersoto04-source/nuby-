@@ -29,12 +29,142 @@ struct RenderResult {
     std::vector<std::string> js_logs;
 };
 
+// ============================================================================
+// Controles de formulario REALES (2026-08-09): valor/placeholder/caret/check.
+// El valor vive en el atributo `value` del DOM (nuestro modelo de estado),
+// el placeholder cuando está vacío, password con bullets UTF-8 reales, y el
+// caret solo cuando el shell marcó data-nuby-caret="1" (foco real).
+// ============================================================================
+namespace detail {
+
+static inline void render_form_control(const std::shared_ptr<layout::LayoutBox>& box,
+                                       const std::shared_ptr<html::Element>& el,
+                                       paint::DisplayList& dl) {
+    const core::RectF c = box->dimensions.content;
+    const std::string tag = el->get_tag_name();
+    std::string type = core::StringUtils::to_lower(el->get_attribute("type"));
+    bool is_check = tag == "input" && (type == "checkbox" || type == "radio");
+    bool is_button = tag == "button" ||
+        (tag == "input" && (type == "submit" || type == "button" || type == "reset"));
+    bool is_textish = tag == "textarea" ||
+        (tag == "input" && (type.empty() || type == "text" || type == "search" ||
+                            type == "email" || type == "url" || type == "password" ||
+                            type == "number" || type == "tel"));
+
+    float fs = box->style.font_size > 0 ? box->style.font_size : 15.0f;
+    float lh = box->style.line_height > 0 ? box->style.line_height : fs * 1.35f;
+
+    if (is_check) {
+        if (el->has_attribute("checked")) {
+            paint::DrawCommand cmd;
+            cmd.type = paint::CommandType::FILL_ROUNDED_RECT;
+            cmd.rect = { c.x + 3.5f, c.y + 3.5f,
+                         std::max(0.0f, c.width - 7.0f), std::max(0.0f, c.height - 7.0f) };
+            if (cmd.rect.width <= 0 || cmd.rect.height <= 0) return;
+            cmd.radius = core::BorderRadius(type == "radio" ? cmd.rect.width / 2.0f : 2.0f);
+            cmd.color = core::Color(11, 87, 208);
+            dl.add_command(cmd);
+        }
+        return;
+    }
+
+    if (is_button) {
+        std::string label = el->get_attribute("value");
+        if (label.empty()) label = type == "reset" ? "Restablecer" : "Enviar";
+        paint::DrawCommand cmd;
+        cmd.type = paint::CommandType::DRAW_TEXT;
+        float tw = layout::TextShaper::measure_text_width(label, fs, 700);
+        cmd.rect = { c.x + std::max(4.0f, (c.width - tw) / 2.0f),
+                     c.y + std::max(1.0f, (c.height - fs * 1.25f) / 2.0f),
+                     tw, fs * 1.25f };
+        cmd.text = label;
+        cmd.font_size = fs;
+        cmd.font_weight = 700;
+        cmd.color = box->style.color;
+        dl.add_command(cmd);
+        return;
+    }
+
+    if (!is_textish) return;
+
+    {   // clip: el texto no se sale del campo (clip REAL del rasterizador)
+        paint::DrawCommand clip;
+        clip.type = paint::CommandType::PUSH_CLIP;
+        clip.rect = c;
+        dl.add_command(clip);
+    }
+
+    std::string val = el->get_attribute("value");
+    core::Color color = box->style.color;
+    if (type == "password" && !val.empty()) {
+        size_t n = 0;
+        for (unsigned char ch : val) if ((ch & 0xC0) != 0x80) ++n; // codepoints
+        std::string dots;
+        for (size_t i = 0; i < n; ++i) dots += "\xE2\x80\xA2"; // •
+        val = dots;
+    }
+    bool placeholder = val.empty();
+    if (placeholder) {
+        val = el->get_attribute("placeholder");
+        color = core::Color(138, 143, 152);
+    }
+
+    float y0 = c.y + (tag == "input" ? std::max(2.0f, (c.height - lh) / 2.0f) : 3.0f);
+    float y = y0, last_w = 0.0f, last_y = y0;
+
+    if (!val.empty()) {
+        // líneas reales: partir por \n y envolver cada una
+        std::vector<std::string> lines;
+        std::string cur;
+        for (char ch : val) {
+            if (ch == '\n') { lines.push_back(cur); cur.clear(); } else cur += ch;
+        }
+        lines.push_back(cur);
+        for (auto& ln : lines) {
+            auto runs = layout::TextShaper::wrap_text(ln, std::max(10.0f, c.width - 8.0f),
+                                                      fs, box->style.font_weight, color, lh);
+            if (runs.empty()) { y += lh; last_y = y - lh; last_w = 0; continue; }
+            for (auto& r : runs) {
+                paint::DrawCommand cmd;
+                cmd.type = paint::CommandType::DRAW_TEXT;
+                cmd.rect = { c.x + 4.0f, y, r.rect.width, r.rect.height };
+                cmd.text = r.text;
+                cmd.font_size = r.font_size;
+                cmd.font_weight = r.font_weight;
+                cmd.color = r.color;
+                dl.add_command(cmd);
+                last_y = y;
+                last_w = r.rect.width;
+                y += r.rect.height;
+            }
+        }
+    }
+
+    if (el->has_attribute("data-nuby-caret")) {
+        paint::DrawCommand caret;
+        caret.type = paint::CommandType::FILL_RECT;
+        caret.rect = { c.x + 4.0f + (val.empty() ? 0.0f : last_w) + 1.0f,
+                       (val.empty() ? y0 : last_y) + 2.0f, 2.0f, lh - 4.0f };
+        caret.color = core::Color(11, 87, 208);
+        dl.add_command(caret);
+    }
+
+    {
+        paint::DrawCommand pop;
+        pop.type = paint::CommandType::POP_CLIP;
+        dl.add_command(pop);
+    }
+}
+
+} // namespace detail
+
 class NubyBrowserEngine {
 private:
     int viewport_width_{1000};
     int viewport_height_{800};
     layout::LayoutEngine layout_engine_;
     std::shared_ptr<html::Document> current_document_;
+
     std::shared_ptr<layout::LayoutBox> current_layout_tree_;
     std::shared_ptr<js::JSEngine> current_js_engine_;
 
@@ -94,6 +224,14 @@ private:
             );
             cmd.border_color = box->style.border_color;
             dl.add_command(cmd);
+        }
+
+        // 3.5 Controles de formulario REALES (input/textarea/button)
+        if (box->node && box->node->is_element()) {
+            auto el = std::static_pointer_cast<html::Element>(box->node);
+            const std::string& t = el->get_tag_name();
+            if (t == "input" || t == "textarea" || t == "button")
+                detail::render_form_control(box, el, dl);
         }
 
         // 4. Text Content Runs
@@ -172,7 +310,7 @@ public:
             result.js_logs.insert(result.js_logs.end(), logs.begin(), logs.end());
         }
 
-        // Stage 4: Layout Tree Construction, Flexbox & Flow Resolution
+        // Stage 3.5: Layout Tree Construction, Flexbox & Flow Resolution
         {
             core::ScopedTimer timer(result.profiler, "Layout_Engine", "BFC, IFC, Text Shaping & Flexbox");
             current_layout_tree_ = layout_engine_.layout(current_document_);
@@ -188,6 +326,71 @@ public:
         // Stage 6: 2D Software Rasterizer (Pixel Framebuffer Compositing)
         {
             core::ScopedTimer timer(result.profiler, "Rasterization", "Subpixel anti-aliasing & Porter-Duff blend");
+            paint::SoftwareRasterizer rasterizer(viewport_width_, viewport_height_, core::Color::white());
+            rasterizer.execute_display_list(result.display_list);
+            result.pixels = rasterizer.get_pixels();
+        }
+
+        return result;
+    }
+
+    // Re-render de un documento YA VIVO (2026-08-09). ANTES, refrescar la
+    // página tras editar un <input> se hacía serializando el DOM y
+    // re-parseándolo: el documento NUEVO dejaba el foco apuntando a un
+    // elemento muerto y el primer carácter tecleado se perdía en el vacío
+    // (bug real detectado en la prueba de formularios en vivo).
+    // Ahora: MISMO documento, misma identidad de nodos → foco y eventos
+    // sobreviven a cualquier número de re-renders. No re-ejecuta los scripts
+    // (mutarían dos veces); conserva el intérprete si ya está ligado a ESTE
+    // documento (sus handlers JS siguen vivos).
+    RenderResult render_document(const std::shared_ptr<html::Document>& doc,
+                                 const std::string& custom_css) {
+        RenderResult result;
+        result.width = viewport_width_;
+        result.height = viewport_height_;
+        result.profiler.reset();
+
+        current_document_ = doc;
+        result.document = doc;
+
+        // Stage 2: CSS (misma lógica que render_page)
+        {
+            core::ScopedTimer timer(result.profiler, "CSS_Cascade", "Parse CSS & compute element styles");
+            layout_engine_.clear_stylesheets();
+            std::string combined_css = custom_css;
+            auto style_elems = current_document_->get_elements_by_tag_name("style");
+            for (const auto& s_elem : style_elems) {
+                combined_css += "\n" + s_elem->get_text_content();
+            }
+            if (!combined_css.empty()) {
+                css::CSSParser css_parser(combined_css);
+                auto sheet = css_parser.parse();
+                layout_engine_.add_stylesheet(sheet);
+            }
+        }
+
+        // Stage 3: JS — conserva el intérprete ligado a ESTE documento
+        if (!current_js_engine_ || !current_js_engine_->interpreter() ||
+            current_js_engine_->interpreter()->document().get() != doc.get()) {
+            current_js_engine_ = std::make_shared<js::JSEngine>(current_document_);
+        }
+
+        // Stage 4: Layout
+        {
+            core::ScopedTimer timer(result.profiler, "Layout_Engine", "BFC, IFC, Text Shaping & Flexbox");
+            current_layout_tree_ = layout_engine_.layout(current_document_);
+            result.layout_tree = current_layout_tree_;
+        }
+
+        // Stage 5: Display List
+        {
+            core::ScopedTimer timer(result.profiler, "Display_List", "Generate 2D paint commands");
+            generate_display_list(current_layout_tree_, result.display_list);
+        }
+
+        // Stage 6: Raster
+        {
+            core::ScopedTimer timer(result.profiler, "Rasterization", "Software rasterizer");
             paint::SoftwareRasterizer rasterizer(viewport_width_, viewport_height_, core::Color::white());
             rasterizer.execute_display_list(result.display_list);
             result.pixels = rasterizer.get_pixels();
