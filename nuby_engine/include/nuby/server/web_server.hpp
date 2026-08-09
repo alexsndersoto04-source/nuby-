@@ -108,7 +108,10 @@ private:
 
     std::mutex sessions_mx_;
     std::unordered_map<std::string, std::shared_ptr<Session>> sessions_;
-    static constexpr size_t MAX_SESSIONS = 64;
+    // 24 y no 64: cada sesión mantiene su documento+índice en RAM; en un
+    // free tier de 512 MB, 24 sesiones concurrentes es lo honesto. El LRU
+    // expulsa la menos activa sin drama cuando se llena.
+    static constexpr size_t MAX_SESSIONS = 24;
 
 public:
     void set_data_path(const std::string& p) { pages_tsv_ = p; }

@@ -58,13 +58,29 @@ static std::string get_monitor_html() {
 <input id="kbd" autocomplete="off" autocapitalize="off">
 <div id="hint">NUBY · Cada pixel de la imagen lo calculo el motor C++ —
 este canvas solo los muestra (como un escritorio remoto). Click, rueda y
-teclado viajan al motor. <span id="stat"></span></div>
+teclado viajan al motor. El motor renderiza AL TAMAÑO de tu pantalla.
+<span id="stat"></span></div>
 <script>
 (function(){
   var cv=document.getElementById('screen'), ctx=cv.getContext('2d');
   var kbd=document.getElementById('kbd'), stat=document.getElementById('stat');
   var W=1024,H=640,lastSeq=-1;
   var img=ctx.createImageData(W,H);
+
+  // Viewport real por sesión: le decimos al motor el tamaño de nuestra
+  // pantalla y él renderiza a esa medida (responsive DE VERDAD).
+  var lastSentW=0, lastSentH=0, resizeTimer=null;
+  function sendSize(){
+    var w=Math.max(240,Math.min(1920,window.innerWidth));
+    var h=Math.max(320,Math.min(2160,window.innerHeight-56));
+    if(w===lastSentW&&h===lastSentH)return;
+    lastSentW=w;lastSentH=h;
+    post('k=resize&w='+w+'&h='+h,function(){setTimeout(poll,200);setTimeout(poll,700);});
+  }
+  window.addEventListener('resize',function(){
+    if(resizeTimer)clearTimeout(resizeTimer);
+    resizeTimer=setTimeout(sendSize,350);
+  });
 
   function post(qs, then){
     var r=new XMLHttpRequest(); r.open('POST','/event?'+qs,true);
@@ -128,14 +144,20 @@ teclado viajan al motor. <span id="stat"></span></div>
         var bytes=new Uint8Array(ab);
         var dv=new DataView(ab);
         var w=dv.getUint32(0,true), h=dv.getUint32(4,true);
-        if(w===W&&h===H){ decodeRLE(bytes,img); lastSeq=j.seq; frames++; }
+        // si el motor cambió el tamaño (nuestro resize), re-crear el canvas
+        if(w!==W||h!==H){
+          W=w;H=h;cv.width=w;cv.height=h;img=ctx.createImageData(w,h);
+        }
+        decodeRLE(bytes,img); lastSeq=j.seq; frames++;
         var secs=(Date.now()-t0)/1000;
-        stat.textContent='· '+(ab.byteLength/1024).toFixed(0)+' KB/frame RLE · seq '+j.seq;
+        stat.textContent='· '+(ab.byteLength/1024).toFixed(0)+' KB/frame RLE · seq '+j.seq+
+          ' · '+w+'x'+h;
       });
     }).catch(function(){});
   }
   setInterval(poll,250);
   poll();
+  sendSize(); // primera negociación de viewport al cargar
 })();
 </script>
 </body>
@@ -272,7 +294,8 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
         if (fb.empty()) {
             return http_response(200, "OK", "application/octet-stream", "");
         }
-        auto rle = encode_rle(fb, app::BrowserShell::W, app::BrowserShell::H);
+        // el tamaño es el de ESTA sesión (viewport dinámico real)
+        auto rle = encode_rle(fb, ses.shell->width(), ses.shell->height());
         is_binary = true;
         return http_response_bin(200, "OK", "application/x-nuby-rle", rle);
     }
@@ -284,12 +307,21 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
             int x = std::atoi(qs_get(query, "x").c_str());
             int y = std::atoi(qs_get(query, "y").c_str());
             changed = ses.shell->handle_click(x, y);
+        } else if (k == "resize") {
+            // el monitor reporta el tamaño real de su pantalla
+            int w = std::atoi(qs_get(query, "w").c_str());
+            int h = std::atoi(qs_get(query, "h").c_str());
+            if (w > 0 && h > 0) {
+                int old_w = ses.shell->width(), old_h = ses.shell->height();
+                ses.shell->set_viewport(w, h);
+                changed = (ses.shell->width() != old_w || ses.shell->height() != old_h);
+            }
         } else if (k == "wheel") {
             int dy = std::atoi(qs_get(query, "dy").c_str());
             changed = ses.shell->handle_wheel(dy);
         } else if (k == "char") {
             unsigned long cp = std::strtoul(qs_get(query, "cp").c_str(), nullptr, 10);
-            changed = ses.shell->handle_char((uint32_t)cp);
+            if (cp > 0) changed = ses.shell->handle_char((uint32_t)cp); // cp=0 = basura
         } else if (k == "key") {
             changed = ses.shell->handle_key(qs_get(query, "key"));
         }

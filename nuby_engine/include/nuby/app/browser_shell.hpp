@@ -47,9 +47,29 @@ struct HistoryEntry {
 
 class BrowserShell {
 public:
-    static constexpr int W = 1024;          // ancho ventana virtual
-    static constexpr int H = 640;           // alto ventana virtual
-    static constexpr int CHROME_H = 92;     // alto de la barra superior
+    // Ventana virtual de ESTA sesión (2026-08-09): cada visitante recibe
+    // frames del tamaño real de SU pantalla (el monitor la reporta por
+    // /event?k=resize). Antes era fijo 1024×640 y en un teléfono el frame
+    // se encogía entero → texto ilegible. Ya no es constexpr: es por sesión.
+    int W{1024};                        // ancho ventana virtual
+    int H{640};                         // alto ventana virtual
+    static constexpr int CHROME_H = 92; // alto de la barra superior
+    int width() const { return W; }
+    int height() const { return H; }
+
+    // Re-renderiza TODO a un nuevo tamaño de ventana (móvil ↔ escritorio).
+    void set_viewport(int w, int h) {
+        // caps honestos: ni micro-frames ni monstruos que revienten la RAM
+        w = std::max(240, std::min(1920, w));
+        h = std::max(320, std::min(2160, h));
+        if (w == W && h == H) return;
+        W = w; H = h;
+        engine_chrome_->set_viewport(W, CHROME_H);
+        engine_content_->set_viewport(W, CONTENT_CAP);
+        scroll_y_ = 0; // el alto visible cambió; el scroll viejo no aplica
+        refresh_content(); // re-layout del documento vivo al nuevo ancho
+        rebuild_chrome();  // incluye compose() del frame final
+    }
     static constexpr int CONTENT_CAP = 8000; // tope de alto de página (seguridad)
 
     // Multi-sesión REAL: varias sesiones comparten UN índice de búsqueda
@@ -375,10 +395,12 @@ private:
              "</div>"
 
              "<div style=\"display: flex; flex-direction: row; justify-content: space-between; margin-top: 7px;\">"
-               "<span style=\"color: #555555; font-size: 12px;\">" << esc(status_) << "</span>"
+               "<span style=\"color: #555555; font-size: 12px;\">" << esc(status_line()) << "</span>"
+        << (W >= 520 ? std::string(
                "<div data-action=\"about\" style=\"padding: 0px 4px;\">"
-                 "<span style=\"color: #0b57d0; font-size: 12px; font-weight: 700;\">nuby://about · motor propio, cero Chrome</span></div>"
-             "</div>"
+                 "<span style=\"color: #0b57d0; font-size: 12px; font-weight: 700;\">nuby://about · motor propio, cero Chrome</span></div>")
+                     : std::string(""))
+        <<    "</div>"
           "</div>";
         return h.str();
     }
@@ -412,6 +434,28 @@ private:
         }
         dirty_ = true;
     }
+    // Barra de estado honesta y responsive: una sola línea que QUEPA en el
+    // ancho real de la sesión (trunca con … como los tooltips de un
+    // navegador), reservando sitio al bloque "nuby://about" si existe.
+    std::string status_line() const {
+        // Medida EXACTA con el mismo shaper del engine: nada de estimar.
+        // 44px = paddings/márgenes del chrome; 300px = bloque about (si cabe).
+        float avail = (float)W - 44.0f - (W >= 520 ? 300.0f : 0.0f);
+        auto fits = [&](const std::string& s) {
+            return layout::TextShaper::measure_text_width(s, 12.0f, 400) <= avail;
+        };
+        if (fits(status_)) return status_;
+        // truncar por PALABRAS hasta que quepa con la elipsis (UX de verdad)
+        auto words = core::StringUtils::split_whitespace(status_);
+        std::string out;
+        for (auto& w : words) {
+            std::string cand = out.empty() ? w : out + " " + w;
+            if (!fits(cand + " …")) break;
+            out = cand;
+        }
+        return out.empty() ? status_.substr(0, 1) + "…" : out + " …";
+    }
+
     void rebuild_chrome_only() {
         auto res = engine_chrome_->render_page(chrome_html());
         chrome_result_ = std::make_shared<RenderResult>(std::move(res));
@@ -1212,7 +1256,12 @@ private:
              "Tu navegador solo muestra los pixeles, como un monitor.</p>"
              "<h2 style=\"font-size: 19px; margin: 18px 0 6px 0;\">REAL en esta build</h2>"
              "<p style=\"font-size: 13px; color: #222;\">"
-             "· Parser HTML, CSS (cascada + especificidad), layout de bloques/flex, rasterizador propio AA<br>"
+             "· Parser HTML, CSS (cascada + especificidad real), rasterizador propio AA<br>"
+             "· Layout: bloques + flex 3-pasos + <b>IFC real</b> (lineas inline con wrap, baseline y text-align)<br>"
+             "· Imagenes: <b>decodificador PNG propio</b> (DEFLATE, filtros, paleta, alfa) — pintadas pixel a pixel<br>"
+             "· Formularios: inputs con caret, checkbox/radio, GET y POST de verdad (probados contra servidor eco)<br>"
+             "· Multi-sesion: cada visitante tiene su propio navegador aislado por cookie; indice BM25 compartido<br>"
+             "· Viewport dinamico: el motor renderiza AL TAMANO real de tu pantalla (movil o escritorio)<br>"
              "· Red: DNS+TCP+HTTP/1.1 propios; HTTPS via TLS real del OpenSSL del sistema; dechunking real<br>"
              "· Buscador: indice invertido + BM25 propios (" << std::to_string(index_sp_->document_count())
           << " docs, " << std::to_string(index_sp_->term_count()) << " terminos, rastreo real del 8-ago-2026)<br>"
@@ -1220,7 +1269,8 @@ private:
              "· Historial, atras/adelante, e indexacion incremental al navegar: todo en memoria real</p>"
              "<h2 style=\"font-size: 19px; margin: 18px 0 6px 0;\">NO soportado todavia (la verdad)</h2>"
              "<p style=\"font-size: 13px; color: #222;\">"
-             "· Imagenes (sin decodificadores JPEG/PNG enlazados): se muestran placeholders<br>"
+             "· JPEG y GIF: placeholder HONESTO con la razon (solo PNG por ahora)<br>"
+             "· &lt;select&gt; no es interactivo; PNG entrelazado Adam7 reporta error explicito<br>"
              "· gzip/br, tablas CSS, position:sticky, fuentes TTF (usa bitmap 8x12), JS moderno completo<br>"
              "· Webs gigantes con JS pesado no funcionaran; nadie construye un Chrome en una semana</p>"
              "<div style=\"margin-top: 22px;\"><a href=\"" << esc(back_to) << "\" style=\"color: #0b57d0; font-size: 14px;\">volver</a></div>"
