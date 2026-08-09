@@ -7,8 +7,9 @@
 // genuino antes del parser:
 //   • Extrae bloques <style>…</style> y <script>…</script> a nivel de texto
 //     (modo "raw text": su contenido puede contener '<' sin romper nada)
-//   • <img>, <svg>, <video>, <audio>, <iframe> → placeholders honestos con
-//     su texto alt/src visible (la build no enlaza decodificadores)
+//   • <img> pasa real al DOM (el navegador la descarga y decodifica con el
+//     decodificador PNG propio); <svg>, <video>, <audio>, <iframe> siguen
+//     como placeholders honestos mientras no haya decodificador propio
 //   • <input>, <textarea>, <button> → pasan REALES al DOM: el motor los
 //     pinta, enfoca, edita y envía (GET y POST) sin simulación
 //   • Entities HTML reales: &aacute; &#241; &#xF1; &nbsp; etc. → UTF-8
@@ -225,23 +226,10 @@ static PreparedPage prepare(const std::string& raw, const std::string& page_url)
             continue;
         }
 
-        // <img ...> → placeholder visible con alt o nombre de archivo
-        if (ieq_at(raw, i, "<img")) {
-            size_t end = raw.find('>', i);
-            if (end == std::string::npos) break;
-            std::string tag = raw.substr(i, end - i + 1);
-            std::string alt = attr_value(tag, "alt");
-            if (alt.empty()) {
-                std::string src = attr_value(tag, "src");
-                size_t sl = src.rfind('/');
-                alt = (sl != std::string::npos) ? src.substr(sl + 1) : src;
-                if (alt.size() > 40) alt = alt.substr(0, 39) + "…";
-            }
-            if (alt.empty()) alt = "sin descripcion";
-            out += "<span data-nuby-ph=\"img\">[imagen: " + decode_entities(alt) + "]</span>";
-            i = end + 1;
-            continue;
-        }
+        // <img> REAL (2026-08-09): ANTES se sustituía por un span de texto
+        // "[imagen: alt]". Ya no: el navegador descarga el src, lo decodifica
+        // con el decodificador PNG propio y lo pinta; si no se puede, marca
+        // data-nuby-imgfail y la CSS UA dibuja un placeholder HONESTO.
 
         // <svg .....</svg> → placeholder
         if (ieq_at(raw, i, "<svg")) {

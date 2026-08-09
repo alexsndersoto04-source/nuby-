@@ -225,6 +225,25 @@ public:
         }
     }
 
+    // Imagen decodificada REAL escalada por vecino más cercano y mezclada
+    // source-over píxel a píxel (respeta el clip activo y el alfa por píxel).
+    void draw_image(const std::shared_ptr<media::Image>& img, const core::RectF& dst) {
+        if (!img || !img->valid() || dst.width <= 0 || dst.height <= 0) return;
+        for (int y = (int)dst.y; y < (int)(dst.y + dst.height); ++y) {
+            if (y < 0 || y >= height_) continue;
+            int sy = (int)((y - dst.y) * img->height / dst.height);
+            if (sy < 0) sy = 0; if (sy >= img->height) sy = img->height - 1;
+            for (int x = (int)dst.x; x < (int)(dst.x + dst.width); ++x) {
+                if (x < 0 || x >= width_ || is_clipped(x, y)) continue;
+                int sx = (int)((x - dst.x) * img->width / dst.width);
+                if (sx < 0) sx = 0; if (sx >= img->width) sx = img->width - 1;
+                uint32_t sp = img->at(sx, sy);
+                core::Color src((sp >> 16) & 0xFF, (sp >> 8) & 0xFF, sp & 0xFF, (sp >> 24) & 0xFF);
+                framebuffer_[y * width_ + x] = blend_pixel(framebuffer_[y * width_ + x], src);
+            }
+        }
+    }
+
     void execute_display_list(const DisplayList& display_list) {
         for (const auto& cmd : display_list.get_commands()) {
             switch (cmd.type) {
@@ -245,6 +264,9 @@ public:
                     break;
                 case CommandType::DRAW_TEXT:
                     draw_text(cmd.text, cmd.rect.x, cmd.rect.y, cmd.font_size, cmd.font_weight, cmd.color);
+                    break;
+                case CommandType::DRAW_IMAGE:
+                    draw_image(cmd.image, cmd.rect);
                     break;
                 case CommandType::PUSH_CLIP:
                     clip_stack_.push_back(cmd.rect);

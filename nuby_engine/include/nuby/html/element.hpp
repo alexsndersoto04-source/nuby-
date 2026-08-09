@@ -1,6 +1,7 @@
 #pragma once
 
 #include "node.hpp"
+#include "../media/image.hpp"
 #include "../core/string_utils.hpp"
 #include <unordered_map>
 #include <string>
@@ -25,6 +26,11 @@ private:
     }
 
 public:
+    // Píxeles decodificados REALES por nuby::media (PNG propio).
+    // Lo llena el navegador al descargar la imagen; vacío = sin imagen.
+    std::shared_ptr<media::Image> decoded_image;
+
+    
     explicit Element(std::string tag_name)
         : Node(NodeType::ELEMENT_NODE), tag_name_(core::StringUtils::to_lower(tag_name)) {}
 

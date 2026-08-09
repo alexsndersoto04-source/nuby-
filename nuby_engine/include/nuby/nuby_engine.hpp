@@ -232,6 +232,35 @@ private:
             const std::string& t = el->get_tag_name();
             if (t == "input" || t == "textarea" || t == "button")
                 detail::render_form_control(box, el, dl);
+
+            // 3.6 Imágenes REALES: decodificadas por el decodificador PNG propio
+            if (t == "img") {
+                if (el->decoded_image && el->decoded_image->valid()) {
+                    paint::DrawCommand cmd;
+                    cmd.type = paint::CommandType::DRAW_IMAGE;
+                    cmd.rect = box->dimensions.content;
+                    cmd.image = el->decoded_image;
+                    dl.add_command(cmd);
+                } else if (el->has_attribute("data-nuby-imgfail")) {
+                    // placeholder HONESTO: dice por qué no se pudo mostrar
+                    paint::DrawCommand box_cmd, txt;
+                    box_cmd.type = paint::CommandType::FILL_RECT;
+                    box_cmd.rect = box->dimensions.content;
+                    box_cmd.color = core::Color(236, 239, 241);
+                    dl.add_command(box_cmd);
+                    std::string why = el->get_attribute("data-nuby-imgfail");
+                    std::string alt = el->get_attribute("alt");
+                    std::string label = "[img: " + (alt.empty() ? why : alt) + "]";
+                    txt.type = paint::CommandType::DRAW_TEXT;
+                    txt.rect = { box_cmd.rect.x + 4, box_cmd.rect.y + 4,
+                                 box_cmd.rect.width - 8, 16.0f };
+                    txt.text = label;
+                    txt.font_size = 11.0f;
+                    txt.font_weight = 400;
+                    txt.color = core::Color(95, 99, 104);
+                    dl.add_command(txt);
+                }
+            }
         }
 
         // 4. Text Content Runs

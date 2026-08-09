@@ -27,6 +27,7 @@
 #include "../net/fetcher.hpp"
 #include "../search/search_index.hpp"
 #include "../js/js_interp.hpp"
+#include "../media/png_decoder.hpp"
 #include "html_preprocess.hpp"
 #include <string>
 #include <vector>
@@ -835,6 +836,69 @@ private:
         // sobre fondo oscuro, casi invisible — bug real visto 2026-08-09)
         page_css_ = UA_EXTRA_CSS + "\n" + pp.inline_css;
 
+        // ---- Carga de imágenes REALES (2026-08-09) -------------------------
+        // Descarga cada <img>, huele los magic bytes y decodifica con el
+        // decodificador PNG propio. JPEG/GIF → placeholder HONESTO con razón.
+        // Las imágenes quedan adjuntas al documento VIVO y re-renderizamos.
+        {
+            static constexpr size_t MAX_IMGS = 12; // tope honesto por página
+            auto imgs = parse_res->document
+                ? parse_res->document->get_elements_by_tag_name("img")
+                : std::vector<std::shared_ptr<html::Element>>{};
+            size_t ok_imgs = 0, bad_imgs = 0, seen = 0;
+            for (auto& im : imgs) {
+                if (++seen > MAX_IMGS) break;
+                std::string src = core::StringUtils::trim(im->get_attribute("src"));
+                if (src.empty() || src.rfind("data:", 0) == 0) {
+                    im->set_attribute("data-nuby-imgfail", src.empty() ? "src vacio" : "data: aun no soportado");
+                    ++bad_imgs;
+                    continue;
+                }
+                std::string abs = net::Fetcher::resolve_url(
+                    content_base_url_.empty() ? current_url_ : content_base_url_, src);
+                auto ires = net::Fetcher::fetch(abs, 3);
+                if (!ires.error.empty() || ires.status_code >= 400) {
+                    im->set_attribute("data-nuby-imgfail",
+                        ires.error.empty() ? "HTTP " + std::to_string(ires.status_code) : ires.error);
+                    ++bad_imgs;
+                    continue;
+                }
+                auto& b = ires.body;
+                if (b.size() >= 8 && (unsigned char)b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') {
+                    auto img = std::make_shared<media::Image>();
+                    std::string perr;
+                    if (media::PngDecoder::decode(b, *img, perr)) {
+                        im->decoded_image = img;
+                        ++ok_imgs;
+                    } else {
+                        im->set_attribute("data-nuby-imgfail", "PNG: " + perr);
+                        ++bad_imgs;
+                    }
+                } else if (b.size() >= 2 && (unsigned char)b[0] == 0xFF && (unsigned char)b[1] == 0xD8) {
+                    im->set_attribute("data-nuby-imgfail", "JPEG no soportado aun (decodificador propio pendiente)");
+                    ++bad_imgs;
+                } else if (b.size() >= 6 && b.rfind("GIF8", 0) == 0) {
+                    im->set_attribute("data-nuby-imgfail", "GIF no soportado");
+                    ++bad_imgs;
+                } else {
+                    im->set_attribute("data-nuby-imgfail", "formato no reconocido");
+                    ++bad_imgs;
+                }
+            }
+            if (ok_imgs + bad_imgs > 0) {
+                status_ += " · imgs " + std::to_string(ok_imgs) + "/" +
+                           std::to_string(ok_imgs + bad_imgs);
+                parse_res = std::make_shared<RenderResult>(
+                    engine_content_->render_document(parse_res->document, page_css_));
+                content_result_ = parse_res;
+                content_fb_ = parse_res->pixels;
+                if (parse_res->layout_tree) {
+                    float mb2 = 0; walk_bottom(parse_res->layout_tree, mb2);
+                    content_height_ = std::max(H - CHROME_H, std::min((int)mb2 + 12, CONTENT_CAP));
+                }
+            }
+        }
+
         // Indexación incremental REAL: esta visita alimenta el buscador
         if (parse_res->document && parse_res->document->get_body()) {
             std::string text = parse_res->document->get_body()->get_text_content();
@@ -1218,6 +1282,8 @@ private:
         input[type="radio"] { border-radius: 9px; }
         input[type="submit"], input[type="button"], input[type="reset"], button { width: 120px; height: 30px; background-color: #e8f0fe; color: #0b57d0; border: 1px solid #aec7ee; border-radius: 6px; }
         input[type="hidden"], input[type="file"], input[type="image"] { display: none; }
+        img { display: inline-block; }
+        img[data-nuby-imgfail] { border: 1px dashed #9aa0a6; border-radius: 4px; }
     )CSS";
 
     // frame compuesto

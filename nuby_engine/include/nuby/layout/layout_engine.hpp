@@ -138,8 +138,11 @@ private:
                 core::RectF child_cb = child->dimensions.content;
                 layout_block_children(child, child_cb);
 
-                // If height is auto, compute from children
-                if (child->style.height.is_auto()) {
+                // If height is auto, compute from children — EXCEPTO <img>:
+                // su altura ya salió del tamaño intrínseco de la imagen real
+                bool is_img = child->node && child->node->is_element() &&
+                    std::static_pointer_cast<html::Element>(child->node)->get_tag_name() == "img";
+                if (child->style.height.is_auto() && !is_img) {
                     float children_h = 0.0f;
                     for (const auto& grand : child->children) {
                         children_h = std::max(children_h, grand->dimensions.margin_box().bottom() - child->dimensions.content.y);
@@ -152,7 +155,12 @@ private:
             }
         }
 
-        if (box->style.height.is_auto()) {
+        // <img> tampoco se pisa aquí: su altura auto ya salió del tamaño
+        // intrínseco real de la imagen (layout_box_geometry), y al no tener
+        // hijos que maquetar cursor_y jamás avanzó → quedaría en 0.
+        bool self_is_img = box->node && box->node->is_element() &&
+            std::static_pointer_cast<html::Element>(box->node)->get_tag_name() == "img";
+        if (box->style.height.is_auto() && !self_is_img) {
             box->dimensions.content.height = std::max(0.0f, cursor_y - box->dimensions.content.y);
         }
     }
@@ -200,6 +208,40 @@ private:
             dims.content.height = style.height.resolve(containing_block.height);
         } else {
             dims.content.height = 0.0f;
+        }
+
+        // Tamaño intrínseco de imágenes REALES (2026-08-09):
+        // prioridad CSS px → atributos width/height HTML → tamaño natural.
+        // Con una sola dimensión dada se conserva la proporción.
+        if (box->node && box->node->is_element()) {
+            auto el = std::static_pointer_cast<html::Element>(box->node);
+            if (el->get_tag_name() == "img") {
+                float nat_w = 120.0f, nat_h = 60.0f; // caja honesta si no hay imagen
+                if (el->decoded_image && el->decoded_image->valid()) {
+                    nat_w = (float)el->decoded_image->width;
+                    nat_h = (float)el->decoded_image->height;
+                }
+                float aw = 0, ah = 0;
+                if (el->has_attribute("width")) aw = (float)atof(el->get_attribute("width").c_str());
+                if (el->has_attribute("height")) ah = (float)atof(el->get_attribute("height").c_str());
+
+                float avail = containing_block.width - dims.margin.horizontal()
+                            - dims.padding.horizontal() - dims.border.horizontal();
+                if (style.width.is_auto()) {
+                    float w = aw > 0 ? aw : nat_w;
+                    dims.content.width = std::min(w, std::max(0.0f, avail));
+                }
+                if (style.height.is_auto()) {
+                    float h = ah > 0 ? ah : nat_h;
+                    if (nat_w > 0 && dims.content.width > 0 && aw <= 0 && ah <= 0) {
+                        // proporción real si el ancho se limitó
+                        h = dims.content.width * nat_h / nat_w;
+                    } else if (nat_w > 0 && aw > 0 && ah <= 0) {
+                        h = dims.content.width * nat_h / nat_w;
+                    }
+                    dims.content.height = std::max(0.0f, h);
+                }
+            }
         }
 
         // Set Position

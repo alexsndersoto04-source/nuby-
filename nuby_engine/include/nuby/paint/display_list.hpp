@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../media/image.hpp"
 #include "../core/types.hpp"
 #include "../layout/text_shaper.hpp"
 #include <vector>
@@ -16,6 +17,7 @@ enum class CommandType {
     DRAW_BOX_SHADOW,
     DRAW_LINEAR_GRADIENT,
     DRAW_TEXT,
+    DRAW_IMAGE,
     PUSH_CLIP,
     POP_CLIP
 };
@@ -43,6 +45,9 @@ struct DrawCommand {
     std::string text;
     float font_size{16.0f};
     int font_weight{400};
+
+    // Image specific: pixeles decodificados (0xAARRGGBB), escalado a `rect`
+    std::shared_ptr<media::Image> image;
 
     int z_index{0};
 

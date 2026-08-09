@@ -10,6 +10,7 @@
 // ============================================================================
 
 #include "../include/nuby/nuby_engine.hpp"
+#include "../include/nuby/media/png_decoder.hpp"
 #include "../include/nuby/search/search_index.hpp"
 #include "../include/nuby/js/js_engine.hpp"
 #include "../include/nuby/net/fetcher.hpp"
@@ -237,6 +238,161 @@ void test_selector_atributo_igualdad() {
     std::cout << "  [✔] selectores de atributo OK\n";
 }
 
+// ---- Decodificador PNG propio (RFC 1950/1951/2083, cero librerías) ------
+// Los PNGs de prueba fueron GENERADOS byte a byte (Python zlib+struct) con
+// contenido conocido: filtros 0-4, paleta+tRNS, gris, 16-bit y Adam7.
+static std::string b64dec(const std::string& in) {
+    static const int T[256] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-2,-1,-1,
+        -1,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+    std::string out;
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (T[c] == -1) break;
+        if (T[c] == -2) continue;
+        val = (val << 6) + T[c]; valb += 6;
+        if (valb >= 0) { out += (char)((val >> valb) & 0xFF); valb -= 8; }
+    }
+    return out;
+}
+
+static bool pix_eq(const media::Image& img, int x, int y,
+                   int r, int g, int b, int a) {
+    uint32_t p = img.at(x, y);
+    return ((p >> 16) & 0xFF) == (uint32_t)r && ((p >> 8) & 0xFF) == (uint32_t)g &&
+           (p & 0xFF) == (uint32_t)b && ((p >> 24) & 0xFF) == (uint32_t)a;
+}
+
+void test_png_decoder() {
+    std::cout << "[Test] Decodificador PNG propio (inflate+filtros+paleta)...\n";
+    struct V { const char* name; const char* b64; int w, h; };
+    static const V vec[] = {
+        {"rgb_filtro0", "iVBORw0KGgoAAAANSUhEUgAAAAMAAAABCAIAAACUgoPjAAAADklEQVR42mP4z8DAAMYADvsC/hR0WEIAAAAASUVORK5CYII=", 3, 1},
+        {"rgba_semi", "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAD0lEQVR42mP4z8DwHwgbABB5A37EGHKQAAAAAElFTkSuQmCC", 2, 1},
+        {"rgb_filtro1_sub", "iVBORw0KGgoAAAANSUhEUgAAAAMAAAABCAIAAACUgoPjAAAAEklEQVR42mNMqejhEpH7/+srABIqBJRTWOZrAAAAAElFTkSuQmCC", 3, 1},
+        {"rgb_filtro2_up", "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR42mPgEpHTMLJhYmVlZWJmAQAIZQDtHwRJvwAAAABJRU5ErkJggg==", 2, 2},
+        {"gris8", "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAAAAADRSSBWAAAAC0lEQVR42mNg+A8AAQIBANEay48AAAAASUVORK5CYII=", 2, 1},
+        {"paleta_trns", "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAMAAADO4v//AAAADFBMVEX/AAAA/wAAAP///wDWAo97AAAAA3RSTlP//4A6co5hAAAADUlEQVR42mNgYGRiBgAADwAHW9CLfQAAAABJRU5ErkJggg==", 4, 1},
+        {"rgb16", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABEAIAAADA54+dAAAAD0lEQVR42mNYzSD0/z8jAAlNAr2dtO9bAAAAAElFTkSuQmCC", 1, 1},
+        {"avg_f3", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAIAAAAW4yFwAAAAEElEQVR42mM4ceIEMxsbGwAOSAJuWQHiDAAAAABJRU5ErkJggg==", 1, 2},
+        {"paeth_f4", "iVBORw0KGgoAAAANSUhEUgAAAAMAAAABCAIAAACUgoPjAAAAEklEQVR42mMJiEph5eJnZmIEAAkoATcVaEbbAAAAAElFTkSuQmCC", 3, 1},
+    };
+    media::Image img;
+    std::string err;
+
+    auto dec = [&](int i) {
+        img = media::Image{};
+        return media::PngDecoder::decode(b64dec(vec[i].b64), img, err);
+    };
+
+    CHECK(dec(0), "rgb filtro0 no decodificó: " + err);
+    CHECK(img.width == 3 && pix_eq(img, 0, 0, 255, 0, 0, 255) && pix_eq(img, 1, 0, 0, 255, 0, 255) && pix_eq(img, 2, 0, 0, 0, 255, 255), "rgb filtro0 mal");
+
+    CHECK(dec(1), "rgba no decodificó: " + err);
+    CHECK(pix_eq(img, 1, 0, 0, 255, 0, 128), "alfa semi mal");
+
+    CHECK(dec(2), "filtro Sub no decodificó: " + err);
+    CHECK(pix_eq(img, 1, 0, 110, 140, 170, 255) && pix_eq(img, 2, 0, 109, 134, 159, 255), "filtro Sub mal");
+
+    CHECK(dec(3), "filtro Up no decodificó: " + err);
+    CHECK(pix_eq(img, 0, 0, 10, 20, 30, 255) && pix_eq(img, 0, 1, 15, 25, 35, 255) && pix_eq(img, 1, 1, 42, 53, 64, 255), "filtro Up mal");
+
+    CHECK(dec(4), "gris no decodificó: " + err);
+    CHECK(pix_eq(img, 0, 0, 0, 0, 0, 255) && pix_eq(img, 1, 0, 255, 255, 255, 255), "gris mal");
+
+    CHECK(dec(5), "paleta no decodificó: " + err);
+    CHECK(pix_eq(img, 2, 0, 0, 0, 255, 128) && pix_eq(img, 3, 0, 255, 255, 0, 255), "paleta/tRNS mal");
+
+    CHECK(dec(6), "16-bit no decodificó: " + err);
+    CHECK(pix_eq(img, 0, 0, 0xAB, 0x12, 0xFF, 255), "MSB 16-bit mal");
+
+    CHECK(dec(7), "filtro Average no decodificó: " + err);
+    CHECK(pix_eq(img, 0, 0, 200, 200, 200, 255) && pix_eq(img, 0, 1, 106, 106, 106, 255), "filtro Average mal");
+
+    CHECK(dec(8), "filtro Paeth no decodificó: " + err);
+    CHECK(pix_eq(img, 0, 0, 80, 90, 100, 255) && pix_eq(img, 1, 0, 85, 100, 115, 255) && pix_eq(img, 2, 0, 88, 102, 116, 255), "filtro Paeth mal");
+
+    // Adam7: debe FALLAR con verdad, no fingir
+    bool still_ok = media::PngDecoder::decode(
+        b64dec("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAFNeavDAAAACklEQVR42mNgAAAAAgAB5Sfe/AAAAABJRU5ErkJggg=="), img, err);
+    CHECK(!still_ok && err.find("Adam7") != std::string::npos,
+          "Adam7 debía fallar con mensaje honesto, no renderizar");
+    std::cout << "  [✔] decodificador PNG OK\n";
+}
+
+// Regresión REAL del bug "DRAW_IMAGE h=0" (2026-08-09): la altura
+// intrínseca del <img> salía bien de layout_box_geometry pero el tail de
+// layout_block_children la pisaba a 0 (cursor jamás avanza sin hijos).
+void test_img_altura_intrinseca_sobrevive_layout() {
+    std::cout << "[Test] <img>: altura intrínseca sobrevive al layout...\n";
+    NubyBrowserEngine engine(800, 600);
+    auto res = engine.render_page(
+        "<html><body><div><img src=\"x.png\"></div><p>después</p></body></html>");
+    auto imgs = res.document->get_elements_by_tag_name("img");
+    CHECK(imgs.size() == 1, "img en el DOM");
+    if (imgs.empty()) return;
+
+    auto pic = std::make_shared<media::Image>();
+    pic->width = 96; pic->height = 64;
+    pic->pixels.assign((size_t)96 * 64, 0xFF336699u);
+    imgs[0]->decoded_image = pic;
+
+    // Re-render del MISMO DOM vivo (como hace navigate tras decodificar)
+    auto res2 = engine.render_document(res.document, "");
+
+    // 1) la caja de layout del img conserva su tamaño natural real
+    std::shared_ptr<layout::LayoutBox> img_box;
+    std::function<void(std::shared_ptr<layout::LayoutBox>)> find =
+        [&](std::shared_ptr<layout::LayoutBox> b) {
+            if (!b || img_box) return;
+            if (b->node && b->node->is_element() &&
+                std::static_pointer_cast<html::Element>(b->node)->get_tag_name() == "img") {
+                img_box = b; return;
+            }
+            for (auto& c : b->children) find(c);
+        };
+    find(res2.layout_tree);
+    CHECK(img_box != nullptr, "caja de layout del <img>");
+    if (img_box) {
+        CHECK(std::fabs(img_box->dimensions.content.width - 96.0f) < 0.5f,
+              "ancho intrínseco 96 (vino " + std::to_string(img_box->dimensions.content.width) + ")");
+        CHECK(std::fabs(img_box->dimensions.content.height - 64.0f) < 0.5f,
+              "alto intrínseco 64, NO 0 (vino " + std::to_string(img_box->dimensions.content.height) + ")");
+    }
+
+    // 2) el display list lleva un DRAW_IMAGE real con ese rect (no degenerado)
+    bool has_draw_image = false;
+    for (auto& cmd : res2.display_list.get_commands()) {
+        if (cmd.type == paint::CommandType::DRAW_IMAGE) {
+            has_draw_image = true;
+            CHECK(std::fabs(cmd.rect.height - 64.0f) < 0.5f,
+                  "DRAW_IMAGE con alto 64 real (vino " + std::to_string(cmd.rect.height) + ")");
+        }
+    }
+    CHECK(has_draw_image, "display list sin DRAW_IMAGE");
+
+    // 3) el <p> posterior quedó DEBAJO del img (el flujo respetó su altura)
+    bool p_below = false;
+    std::function<void(std::shared_ptr<layout::LayoutBox>)> find_p =
+        [&](std::shared_ptr<layout::LayoutBox> b) {
+            if (!b) return;
+            if (b->node && b->node->is_element() &&
+                std::static_pointer_cast<html::Element>(b->node)->get_tag_name() == "p" &&
+                img_box && b->dimensions.content.y >= img_box->dimensions.content.bottom() - 0.5f)
+                p_below = true;
+            for (auto& c : b->children) find_p(c);
+        };
+    find_p(res2.layout_tree);
+    CHECK(p_below, "el flujo de bloques no respetó la altura del <img>");
+    std::cout << "  [✔] altura intrínseca <img> OK\n";
+}
+
 void test_search_bm25() {
     std::cout << "[Test] Índice invertido + BM25 reales...\n";
     search::SearchIndex idx;
@@ -322,12 +478,14 @@ int main() {
     test_herencia_color_css();
     test_inputs_reales_en_dom();
     test_selector_atributo_igualdad();
+    test_png_decoder();
+    test_img_altura_intrinseca_sobrevive_layout();
     test_search_bm25();
     test_js_interpreter();
     test_fetcher_unidades();
     std::cout << "========================================\n";
     if (failures == 0) {
-        std::cout << "\033[1;32mTODO PASA — 12/12 suites reales (100%)\033[0m\n";
+        std::cout << "\033[1;32mTODO PASA — 14/14 suites reales (100%)\033[0m\n";
         return 0;
     }
     std::cout << "\033[1;31m" << failures << " comprobaciones fallaron\033[0m\n";
