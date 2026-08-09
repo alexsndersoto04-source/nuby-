@@ -9,6 +9,7 @@
 #include <iostream>
 #include <chrono>
 #include <filesystem>
+#include <cstdlib>
 
 int main(int argc, char* argv[]) {
     std::cout << "\033[1;37m"
@@ -19,6 +20,10 @@ int main(int argc, char* argv[]) {
               << "\033[0m";
 
     int port = 8080;
+    // Render/Fly/Koyeb asignan el puerto vía variable de entorno PORT
+    if (const char* env = std::getenv("PORT"); env && *env) {
+        try { port = std::stoi(env); } catch (...) { /* PORT inválido: queda 8080 */ }
+    }
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == "--port") port = std::stoi(argv[i + 1]);
     }

@@ -41,8 +41,14 @@ private:
     void generate_display_list(const std::shared_ptr<layout::LayoutBox>& box, paint::DisplayList& dl) {
         if (!box) return;
 
+        // Una caja de TEXTO hereda el estilo completo del padre (color, fuente),
+        // pero en CSS las decoraciones de caja (borde, fondo, sombra) NO se
+        // pintan por cada fragmento de texto: las pinta la caja que las genera.
+        // Sin este guard, cada línea de texto pintaba un borde/fondo duplicado.
+        bool decorations = box->box_type != layout::BoxType::TEXT_BOX;
+
         // 1. Box Shadow (if active)
-        if (box->style.box_shadow.is_active) {
+        if (decorations && box->style.box_shadow.is_active) {
             paint::DrawCommand cmd;
             cmd.type = paint::CommandType::DRAW_BOX_SHADOW;
             cmd.rect = box->dimensions.border_box();
@@ -53,14 +59,14 @@ private:
         }
 
         // 2. Background (Color or Gradient)
-        if (box->style.background_gradient.is_active) {
+        if (decorations && box->style.background_gradient.is_active) {
             paint::DrawCommand cmd;
             cmd.type = paint::CommandType::DRAW_LINEAR_GRADIENT;
             cmd.rect = box->dimensions.border_box();
             cmd.gradient_angle = box->style.background_gradient.angle_deg;
             cmd.gradient_stops = box->style.background_gradient.stops;
             dl.add_command(cmd);
-        } else if (!box->style.background_color.is_transparent()) {
+        } else if (decorations && !box->style.background_color.is_transparent()) {
             paint::DrawCommand cmd;
             if (box->style.border_radius.has_radius()) {
                 cmd.type = paint::CommandType::FILL_ROUNDED_RECT;
@@ -76,8 +82,9 @@ private:
         }
 
         // 3. Borders
-        if (box->style.border_top_width > 0 || box->style.border_right_width > 0 ||
-            box->style.border_bottom_width > 0 || box->style.border_left_width > 0) {
+        if (decorations &&
+            (box->style.border_top_width > 0 || box->style.border_right_width > 0 ||
+             box->style.border_bottom_width > 0 || box->style.border_left_width > 0)) {
             paint::DrawCommand cmd;
             cmd.type = paint::CommandType::DRAW_BORDER;
             cmd.rect = box->dimensions.border_box();
@@ -159,7 +166,10 @@ public:
             } catch (const std::exception& e) {
                 result.js_logs.push_back(std::string("[Nuby JS error] ") + e.what());
             }
-            result.js_logs = current_js_engine_->get_console_logs();
+            // ANTES: `result.js_logs = get_console_logs();` BORRABA el error recién
+            // anotado y nadie se enteraba del fallo. Ahora se conserva todo.
+            auto logs = current_js_engine_->get_console_logs();
+            result.js_logs.insert(result.js_logs.end(), logs.begin(), logs.end());
         }
 
         // Stage 4: Layout Tree Construction, Flexbox & Flow Resolution

@@ -109,6 +109,74 @@ void test_rasterizer_pixeles_reales() {
     std::cout << "  [✔] rasterizador OK\n";
 }
 
+// Regresión REAL (bug encontrado 2026-08-09): una caja de texto copiaba el
+// estilo completo del padre y pintaba borde/fondo propio → cada línea de texto
+// aparecía enmarcada. En CSS las decoraciones las pinta la caja, no el texto.
+void test_texto_no_duplica_borde() {
+    std::cout << "[Test] Caja de texto no repinta borde del padre...\n";
+    auto res = NubyBrowserEngine(400, 300).render_page(
+        "<div style=\"border: 6px solid #ff0000; padding: 30px;\">hola</div>");
+    CHECK(!res.pixels.empty(), "framebuffer vacío");
+    if (res.pixels.empty()) return;
+    // punto profundo dentro del texto (a la derecha del padding): debe ser BLANCO
+    // (fondo), no rojo. Con el bug, la caja de texto pintaba un rect rojo aquí.
+    uint32_t inside = res.pixels[45 * 400 + 60]; // y=45, x=60 (zona del texto)
+    uint8_t r = (inside >> 16) & 0xFF, g = (inside >> 8) & 0xFF, b = inside & 0xFF;
+    bool is_red = r > 200 && g < 60 && b < 60;
+    CHECK(!is_red, "el interior tenía el borde del padre pintado (bug duplicado)");
+    // y el borde real del div sí debe existir: body tiene margin 8px (hoja UA
+    // del motor) → el anillo del borde (6px) pasa por (10,10)
+    uint32_t edge = res.pixels[10 * 400 + 10];
+    uint8_t r2 = (edge >> 16) & 0xFF, g2 = (edge >> 8) & 0xFF, b2 = edge & 0xFF;
+    CHECK(r2 > 200 && g2 < 60 && b2 < 60, "el borde del div debía seguir existiendo");
+    std::cout << "  [✔] texto sin borde duplicado OK\n";
+}
+
+// Regresión REAL (bug encontrado 2026-08-09): render_page ejecutaba el JS pero
+// get_console_logs() pisaba los errores, y el shell nunca pasaba los scripts.
+void test_js_muta_dom_antes_del_layout() {
+    std::cout << "[Test] JS muta el DOM y se pinta mutado...\n";
+    auto res = NubyBrowserEngine(400, 300).render_page(
+        "<div id=\"z\">original</div>",
+        "",
+        "var e = document.getElementById(\"z\");"
+        "e.innerHTML = \"MARCADOR-JS-123\";");
+    CHECK(res.document != nullptr, "sin documento");
+    if (res.document) {
+        std::string all = res.document->get_text_content();
+        CHECK(all.find("MARCADOR-JS-123") != std::string::npos,
+              "el JS no mutó el DOM antes del layout");
+    }
+    std::cout << "  [✔] JS→DOM→pintura OK\n";
+}
+
+// Regresión REAL (bug 2026-08-09): la hoja UA del motor declaraba
+// `color: #1a1a1a` en CADA elemento (un "reset" mal pensado). Una declaración
+// directa siempre vence a la herencia → `body{color: X}` jamás llegaba a los
+// div/p/span y TODO el texto salía gris oscuro #1a1a1a. CSS real: hereda.
+static void walk_runs_check(const std::shared_ptr<layout::LayoutBox>& b,
+                            uint32_t want_rgb, bool& all_ok, bool& seen) {
+    if (!b) return;
+    for (auto& r : b->text_runs) {
+        seen = true;
+        uint32_t rgb = ((uint32_t)r.color.r << 16) | ((uint32_t)r.color.g << 8) | r.color.b;
+        if (rgb != want_rgb) all_ok = false;
+    }
+    for (auto& c : b->children) walk_runs_check(c, want_rgb, all_ok, seen);
+}
+
+void test_herencia_color_css() {
+    std::cout << "[Test] Herencia CSS: body{color} llega a los descendientes...\n";
+    auto res = NubyBrowserEngine(400, 300).render_page(
+        "<html><body><div>heredado</div><p class=\"no\">x</p></body></html>",
+        "body { color: #e2e8f0; }", "");
+    bool all_ok = true, seen = false;
+    walk_runs_check(res.layout_tree, 0xe2e8f0, all_ok, seen);
+    CHECK(seen, "no hubo text runs para inspeccionar");
+    CHECK(all_ok, "algún texto NO heredó el color del body (bug del reset UA)");
+    std::cout << "  [✔] herencia de color OK\n";
+}
+
 void test_search_bm25() {
     std::cout << "[Test] Índice invertido + BM25 reales...\n";
     search::SearchIndex idx;
@@ -189,12 +257,15 @@ int main() {
     test_css_cascade();
     test_layout_flex_con_texto();
     test_rasterizer_pixeles_reales();
+    test_texto_no_duplica_borde();
+    test_js_muta_dom_antes_del_layout();
+    test_herencia_color_css();
     test_search_bm25();
     test_js_interpreter();
     test_fetcher_unidades();
     std::cout << "========================================\n";
     if (failures == 0) {
-        std::cout << "\033[1;32mTODO PASA — 7/7 suites reales (100%)\033[0m\n";
+        std::cout << "\033[1;32mTODO PASA — 10/10 suites reales (100%)\033[0m\n";
         return 0;
     }
     std::cout << "\033[1;31m" << failures << " comprobaciones fallaron\033[0m\n";

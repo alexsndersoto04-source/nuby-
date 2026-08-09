@@ -94,7 +94,7 @@ el 8-ago-2026 (Wikipedia, Hacker News, …) y exportadas con
 - Ciclo completo de render de página interna: **~1 ms** (medido en vivo)
 - Búsqueda BM25 sobre 995 docs: **~25 μs** (medido por `/api/search`)
 - Frame 1024×640 RLE: **~35-80 KB** (vs ~2 MB crudos)
-- Suite: `make test` → 7/7
+- Suite: `make test` → 10/10
 
 ## Cómo correrlo
 
@@ -103,3 +103,43 @@ cd nuby_engine && make && ./bin/nuby_engine --port 8080
 # abre http://localhost:8080 — tu navegador es solo el monitor;
 # la interfaz entera la pinta el motor Nuby.
 ```
+
+---
+
+# SEGUNDA AUDITORÍA HONESTA (2026-08-09, tarde)
+
+El motor pintaba su interfaz y navegaba, pero al probarlo con una página
+totalmente nueva servida en vivo aparecieron **cinco bugs reales**. Se listan
+con la verdad completa: el producto NO estaba terminado y aquí quedó el
+registro de lo que fallaba y cómo se arregló.
+
+| # | Bug real | Síntoma | Arreglo real |
+|---|----------|---------|--------------|
+| 1 | Caja de texto copiaba el estilo completo del padre (borde incluido) | Cada línea de texto aparecía enmarcada con el borde de su caja | La display-list ya no pinta fondo/borde/sombra en `TEXT_BOX` (CSS: las decoraciones las pinta la caja, no cada fragmento de texto) |
+| 2 | El shell nunca pasaba los `<script>` al motor | JavaScript de página web jamás se ejecutaba por esa vía | `navigate()` pasa los scripts a `render_page`, que los corre ANTES del layout → el DOM mutado es lo que se pinta |
+| 3 | Los errores de JS se sobrescribían con los logs de consola | Un script roto parecía "correr bien" | Los errores se conservan y se muestran en la barra de estado (`JS: N error(es)`) |
+| 4 | Los scripts corrían **dos veces** (dentro de `render_page` y otra en el shell) y los re-renders post-click perdían el CSS de la página (texto oscuro sobre fondo oscuro) | Doble ejecución + contenido mutado casi invisible | UN solo intérprete por página (el que crea `render_page`, reutilizado para los `onclick`), CSS de página conservada en `page_css_` |
+| 5 | La hoja UA declaraba `color:#1a1a1a` y `font-size:16px` en CADA elemento (un "reset" mal pensado) | **Toda** herencia de color moría: `body{color:X}` nunca llegaba a div/p/span — texto siempre gris oscuro (proven con sonda de píxeles) | Hoja UA corregida: el default vive en `ComputedStyle` y los elementos heredan, como manda CSS |
+
+Bugs colaterales corregidos el mismo día:
+- Re-renders posteriores a un click dejaban el intérprete apuntando a un
+  documento ya destruido (clics siguientes caían en un "fantasma"). Ahora hay
+  re-bind al documento vivo. *Limitación honesta documentada: tras ese
+  re-render el estado JS de carga (funciones/variables) se reinicia.*
+- Suite `make test`: 10/10 con tests de regresión escritos para los bugs 1, 2
+  y 5 (cada test reproduce el bug original).
+
+### Nuevo endpoint (transparencia)
+- `GET /api/goto?u=<url>` — navega como si se tecleara la URL; devuelve JSON
+  con el estado real (para pruebas y automatización).
+
+### Servidor / hosting
+- `main.cpp` respeta la variable de entorno `PORT` (Render, Fly, Koyeb la
+  inyectan). `--port` sigue ganando si se pasa.
+- `Dockerfile` multi-etapa real: compila, corre los tests (si fallan, falla
+  el build) y deja una imagen mínima con `openssl` + CA para el puente TLS.
+- **Lo que un hosting gratuito debe saber de Nuby**: proceso HTTP único con
+  memoria de una sesión; índice de 995 docs cargado en RAM (~10 ms); las
+  visitas indexan en disco, así que en plataformas con disco efímero
+  (Render gratis) ese aprendizaje se pierde al reiniciar — el índice base va
+  DENTRO de la imagen y siempre arranca completo.

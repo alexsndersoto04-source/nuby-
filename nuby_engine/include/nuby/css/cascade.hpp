@@ -105,8 +105,14 @@ private:
                 margin: 0;
                 padding: 0;
                 border: 0;
-                font-size: 16px;
-                color: #1a1a1a;
+                /* BUG REAL (2026-08-09): aquí había `font-size: 16px; color: #1a1a1a;`
+                   Una hoja UA NUNCA debe declarar color ni fuente en cada elemento:
+                   una declaración DIRECTA siempre vence a la herencia en la
+                   cascada, así que `color` del `body` del autor jamás llegaba
+                   a div/p/span — todo texto salía #1a1a1a (gris oscuro).
+                   El default inicial vive en ComputedStyle (negro/16px) y la
+                   regla `body{}` de abajo aplica al body; lo demás HEREDA,
+                   que es como CSS funciona de verdad. */
             }
             body {
                 display: block;

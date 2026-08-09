@@ -163,6 +163,15 @@ public:
     }
     const std::deque<HistoryEntry>& history() const { return history_; }
 
+    // Navegación pública (para /api/goto): misma vía real que teclear la URL
+    void go(const std::string& url) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        navigate(url);
+        dirty_ = true;
+    }
+    std::string current_url() { std::lock_guard<std::mutex> lock(mutex_); return current_url_; }
+    std::string status() { std::lock_guard<std::mutex> lock(mutex_); return status_; }
+
 private:
     enum class Focus { NONE, URL, SEARCH };
     enum class Mode { HOME, WEB, RESULTS, ERROR_PAGE, ABOUT, HISTORY };
@@ -200,6 +209,7 @@ private:
 
     std::shared_ptr<RenderResult> content_result_; // para hit-testing
     std::shared_ptr<js::Interpreter> js_;          // intérprete de la página actual
+    std::string page_css_;                          // CSS de la página web actual (para re-renders)
     std::vector<std::string> page_scripts_;        // scripts inline de la página
 
     // ---------------- Utilidades ----------------
@@ -362,8 +372,9 @@ private:
     // ---------------- Render del documento de contenido ----------------
     void render_content_doc(const std::string& html_clean, const std::string& css,
                             const std::vector<std::string>& scripts) {
+        page_css_ = UA_EXTRA_CSS + "\n" + css;
         auto res = std::make_shared<RenderResult>(
-            engine_content_->render_page(html_clean, UA_EXTRA_CSS + "\n" + css));
+            engine_content_->render_page(html_clean, page_css_));
         content_result_ = res;
         content_fb_ = res->pixels;
 
@@ -398,6 +409,11 @@ private:
                 float max_bottom = 0;
                 walk_bottom(res->layout_tree, max_bottom);
                 content_height_ = std::max(H - CHROME_H, std::min((int)max_bottom + 12, CONTENT_CAP));
+            }
+            // Re-bind del intérprete al documento nuevo (el anterior quedó muerto)
+            {
+                auto eng = engine_content_->get_js_engine();
+                js_ = eng ? eng->interpreter() : nullptr;
             }
         }
         scroll_y_ = 0;
@@ -564,9 +580,19 @@ private:
         if (js_ && js_->dom_mutated() && content_result_ && content_result_->document) {
             js_->clear_mutation();
             auto res = std::make_shared<RenderResult>(
-                engine_content_->render_page(serialize_body(content_result_->document), UA_EXTRA_CSS));
+                engine_content_->render_page(serialize_body(content_result_->document),
+                                             page_css_.empty() ? UA_EXTRA_CSS : page_css_));
             content_result_ = res;
             content_fb_ = res->pixels;
+            // El re-render creó un documento NUEVO: el intérprete viejo quedaba
+            // apuntando a un documento muerto y los siguientes clicks caían en un
+            // fantasma. Re-bind al documento vivo. Limitación honesta: aquí el
+            // ESTADO JS (funciones/variables de la carga inicial) se reinicia.
+            {
+                auto eng = engine_content_->get_js_engine();
+                js_ = eng ? eng->interpreter() : nullptr;
+                if (js_) js_->clear_mutation();
+            }
             if (res->layout_tree) {
                 float max_bottom = 0;
                 walk_bottom(res->layout_tree, max_bottom);
@@ -641,13 +667,25 @@ private:
             }
         }
 
+        // Scripts inline REALES: van al intérprete antes del layout, así que
+        // si el JS muta el DOM, lo mutado es lo que se pinta. Sin esto los
+        // scripts recogidos por el preproceso jamás se ejecutaban.
+        std::string js_all;
+        for (const auto& sc : pp.inline_scripts) { js_all += sc; js_all += '\n'; }
+
         auto parse_res = std::make_shared<RenderResult>(
-            engine_content_->render_page(pp.body_html, UA_EXTRA_CSS + "\n" + pp.inline_css));
+            engine_content_->render_page(pp.body_html, UA_EXTRA_CSS + "\n" + pp.inline_css, js_all));
         current_title_ = parse_res->document ? parse_res->document->get_title() : current_url_;
         if (current_title_.empty()) current_title_ = current_url_;
 
         status_ = "OK · " + std::to_string(res.body.size() / 1024) + " KB · red " +
                   std::to_string(ms) + " ms · HTTP " + std::to_string(res.status_code);
+
+        // Reporte de JS honesto: si el intérprete reportó errores, se muestran.
+        size_t js_err = 0;
+        for (const auto& l : parse_res->js_logs)
+            if (l.find("[Nuby JS error]") != std::string::npos) ++js_err;
+        if (js_err) status_ += " · JS: " + std::to_string(js_err) + " error(es)";
         record_visit(current_url_, current_title_);
 
         // Guarda la URL base resuelta para los enlaces relativos
@@ -662,16 +700,19 @@ private:
             content_height_ = std::max(H - CHROME_H, std::min((int)mb + 12, CONTENT_CAP));
         }
 
-        js_ = std::make_shared<js::Interpreter>(parse_res->document);
-        for (auto& code : pp.inline_scripts) {
-            try {
-                js_->run(code);
-                if (js_->dom_mutated()) { js_->clear_mutation(); render_after_js(); }
-            } catch (const std::exception& e) {
-                status_ = std::string("JS: ") + e.what();
-                break;
-            }
+        // UN SOLO intérprete por página. ANTES los scripts corrían DOS veces
+        // (una dentro de render_page y otra aquí) con estados separados: doble
+        // ejecución y los onclick no veían las funciones definidas al cargar.
+        // Ahora reutilizamos el intérprete y el ESTADO que render_page creó.
+        {
+            auto eng = engine_content_->get_js_engine();
+            js_ = eng ? eng->interpreter() : nullptr;
+            if (js_) js_->clear_mutation(); // esa mutación ya quedó pintada
         }
+        // CSS vivo de ESTA página: los re-renders tras onclick deben conservarla
+        // (antes se perdía y el contenido mutado salía sin estilos: texto oscuro
+        // sobre fondo oscuro, casi invisible — bug real visto 2026-08-09)
+        page_css_ = UA_EXTRA_CSS + "\n" + pp.inline_css;
 
         // Indexación incremental REAL: esta visita alimenta el buscador
         if (parse_res->document && parse_res->document->get_body()) {

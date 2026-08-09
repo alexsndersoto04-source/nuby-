@@ -322,6 +322,32 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
         return http_response(200, "OK", "application/json; charset=utf-8", j.str());
     }
 
+    // Navegación REAL (misma vía que teclear la URL en la barra):
+    // GET /api/goto?u=<url> → el engine descarga y renderiza de verdad
+    if (method == "GET" && path == "/api/goto") {
+        std::string u = qs_get(query, "u");
+        if (u.empty()) {
+            return http_response(400, "Bad Request", "application/json",
+                                 "{\"error\":\"falta parametro u\"}");
+        }
+        auto t0 = std::chrono::steady_clock::now();
+        shell_->go(u);
+        long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0).count();
+        frame_seq_++;
+        auto jsonesc = [](const std::string& s){
+            std::string o; for (char c : s) {
+                if (c=='\"') o += "\\\""; else if (c=='\\') o += "\\\\";
+                else if (c=='\n') o += " "; else o += c;
+            } return o;
+        };
+        std::ostringstream j;
+        j << "{\"ok\":true,\"elapsed_ms\":" << ms
+          << ",\"url\":\"" << jsonesc(shell_->current_url())
+          << "\",\"status\":\"" << jsonesc(shell_->status()) << "\"}";
+        return http_response(200, "OK", "application/json; charset=utf-8", j.str());
+    }
+
     if (method == "GET" && path == "/api/stats") {
         std::ostringstream j;
         j << "{\"documents\":" << shell_->index().document_count()
