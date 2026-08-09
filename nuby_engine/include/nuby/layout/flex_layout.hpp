@@ -3,6 +3,7 @@
 #include "layout_box.hpp"
 #include <vector>
 #include <numeric>
+#include <map>
 #include <algorithm>
 
 namespace nuby::layout {
@@ -13,9 +14,25 @@ public:
     // contenido (textos ya formaados + cajas con width explícito), recursivo.
     static float measure_main_content(const std::shared_ptr<LayoutBox>& box) {
         if (!box) return 0.0f;
-        // Texto: el ancho de línea más larga (ya wrappeado, medido real)
+        // Texto: el ancho de la línea más larga (medido real).
+        // OJO (2026-08-09): desde el IFC cada TextRun es UNA PALABRA, no una
+        // línea entera — hay que agrupar por línea (misma y) y medir de la
+        // primera a la última palabra. Antes medía la palabra más larga y
+        // los flex items con texto quedaban aplastados a ese ancho.
         float w = 0.0f;
-        for (const auto& run : box->text_runs) w = std::max(w, run.rect.width);
+        {
+            std::map<float, std::pair<float, float>> lines; // y → (min_x, max_right)
+            for (const auto& run : box->text_runs) {
+                auto it = lines.find(run.rect.y);
+                if (it == lines.end())
+                    lines[run.rect.y] = { run.rect.x, run.rect.right() };
+                else {
+                    it->second.first  = std::min(it->second.first, run.rect.x);
+                    it->second.second = std::max(it->second.second, run.rect.right());
+                }
+            }
+            for (const auto& kv : lines) w = std::max(w, kv.second.second - kv.second.first);
+        }
         // Cajas con ancho explícito
         if (!box->style.width.is_auto()) {
             w = std::max(w, box->dimensions.content.width);

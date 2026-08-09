@@ -58,20 +58,24 @@ el 8-ago-2026 (Wikipedia, Hacker News, …) y exportadas con
 
 ## Lo que NUBY NO hace todavía (la otra verdad)
 
-- **Sin imágenes**: no hay decodificadores JPEG/PNG enlazados. Los `<img>`
-  se muestran como placeholders con su `alt`. (La build enlaza cero
-  librerías externas.)
+- **Imágenes: solo PNG** (decodificador PROPIO desde la tercera fase —
+  inflate+filtros+Paeth+paleta+alfa, 9 vectores de prueba). JPEG y GIF se
+  muestran como placeholder HONESTO con la razón ("JPEG no soportado aun").
+  PNG entrelazado Adam7 falla con mensaje explícito, no con basura.
 - **Sin gzip/br**: pedimos `Accept-Encoding: identity`.
-- **CSS es un subconjunto**: flujo de bloques, flex (row/column, grow,
-  justify, align, gap), márgenes/padding/border, colores, radios,
-  sombras, `position:absolute/fixed`. NO: grid, floats, tablas reales,
-  `inline-block` real, `position:sticky`, `@media` (se eliminan de la hoja).
+- **CSS es un subconjunto**: flujo de bloques, **IFC real (inline flow con
+  líneas, wrap, baseline y text-align)**, flex (row/column, grow, justify,
+  align, gap), márgenes/padding/border, colores, radios, sombras,
+  `position:absolute/fixed`, `inline-block` atómico dentro del IFC.
+  NO: grid, floats, tablas reales, márgenes/padding de cajas inline puras
+  (v1), `vertical-align` distinto de baseline, `position:sticky`,
+  `@media` (se eliminan de la hoja).
 - **JS es un subconjunto** (documentado arriba, el error es explícito).
   Las webs con JS moderno pesado no funcionarán.
 - **Fuentes**: bitmap 8×12 propio escalado (con composición de acentos para
   español). Sin TTF/hinting.
 - **HTTPS** depende del binario `openssl` del sistema: sin él, solo HTTP.
-- **Una sesión** por servidor (es el modelo "escritorio remoto").
+- **`<select>`** se pinta pero no es interactivo (placeholder honesto).
 
 ## Bugs reales encontrados y corregidos en esta build
 
@@ -91,10 +95,11 @@ el 8-ago-2026 (Wikipedia, Hacker News, …) y exportadas con
 
 ## Mediciones reales (sandbox Debian, g++ -O3)
 
-- Ciclo completo de render de página interna: **~1 ms** (medido en vivo)
-- Búsqueda BM25 sobre 995 docs: **~25 μs** (medido por `/api/search`)
+- Ciclo completo de render de página interna: **~1-3 ms** (medido en vivo)
+- Búsqueda BM25 sobre 995 docs: **~25 μs-1 ms** (medido por `/api/search`)
 - Frame 1024×640 RLE: **~35-80 KB** (vs ~2 MB crudos)
-- Suite: `make test` → 10/10
+- Suite: `make test` → **15/15** (cada suite reproduce un bug real o valida
+  un módulo: PNG 9 vectores, imagen intrínseca, IFC, multi-sesión, …)
 
 ## Cómo correrlo
 
@@ -143,3 +148,86 @@ Bugs colaterales corregidos el mismo día:
   visitas indexan en disco, así que en plataformas con disco efímero
   (Render gratis) ese aprendizaje se pierde al reiniciar — el índice base va
   DENTRO de la imagen y siempre arranca completo.
+
+---
+
+# TERCERA FASE — el navegador completo (2026-08-09, noche)
+
+La lista honesta de pendientes se tachó ENTERA, sin una simulación. Cada
+pieza se verificó EN VIVO (frames píxel a píxel, servidores eco reales) y
+tiene test de regresión. Suite: **15/15**.
+
+## 1. Multi-sesión real
+
+Cada visitante recibe cookie `nuby_sid` (24 hex, HttpOnly) y su propio
+`BrowserShell`: historial, URL, foco y scroll aislados. Índice de búsqueda
+ÚNICO compartido (mutex interno). Hilo por cliente + `SO_RCVTIMEO` 20 s,
+GC de sesiones a los 90 min, cap LRU de 64. Verificado: dos sesiones en
+páginas distintas simultáneamente; `/api/stats` expone `active_sessions`.
+
+## 2. Formularios reales (cero teatro)
+
+- `<input>` text/password/search/email…, `<textarea>`, checkbox, radio,
+  submit/reset/button funcionan de verdad: click enfoca (caret real),
+  teclear edita el atributo `value` del DOM vivo, Backspace borra, Enter
+  = submit implícito (en textarea inserta `\n`), reset restaura defaults.
+- Checkbox/radio alternan `checked` (radio excluye por `name` real).
+- **GET**: la query se construye con la codificación de formularios HTML
+  (espa­cios `+`, clave=valor por control con `name`) y se ve en la barra.
+- **POST**: el fetcher envía `application/x-www-form-urlencoded` con
+  Content-Length real; verificado byte a byte contra un servidor eco propio.
+- Password se pinta con bullets `•` reales; placeholder en gris (selectores
+  `[attr]` y `[attr="v"]` que el parser CSS antes se tragaba — bug real
+  corregido: `flush_token` reescrito).
+- `render_after_js`/edición re-render con `render_document(doc, css)`: el
+  MISMO DOM vivo, sin serializar+reparsear (antes el foco caía sobre un
+  documento muerto desde el primer carácter — bug real pillado en vivo).
+
+## 3. Imágenes PNG reales, decodificador propio
+
+`include/nuby/media/png_decoder.hpp`: zlib RFC 1950 con Adler-32 verificado,
+DEFLATE estilo puff (stored/fixed/dynamic Huffman), PNG RFC 2083: IHDR,
+PLTE, tRNS, IDAT; filtros 0-4 con Paeth; color types 0/2/3/4/6; depths
+1/2/4/8/16 (16→MSB). **Cero librerías externas.** Adam7 entrelazado → error
+honesto ("aún no soportado"). El `<img>` se descarga por HTTP real, se
+distingue por magic bytes, se decodifica y se pinta con `DRAW_IMAGE`
+(vecino más cercano + mezcla alfa por píxel + clip del rasterizador).
+JPEG/GIF/404 → placeholder con la razón impresa. Tamaño en layout:
+tamaño natural real con proporción y cap al contenedor.
+
+**Bug activo encontrado en vivo y corregido**: `DRAW_IMAGE` salía con alto
+0 porque el tail de `layout_block_children` pisaba la altura intrínseca del
+propio `<img>` al recursar (guard `is_img`, test de regresión incluido).
+
+## 4. IFC — Inline Formatting Context de verdad
+
+Lo que más cambiaba la cara: antes TODO era `display:block` por defecto y
+texto/enlaces/negritas se apilaban verticalmente. Ahora:
+
+- **Hoja UA del motor** (`ENGINE_UA_CSS`): `span/a/b/i/em/code/label/…`
+  nacen `display:inline`, `img/input/button/…` `inline-block`, como manda
+  el estándar HTML (prioridad mínima, el CSS de la página la sobreescribe).
+- **Itemización → line breaking → baseline**: los hijos inline consecutivos
+  forman líneas; cada palabra es un run con su fuente; los espacios se
+  insertan (o NO) según el whitespace real del fuente
+  (`a<b>b</b>` ≠ `a <b>b</b>`); wrap real al borde; el espacio inicial de
+  línea se come, como dice el spec.
+- **Alineación baseline**: texto con ascenso 0.9·font-size y cajas atómicas
+  (`img`, `input`, …) con el borde inferior del margin box sobre la línea
+  base (vertical-align: baseline real); línea = max ascenso + max descenso.
+- **`<br>`** rompe línea de verdad (incl. líneas en blanco con `<br><br>`).
+- **`text-align` real por línea**: center/right/justify (justify no estira
+  la última línea, spec).
+- **Hit-testing intacto**: cada caja inline guarda el rect unión de sus
+  runs, así un `<a>` que envuelve en 2 líneas sigue siendo clicable entero.
+- **Bugs reales pillados al integrar**: `measure_main_content` del flex
+  trataba cada run palabra como una línea entera → los items flex con texto
+  quedaban aplastados al ancho de la palabra más larga; corregido midiendo
+  líneas reales (agrupadas por y). Re-render idempotente (test incluido).
+
+## Limitaciones honestas que quedan
+
+- Select no interactivo; Adam7/JPEG/GIF sin decodificador (placeholder con
+  razón); márgenes/padding de inline puros no afectan el flow (v1);
+  `vertical-align` solo baseline; inline con hijos de bloque cae al flujo
+  de bloques (HTML patológico); justificado sin guionado.

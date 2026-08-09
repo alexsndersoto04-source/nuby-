@@ -31,6 +31,12 @@ public:
     std::vector<std::shared_ptr<LayoutBox>> children;
     std::vector<TextRun> text_runs;
 
+    // TEXT_BOX: ¿había whitespace en el fuente antes/después del texto?
+    // El IFC lo usa para insertar (o NO insertar) espacios reales entre
+    // palabras de nodos distintos: "a<b>b</b>" ≠ "a <b>b</b>".
+    bool ws_before{false};
+    bool ws_after{false};
+
     explicit LayoutBox(BoxType type) : box_type(type) {}
 
     void append_child(std::shared_ptr<LayoutBox> child) {

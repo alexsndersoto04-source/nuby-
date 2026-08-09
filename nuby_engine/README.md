@@ -39,7 +39,7 @@ Este repo contenía un motor que compilaba pero cuyo "navegador" era una web
 servida a Chrome (Chrome pintaba la interfaz), con búsqueda hardcodeada y un
 falso "JS engine" basado en comparaciones de texto. La versión 2.0 eliminó ese
 teatro: el índice, el intérprete, la red y **la pintura de la interfaz** son
-reales y están probados (`make test`, 10/10 suites).
+reales y están probados (`make test`, 15/15 suites).
 
 Detalles técnicos sin marketing: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 

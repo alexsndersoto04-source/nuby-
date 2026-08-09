@@ -18,6 +18,20 @@
 
 namespace nuby {
 
+// Hoja de estilo de agente de usuario DEL MOTOR (2026-08-09): como la de
+// cualquier navegador, define la semántica de display del estándar HTML.
+// Tiene la prioridad más baja: se antepone siempre y el CSS de la página
+// puede sobreescribirla. Sin esto todo elemento nacía display:block y el
+// inline flow (texto + enlaces en la misma línea) era imposible.
+inline static const std::string ENGINE_UA_CSS = R"CSS(
+    head, style, script, title, meta, link, base, template, noscript { display: none; }
+    a, abbr, acronym, b, bdi, bdo, big, br, cite, code, data, dfn, em, i,
+    kbd, label, mark, output, q, rt, ruby, s, samp, small, span, strike,
+    strong, sub, sup, time, tt, u, var, wbr { display: inline; }
+    img, input, select, textarea, button, iframe, video, audio, canvas,
+    object, embed, meter, progress { display: inline-block; }
+)CSS";
+
 struct RenderResult {
     std::shared_ptr<html::Document> document;
     std::shared_ptr<layout::LayoutBox> layout_tree;
@@ -311,7 +325,7 @@ public:
             layout_engine_.clear_stylesheets();
 
             // Extract <style> elements from DOM
-            std::string combined_css = custom_css;
+            std::string combined_css = ENGINE_UA_CSS + "\n" + custom_css;
             auto style_elems = current_document_->get_elements_by_tag_name("style");
             for (const auto& s_elem : style_elems) {
                 combined_css += "\n" + s_elem->get_text_content();
@@ -386,7 +400,7 @@ public:
         {
             core::ScopedTimer timer(result.profiler, "CSS_Cascade", "Parse CSS & compute element styles");
             layout_engine_.clear_stylesheets();
-            std::string combined_css = custom_css;
+            std::string combined_css = ENGINE_UA_CSS + "\n" + custom_css;
             auto style_elems = current_document_->get_elements_by_tag_name("style");
             for (const auto& s_elem : style_elems) {
                 combined_css += "\n" + s_elem->get_text_content();

@@ -393,6 +393,129 @@ void test_img_altura_intrinseca_sobrevive_layout() {
     std::cout << "  [✔] altura intrínseca <img> OK\n";
 }
 
+// IFC: texto, negritas, enlaces y cajas atómicas en la MISMA línea con
+// wrap real. Antes todo nacía display:block y se apilaba verticalmente.
+struct RunInfo {
+    std::string text; core::RectF rect; int weight; core::Color color;
+    bool in_link{false}; bool in_bold{false};
+};
+static void collect_runs_ifc(const std::shared_ptr<layout::LayoutBox>& b,
+                             bool in_link, bool in_bold,
+                             std::vector<RunInfo>& out) {
+    if (!b) return;
+    if (b->node && b->node->is_element()) {
+        auto t = std::static_pointer_cast<html::Element>(b->node)->get_tag_name();
+        if (t == "a") in_link = true;
+        if (t == "b" || t == "strong") in_bold = true;
+    }
+    for (auto& r : b->text_runs)
+        out.push_back({r.text, r.rect, r.font_weight, r.color, in_link, in_bold});
+    for (auto& c : b->children) collect_runs_ifc(c, in_link, in_bold, out);
+}
+
+void test_ifc_layout_inline_real() {
+    std::cout << "[Test] IFC: layout inline verdadero (lineas reales)...\n";
+    NubyBrowserEngine engine(260, 600);   // estrecho a drede: fuerza wrap
+    NubyBrowserEngine engine_wide(640, 600); // ancho: todo en una línea
+
+    // --- 1) texto + <b> + <a> en la misma línea, x crecientes ---
+    auto res = engine_wide.render_page(
+        "<html><body><p>hola <b>negrita</b> medio <a href=\"/x\">enlace</a> final</p></body></html>");
+    std::vector<RunInfo> runs;
+    collect_runs_ifc(res.layout_tree, false, false, runs);
+    auto find = [&](const std::string& t) -> const RunInfo* {
+        for (auto& r : runs) if (r.text == t) return &r;
+        return nullptr;
+    };
+    const RunInfo *r_hola = find("hola"), *r_neg = find("negrita"),
+                  *r_enl = find("enlace"), *r_fin = find("final");
+    CHECK(r_hola && r_neg && r_enl && r_fin, "runs ifc presentes");
+    if (r_hola && r_neg && r_enl && r_fin) {
+        CHECK(r_neg->in_bold && r_neg->weight >= 700, "<b> hereda negrita real");
+        CHECK(r_enl->in_link, "run marcado dentro del <a>");
+        CHECK(std::fabs(r_hola->rect.y - r_neg->rect.y) < 1.0f &&
+              std::fabs(r_neg->rect.y - r_enl->rect.y) < 1.0f,
+              "hola/negrita/enlace en la MISMA linea (no apilados)");
+        CHECK(r_hola->rect.right() <= r_neg->rect.x + 7.0f &&
+              r_neg->rect.x < r_enl->rect.x, "flujo izquierda→derecha");
+        CHECK(std::fabs(r_neg->rect.x - r_hola->rect.right()) > 2.0f,
+              "espacio real entre palabras de nodos distintos");
+    }
+
+    // --- 2) wrap real: viewport 260px no caben todas en una línea ---
+    auto res2 = engine.render_page(
+        "<html><body><p>palabra larga uno dos tres cuatro cinco seis siete "
+        "ocho nueve diez once doce trece catorce quince dieciseis</p></body></html>");
+    std::vector<RunInfo> runs2;
+    collect_runs_ifc(res2.layout_tree, false, false, runs2);
+    float min_y = 1e9f, max_y = -1e9f;
+    for (auto& r : runs2) { min_y = std::min(min_y, r.rect.y); max_y = std::max(max_y, r.rect.y); }
+    CHECK(max_y > min_y + 10.0f, "el texto envolvió a 2+ líneas reales");
+
+    // --- 3) <br> fuerza salto de línea honesto ---
+    auto res3 = engine.render_page("<html><body><p>uno<br>dos</p></body></html>");
+    std::vector<RunInfo> runs3;
+    collect_runs_ifc(res3.layout_tree, false, false, runs3);
+    const RunInfo *u = nullptr, *d = nullptr;
+    for (auto& r : runs3) { if (r.text == "uno") u = &r; if (r.text == "dos") d = &r; }
+    CHECK(u && d && d->rect.y > u->rect.y + 10.0f, "<br> rompe la línea de verdad");
+
+    // --- 4) sin espacio en el fuente NO se inventa espacio ---
+    auto res4 = engine.render_page("<html><body><p>a<b>bc</b></p></body></html>");
+    std::vector<RunInfo> runs4;
+    collect_runs_ifc(res4.layout_tree, false, false, runs4);
+    const RunInfo *ra = nullptr, *rbc = nullptr;
+    for (auto& r : runs4) { if (r.text == "a") ra = &r; if (r.text == "bc") rbc = &r; }
+    CHECK(ra && rbc && std::fabs(rbc->rect.x - ra->rect.right()) < 0.5f,
+          "a<b>bc</b> sin espacio → pegadas (como un navegador)");
+
+    // --- 5) caja atómica (img) flota EN la línea, baseline abajo ---
+    auto res5 = engine.render_page("<html><body><p>izq <img src=\"x.png\"> der</p></body></html>");
+    std::vector<RunInfo> runs5;
+    collect_runs_ifc(res5.layout_tree, false, false, runs5);
+    const RunInfo *rizq = nullptr; 
+    for (auto& r : runs5) if (r.text == "izq") rizq = &r;
+    std::shared_ptr<layout::LayoutBox> img5;
+    std::function<void(std::shared_ptr<layout::LayoutBox>)> f5 =
+        [&](std::shared_ptr<layout::LayoutBox> b) {
+            if (!b || img5) return;
+            if (b->node && b->node->is_element() &&
+                std::static_pointer_cast<html::Element>(b->node)->get_tag_name() == "img") img5 = b;
+            for (auto& c : b->children) f5(c);
+        };
+    f5(res5.layout_tree);
+    CHECK(rizq && img5, "img y palabra presentes");
+    if (rizq && img5) {
+        float baseline_words = rizq->rect.y + 0.9f * 16.0f;
+        float img_bottom = img5->dimensions.margin_box().bottom();
+        CHECK(std::fabs(img_bottom - baseline_words) < 1.0f,
+              "img alineada a baseline (vertical-align real) — bottom=" +
+              std::to_string(img_bottom) + " vs baseline=" + std::to_string(baseline_words));
+        CHECK(img5->dimensions.content.x > rizq->rect.right(),
+              "img DESPUÉS de la palabra en la línea, no debajo");
+    }
+
+    // --- 6) text-align: center real ---
+    auto res6 = engine.render_page(
+        "<html><body><p style=\"text-align: center\">centro</p></body></html>");
+    std::vector<RunInfo> runs6;
+    collect_runs_ifc(res6.layout_tree, false, false, runs6);
+    CHECK(!runs6.empty() && runs6[0].rect.x > 10.0f,
+          "text-align:center desplaza la línea de verdad");
+
+    // --- 7) re-render del mismo DOM = determinista (idempotente) ---
+    auto res7 = engine_wide.render_document(res.document, "");
+    std::vector<RunInfo> runs7;
+    collect_runs_ifc(res7.layout_tree, false, false, runs7);
+    CHECK(runs7.size() == runs.size(), "re-render conserva los runs");
+    bool same = runs7.size() == runs.size();
+    if (same) for (size_t i = 0; i < runs.size(); ++i)
+        if (std::fabs(runs7[i].rect.x - runs[i].rect.x) > 0.01f ||
+            std::fabs(runs7[i].rect.y - runs[i].rect.y) > 0.01f) same = false;
+    CHECK(same, "posiciones idénticas tras re-render (sin estado podrido)");
+    std::cout << "  [✔] IFC inline real OK\n";
+}
+
 void test_search_bm25() {
     std::cout << "[Test] Índice invertido + BM25 reales...\n";
     search::SearchIndex idx;
@@ -480,12 +603,13 @@ int main() {
     test_selector_atributo_igualdad();
     test_png_decoder();
     test_img_altura_intrinseca_sobrevive_layout();
+    test_ifc_layout_inline_real();
     test_search_bm25();
     test_js_interpreter();
     test_fetcher_unidades();
     std::cout << "========================================\n";
     if (failures == 0) {
-        std::cout << "\033[1;32mTODO PASA — 14/14 suites reales (100%)\033[0m\n";
+        std::cout << "\033[1;32mTODO PASA — 15/15 suites reales (100%)\033[0m\n";
         return 0;
     }
     std::cout << "\033[1;31m" << failures << " comprobaciones fallaron\033[0m\n";
