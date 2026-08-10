@@ -27,11 +27,17 @@ etapa de claims inflados que fueron corregidos). Lee la verdad técnica
 completa — qué es real y qué no — en
 [`nuby_engine/ARCHITECTURE.md`](nuby_engine/ARCHITECTURE.md).
 
-- ✅ Parser HTML/CSS, layout (bloques/flex), rasterizador software: propios.
+- ✅ Parser HTML/CSS, layout (bloques/flex/inline), rasterizador software: propios.
 - ✅ Buscador BM25 con 995 páginas rastreadas de verdad + indexación en vivo.
 - ✅ Red: sockets propios + TLS vía OpenSSL del sistema.
 - ✅ JS: intérprete real para un subconjunto documentado.
-- ❌ Sin imágenes (placeholders), sin gzip, CSS/JS parciales, una sesión.
+- ✅ Imágenes PNG con decodificador propio (inflate + filtros, sin librerías).
+- ✅ Home propia estilo buscador clásico: wordmark negro, píldora con botón de flecha negro.
+- ✅ ☰ Menú funcional: Historial, Descargas (bytes reales), Configuración (zoom de texto, cursor, instantánea, historial) y Acerca de — todo aplicado de verdad.
+- ✅ Teclado virtual del móvil: puente con input real + reporte kbd/text del motor.
+- ✅ Texto con antialiasing propio (cobertura por supersampling) y zoom global.
+- ✅ Multi-sesión: cada visitante tiene su propio navegador.
+- ❌ Sin JPEG/GIF (placeholder honesto), CSS/JS parciales, una ventana por sesión.
 
 ## Estructura
 

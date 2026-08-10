@@ -14,6 +14,7 @@
 #include "../include/nuby/search/search_index.hpp"
 #include "../include/nuby/js/js_engine.hpp"
 #include "../include/nuby/net/fetcher.hpp"
+#include "../include/nuby/app/browser_shell.hpp"
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -588,6 +589,111 @@ void test_fetcher_unidades() {
     std::cout << "  [✔] fetcher OK\n";
 }
 
+// ---------------------------------------------------------------------------
+// [16] Menú ☰ real: existe como página interna y navega a sus destinos
+// ---------------------------------------------------------------------------
+void test_menu_interno_real() {
+    std::cout << "[Test] Menú ☰ y vistas internas...\n";
+    app::BrowserShell sh; // índice propio vacío, navegación interna no usa red
+    sh.go("nuby://menu");
+    CHECK(sh.current_url() == "nuby://menu", "navegar a nuby://menu");
+    CHECK(!sh.frame().empty(), "el menú produce un frame real");
+    sh.go("nuby://settings");
+    CHECK(sh.current_url() == "nuby://settings", "navegar a nuby://settings");
+    sh.go("nuby://downloads");
+    CHECK(sh.current_url() == "nuby://downloads", "navegar a nuby://downloads");
+    sh.go("nuby://home");
+    CHECK(sh.current_url() == "nuby://home", "volver a nuby://home");
+    std::cout << "  [✔] menú ☰ real OK\n";
+}
+
+// ---------------------------------------------------------------------------
+// [17] Descargas reales: registro byte-exacto, sin muestras falsas, con vaciado
+// ---------------------------------------------------------------------------
+void test_descargas_reales() {
+    std::cout << "[Test] Descargas reales (registro de red de sesión)...\n";
+    app::BrowserShell sh;
+    CHECK(sh.downloads().empty(), "al inicio NO hay descargas (nada de entradas de muestra)");
+    sh.record_download("https://ejemplo.com/", "Ejemplo", 4096);
+    CHECK(sh.downloads().size() == 1, "una descarga registrada");
+    CHECK(sh.downloads()[0].bytes == 4096, "bytes exactos registrados");
+    CHECK(sh.downloads()[0].url == "https://ejemplo.com/", "URL registrada");
+    sh.record_download("nuby://home", "Interna", 10);
+    CHECK(sh.downloads().size() == 1, "las páginas internas NO cuentan como descargas");
+    sh.go("nuby://clear-downloads");
+    CHECK(sh.downloads().empty(), "vaciar lista funciona de verdad");
+    std::cout << "  [✔] descargas reales OK\n";
+}
+
+// ---------------------------------------------------------------------------
+// [18] Configuración real: el zoom de texto cambia MEDIDA y layout (no filtro)
+// ---------------------------------------------------------------------------
+void test_configuracion_real() {
+    std::cout << "[Test] Configuración real (zoom de texto aplicado)...\n";
+    app::BrowserShell sh;
+    const float base = paint::FontRasterizer::glyph_advance(16.0f, 400);
+    sh.go("nuby://set/textzoom/2"); // Grande = 125%
+    const float zoomed = paint::FontRasterizer::glyph_advance(16.0f, 400);
+    CHECK(paint::FontRasterizer::text_zoom() > 1.2f, "el zoom quedó aplicado en el motor");
+    CHECK(zoomed > base * 1.2f, "la MEDIDA del glifo creció de verdad");
+    const float w = layout::TextShaper::measure_text_width("hola", 16.0f, 400);
+    CHECK(w > 4 * base * 1.2f, "el shaper (layout) mide con el zoom aplicado");
+    sh.go("nuby://set/textzoom/1"); // restaurar para el resto de la suite
+    CHECK(std::fabs(paint::FontRasterizer::text_zoom() - 1.0f) < 0.001f, "zoom restaurado al 100%");
+    std::cout << "  [✔] configuración real OK\n";
+}
+
+// ---------------------------------------------------------------------------
+// [19] Puente de teclado: foco de texto por hit-testing REAL sobre el layout
+// ---------------------------------------------------------------------------
+void test_foco_texto_teclado() {
+    std::cout << "[Test] Foco de texto para el puente de teclado...\n";
+    app::BrowserShell sh; // ventana 1024×640 por defecto
+    CHECK(!sh.text_focused(), "sin foco al arrancar");
+    CHECK(sh.focused_text().empty(), "sin texto sin foco");
+    // Click REAL en la zona de la píldora de búsqueda (hit-testing sobre el
+    // árbol de layout, igual que el toque del usuario en el canvas). Se
+    // barre verticalmente la banda central porque el alto exacto depende de
+    // la métrica de línea; lo que se exige es que EXISTE una zona que enfoca.
+    bool hit = false;
+    int hit_y = -1;
+    for (int y = 120; y < 350 && !hit; y += 4) {
+        if (sh.handle_click(512, y) && sh.text_focused()) { hit = true; hit_y = y; }
+    }
+    CHECK(hit, "existe una zona real (la píldora) que enfoca texto al tocarla");
+    std::cout << "  (foco conseguido en y=" << hit_y << ")\n";
+    sh.handle_char('h'); sh.handle_char('o'); sh.handle_char('l'); sh.handle_char('a');
+    CHECK(sh.focused_text() == "hola", "el texto tecleado llega ÍNTEGRO al motor");
+    sh.handle_key("Escape");
+    CHECK(!sh.text_focused(), "Escape quita el foco (teclado se cerraría)");
+    std::cout << "  [✔] foco teclado real OK\n";
+}
+
+// ---------------------------------------------------------------------------
+// [20] Antialiasing REAL del texto: bordes con cobertura parcial (grises),
+// no los bloques duros de antes
+// ---------------------------------------------------------------------------
+void test_antialiasing_texto() {
+    std::cout << "[Test] Antialiasing real del texto...\n";
+    std::vector<uint32_t> fb(300 * 200, 0xFFFFFFFF);
+    paint::FontRasterizer::render_glyph(fb, 300, 200, (uint32_t)'N', 10, 10,
+                                        60.0f, 800, {32, 33, 36, 255});
+    int grises = 0, oscuros = 0, bandas = 0;
+    int banda[3] = {0, 0, 0}; // coberturas bajas/medias/altas → gradación REAL
+    for (uint32_t px : fb) {
+        int r = (px >> 16) & 0xFF;
+        if (r < 60) ++oscuros;                       // interior sólido del trazo
+        else if (r < 130) { ++grises; ++banda[0]; }
+        else if (r < 200) { ++grises; ++banda[1]; }
+        else if (r < 250) { ++grises; ++banda[2]; }
+    }
+    for (int b : banda) if (b > 5) ++bandas;
+    CHECK(oscuros > 500, "el glifo tiene interior sólido");
+    CHECK(grises > 40, "hay píxeles de borde SUAVIZADOS (antialiasing real)");
+    CHECK(bandas >= 2, "la cobertura es GRADUADA (varios tonos de borde, no un solo gris)");
+    std::cout << "  [✔] antialiasing real OK\n";
+}
+
 int main() {
     std::cout << "========================================\n"
               << "  NUBY ENGINE 2.0 — TEST SUITE REAL\n"
@@ -607,9 +713,14 @@ int main() {
     test_search_bm25();
     test_js_interpreter();
     test_fetcher_unidades();
+    test_menu_interno_real();
+    test_descargas_reales();
+    test_configuracion_real();
+    test_foco_texto_teclado();
+    test_antialiasing_texto();
     std::cout << "========================================\n";
     if (failures == 0) {
-        std::cout << "\033[1;32mTODO PASA — 15/15 suites reales (100%)\033[0m\n";
+        std::cout << "\033[1;32mTODO PASA — 20/20 suites reales (100%)\033[0m\n";
         return 0;
     }
     std::cout << "\033[1;31m" << failures << " comprobaciones fallaron\033[0m\n";

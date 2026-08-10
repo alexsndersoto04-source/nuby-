@@ -41,15 +41,18 @@ static std::string get_monitor_html() {
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Nuby</title>
 <style>
   /* Pantalla completa, cero decoración técnica: esto es un navegador,
      no un póster de sí mismo. El canvas ES la ventana. */
   html,body{margin:0;padding:0;background:#fff;height:100%;width:100%;
     overflow:hidden;font-family:system-ui,sans-serif}
+  /* touch-action:none + user-scalable=no: SIN esto Android interpretaba el
+     toque como gesto de zoom/scroll, se llevaba el foco del input y el
+     teclado virtual NUNCA abría (el bug que reportó el usuario 2026-08-09) */
   #screen{display:block;position:fixed;inset:0;width:100vw;height:100vh;
-    image-rendering:auto;background:#fff}
+    image-rendering:auto;background:#fff;touch-action:none}
   /* El captador de teclado: INVISIBLE PERO DENTRO de la pantalla. Antes
      estaba a left:-999px y Chrome/Android se negaba a abrir el teclado
      virtual para un input fuera de la vista (bug real del móvil). */
@@ -59,7 +62,7 @@ static std::string get_monitor_html() {
 </head>
 <body>
 <canvas id="screen" width="1024" height="640"></canvas>
-<input id="kbd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+<input id="kbd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" enterkeyhint="search" tabindex="0" aria-label="entrada de texto del navegador Nuby">
 <script>
 (function(){
   var cv=document.getElementById('screen'), ctx=cv.getContext('2d');
@@ -82,8 +85,25 @@ static std::string get_monitor_html() {
     resizeTimer=setTimeout(sendSize,350);
   });
 
+  // ---- Puente de teclado REAL --------------------------------------------
+  // kbText = el texto que el MOTOR tiene ahora mismo en el campo activo.
+  // El servidor lo reporta en cada respuesta de /event (kbd/text). Así el
+  // autocorrector, la predicción y el borrado trabajan sobre el texto real.
+  var kbText='';
+  function syncKb(j){
+    if(!j||typeof j.kbd==='undefined')return;
+    if(j.kbd){
+      if(typeof j.text==='string'){ kbText=j.text; if(kbd.value!==j.text) kbd.value=j.text; }
+    } else {
+      kbText=''; if(kbd.value) kbd.value='';
+      if(document.activeElement===kbd) kbd.blur(); // el motor salió del campo → teclado se cierra SOLO
+    }
+  }
   function post(qs, then){
     var r=new XMLHttpRequest(); r.open('POST','/event?'+qs,true);
+    r.onreadystatechange=function(){
+      if(r.readyState===4&&r.status===200){ try{syncKb(JSON.parse(r.responseText));}catch(e){} }
+    };
     r.send(null); if(then) then();
   }
   function scale(ev){
@@ -91,50 +111,69 @@ static std::string get_monitor_html() {
     return {x:Math.round((ev.clientX-b.left)*(W/b.width)),
             y:Math.round((ev.clientY-b.top)*(H/b.height))};
   }
-  cv.addEventListener('mousedown',function(ev){
-    var p=scale(ev);
-    kbd.focus(); // gesto del usuario → el teclado virtual SÍ puede abrirse
-    post('k=click&x='+p.x+'&y='+p.y,function(){setTimeout(poll,120);setTimeout(poll,500);});
-  });
-  // En táctil mousedown llega tarde; touchstart adelanta el foco del teclado
-  cv.addEventListener('touchstart',function(ev){
+  function tap(p){
+    // Foco OPTIMISTA dentro del gesto: Android solo abre el teclado virtual
+    // si focus() ocurre procesando un toque real. Si el toque NO cae en un
+    // campo de texto, la respuesta {kbd:false} llamará a blur() y se cierra.
     kbd.focus();
-  },{passive:true});
+    post('k=click&x='+p.x+'&y='+p.y,function(){setTimeout(poll,120);setTimeout(poll,500);});
+  }
+  cv.addEventListener('mousedown',function(ev){ tap(scale(ev)); });
   cv.addEventListener('wheel',function(ev){
     ev.preventDefault();
     post('k=wheel&dy='+Math.round(ev.deltaY),function(){setTimeout(poll,80);});
   },{passive:false});
   // Scroll táctil: arrastrar el dedo = rueda (traducción honesta, la
   // pantalla remota no tiene eventos táctiles nativos)
-  var lastTouchY=null;
+  var lastTouchY=null, touchMoved=false, touchSX=0, touchSY=0;
+  cv.addEventListener('touchstart',function(ev){
+    var t=ev.touches[0]; if(!t)return;
+    touchMoved=false; touchSX=t.clientX; touchSY=t.clientY;
+    lastTouchY = ev.touches.length===1 ? t.clientY : null;
+  },{passive:true});
   document.addEventListener('touchmove',function(ev){
     if(ev.touches.length!==1)return;
     ev.preventDefault();
-    var y=ev.touches[0].clientY;
+    var t=ev.touches[0];
+    if(Math.abs(t.clientX-touchSX)>10||Math.abs(t.clientY-touchSY)>10) touchMoved=true;
+    var y=t.clientY;
     if(lastTouchY!==null){
       var dy=lastTouchY-y;
       if(Math.abs(dy)>10){post('k=wheel&dy='+Math.round(dy*2.2),function(){setTimeout(poll,90);});lastTouchY=y;}
     }
   },{passive:false});
-  document.addEventListener('touchstart',function(ev){
-    lastTouchY = ev.touches.length===1 ? ev.touches[0].clientY : null;
-  },{passive:true});
-  document.addEventListener('touchend',function(){lastTouchY=null;},{passive:true});
+  cv.addEventListener('touchend',function(ev){
+    lastTouchY=null;
+    if(touchMoved) return; // fue arrastre de scroll, no un toque
+    // Toque REAL: cancelamos el mouse sintético (si no, el motor recibiría
+    // el click DOS veces: touchend y luego el mousedown fantasma de Chrome).
+    ev.preventDefault();
+    var t=ev.changedTouches[0];
+    tap(scale(t));
+  });
 
   // TEXTO: camino principal = evento 'input' del captador (sobrevive a
   // teclados virtuales, IME, autocorrector y pegar; keydown NO llega
   // confiable desde el teclado del teléfono — bug real del móvil).
+  // Hay DIFF de verdad contra kbText (lo que tiene el motor): se mandan
+  // Backspaces por lo borrado y chars por lo añadido. El autocorrector ya
+  // no infla la búsqueda porque solo viaja la DIFERENCIA, no todo el valor.
   kbd.addEventListener('input',function(){
-    var v=kbd.value; if(!v)return;
-    for(var i=0;i<v.length;i++){
+    var v=kbd.value;
+    var p=0, max=Math.min(v.length,kbText.length);
+    while(p<max&&v.charCodeAt(p)===kbText.charCodeAt(p))p++;
+    for(var d=0,ds=kbText.length-p;d<ds;d++)
+      post('k=key&key=Backspace',function(){setTimeout(poll,120);});
+    for(var i=p;i<v.length;i++){
       var cp=v.codePointAt(i); if(cp>0xFFFF)i++; // pares suplentes UTF-16
       (function(c){post('k=char&cp='+c,function(){setTimeout(poll,110);});})(cp);
     }
-    kbd.value='';
+    kbText=v;
   });
   window.addEventListener('keydown',function(ev){
     if(ev.metaKey||ev.ctrlKey||ev.altKey)return;
     var k=ev.key;
+    if(k==='Backspace'&&ev.target===kbd)return; // el 'input' de arriba ya lo manda (evita doble borrado)
     if(k==='Backspace'||k==='Enter'||k==='Escape'){
       ev.preventDefault();
       post('k=key&key='+k,function(){setTimeout(poll,150);setTimeout(poll,600);});
@@ -285,6 +324,18 @@ static std::string http_response_bin(int code, const std::string& reason,
     return full;
 }
 
+// Escape JSON compartido (antes había dos lambdas duplicadas)
+static std::string json_escape(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '"') o += "\\\"";
+        else if (c == '\\') o += "\\\\";
+        else if (c == '\n') o += " ";
+        else o += c;
+    }
+    return o;
+}
+
 static std::string qs_get(const std::string& query, const std::string& key) {
     size_t p = query.find(key + "=");
     if (p == std::string::npos) return "";
@@ -357,9 +408,16 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
             changed = ses.shell->handle_key(qs_get(query, "key"));
         }
         if (changed) ses.frame_seq++;
-        return http_response(200, "OK", "application/json",
-            std::string("{\"ok\":") + (changed ? "true" : "false") + ",\"seq\":" +
-            std::to_string(ses.frame_seq.load()) + "}");
+        // Puente de teclado REAL para el monitor: le decimos si tras este
+        // evento hay un campo de texto activo (kbd) y su contenido actual
+        // (text). Con eso el teléfono abre/cierra el teclado virtual EN EL
+        // MOMENTO correcto y el autocorrector trabaja sobre el texto real.
+        std::ostringstream ev;
+        ev << "{\"ok\":" << (changed ? "true" : "false")
+           << ",\"seq\":" << ses.frame_seq.load()
+           << ",\"kbd\":" << (ses.shell->text_focused() ? "true" : "false")
+           << ",\"text\":\"" << json_escape(ses.shell->focused_text()) << "\"}";
+        return http_response(200, "OK", "application/json", ev.str());
     }
 
     if (method == "GET" && path == "/api/search") {
@@ -418,6 +476,7 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
         j << "{\"documents\":" << shared_index_->document_count()
           << ",\"terms\":" << shared_index_->term_count()
           << ",\"history_entries\":" << ses.shell->history().size()
+          << ",\"downloads\":" << ses.shell->downloads().size()
           << ",\"active_sessions\":" << ([this]{ std::lock_guard<std::mutex> lk(sessions_mx_); return sessions_.size(); })()
           << "}";
         return http_response(200, "OK", "application/json", j.str());

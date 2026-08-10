@@ -2,6 +2,7 @@
 
 #include "../core/types.hpp"
 #include "../core/string_utils.hpp"
+#include "../paint/font_rasterizer.hpp"
 #include <string>
 #include <vector>
 #include <cmath>
@@ -27,11 +28,11 @@ class TextShaper {
 public:
     // La fuente del motor es un bitmap monoespaciado 8x12: el avance real es
     // uniforme. Antes se estimaba por carácter y el texto se solapaba al
-    // pintarlo — ahora medidor y rasterizador comparten la misma métrica.
+    // pintarlo — ahora medidor y rasterizador comparten la misma métrica,
+    // INCLUIDO el zoom de texto de Configuración (text_zoom): si medir y
+    // pintar no usan el mismo factor, el texto vuelve a solaparse.
     static float estimate_char_width(char, float font_size, int font_weight) {
-        float adv = font_size * 0.60f;
-        if (font_weight >= 700) adv *= 1.06f;
-        return adv;
+        return paint::FontRasterizer::glyph_advance(font_size, font_weight);
     }
 
     static float measure_text_width(const std::string& text, float font_size, int font_weight) {

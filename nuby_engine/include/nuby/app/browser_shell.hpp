@@ -45,6 +45,17 @@ struct HistoryEntry {
     std::string when;
 };
 
+// Una descarga REAL del motor: cada página web que la sesión baja de la red
+// queda registrada aquí (URL, título, bytes exactos del cuerpo, cuándo).
+// Descargas = la verdad de lo que el motor ha traído de internet; no hay
+// entradas inventadas ni de muestra.
+struct DownloadEntry {
+    std::string url;
+    std::string title;
+    size_t bytes{0};
+    std::string when;
+};
+
 class BrowserShell {
 public:
     // Ventana virtual de ESTA sesión (2026-08-09): cada visitante recibe
@@ -71,6 +82,13 @@ public:
         // (centrado por padding, caja responsiva): con un resize hay que
         // RE-GENERARLAS, no solo re-maquetar el HTML viejo (bug real: la
         // home quedaba centrada para el ancho anterior).
+        render_current_mode();
+        rebuild_chrome(); // incluye compose() del frame final
+    }
+
+    // Re-genera la página interna actual con el estado vivo (lo usan el
+    // resize y las opciones de Configuración, que cambian la geometría).
+    void render_current_mode() {
         switch (mode_) {
             case Mode::HOME: render_home(); break;
             case Mode::RESULTS:
@@ -79,9 +97,11 @@ public:
                 break;
             case Mode::ABOUT: show_about(about_back_); break;
             case Mode::HISTORY: show_history(); break;
+            case Mode::MENU: show_menu(); break;
+            case Mode::DOWNLOADS: show_downloads(); break;
+            case Mode::SETTINGS: show_settings(); break;
             default: refresh_content(); break; // páginas web reales: mismo DOM, nuevo ancho
         }
-        rebuild_chrome(); // incluye compose() del frame final
     }
     static constexpr int CONTENT_CAP = 8000; // tope de alto de página (seguridad)
 
@@ -134,8 +154,12 @@ public:
         if (select_all_) { field.clear(); select_all_ = false; } // comportamiento real de url-bar
         field += utf8_encode(codepoint);
         if (focus_ == Focus::SEARCH && mode_ == Mode::HOME) render_home();
-        else if (focus_ == Focus::SEARCH && mode_ == Mode::RESULTS)
-            show_search_results(input_search_); // Instant Search real: BM25 en μs por tecla
+        else if (focus_ == Focus::SEARCH && mode_ == Mode::RESULTS) {
+            // Instant Search real (BM25 en μs por tecla) — o, si el usuario
+            // la apagó en Configuración, solo se re-pinta la caja (caché).
+            if (setting_instant_) show_search_results(input_search_);
+            else render_results_display();
+        }
         rebuild_chrome();
         return true;
     }
@@ -159,8 +183,10 @@ public:
             if (field.empty()) return false;
             pop_utf8(field);
             if (focus_ == Focus::SEARCH && mode_ == Mode::HOME) render_home();
-            else if (focus_ == Focus::SEARCH && mode_ == Mode::RESULTS)
-                show_search_results(input_search_);
+            else if (focus_ == Focus::SEARCH && mode_ == Mode::RESULTS) {
+                if (setting_instant_) show_search_results(input_search_);
+                else render_results_display();
+            }
             rebuild_chrome();
             return true;
         }
@@ -229,6 +255,11 @@ public:
     bool tick_blink() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (focus_ == Focus::NONE) return false;
+        if (!setting_blink_) {
+            // opción REAL: parpadeo desactivado → cursor FIJO, cero re-renders
+            if (!caret_on_) { caret_on_ = true; rebuild_chrome(); return true; }
+            return false;
+        }
         bool on = (now_ms() / 550) % 2 == 0;
         if (on == caret_on_) return false;
         caret_on_ = on;
@@ -247,6 +278,34 @@ public:
         return index_sp_->query(q, 24);
     }
     const std::deque<HistoryEntry>& history() const { return history_; }
+    const std::deque<DownloadEntry>& downloads() const { return downloads_; }
+
+    // ---- Puente de teclado del monitor (móvil/PC) -------------------------
+    // El monitor (canvas remoto) necesita saber si AHORA hay un campo de
+    // texto activo para abrir/cerrar el teclado virtual del teléfono.
+    bool text_focused() const {
+        return focus_ == Focus::URL || focus_ == Focus::SEARCH || focus_ == Focus::WEBFIELD;
+    }
+    // El contenido REAL del campo enfocado (para sincronizar el captador)
+    std::string focused_text() const {
+        switch (focus_) {
+            case Focus::URL: return input_url_;
+            case Focus::SEARCH: return input_search_;
+            case Focus::WEBFIELD: {
+                auto el = web_field_.lock();
+                return el ? el->get_attribute("value") : std::string();
+            }
+            default: return {};
+        }
+    }
+
+    // Registro REAL de descarga (lo llama load_web tras bajar una página).
+    // Público para que las pruebas verifiquen el comportamiento sin red.
+    void record_download(const std::string& url, const std::string& title, size_t bytes) {
+        if (url.rfind("nuby://", 0) == 0) return; // páginas internas no son descargas
+        downloads_.push_front(DownloadEntry{url, title, bytes, timestamp_now()});
+        while (downloads_.size() > 60) downloads_.pop_back();
+    }
 
     // Navegación pública (para /api/goto): misma vía real que teclear la URL
     void go(const std::string& url) {
@@ -259,7 +318,7 @@ public:
 
 private:
     enum class Focus { NONE, URL, SEARCH, WEBFIELD }; // WEBFIELD: <input>/<textarea> REALES de la página
-    enum class Mode { HOME, WEB, RESULTS, ERROR_PAGE, ABOUT, HISTORY };
+    enum class Mode { HOME, WEB, RESULTS, ERROR_PAGE, ABOUT, HISTORY, MENU, DOWNLOADS, SETTINGS };
 
     // ---------------- Estado ----------------
     std::mutex mutex_;
@@ -289,6 +348,17 @@ private:
     std::vector<std::string> back_stack_;
     std::vector<std::string> fwd_stack_;
     std::deque<HistoryEntry> history_;
+    std::deque<DownloadEntry> downloads_; // páginas REALES bajadas por el motor
+
+    // ---- Configuración REAL (cada opción cambia comportamiento de verdad) --
+    bool setting_blink_{true};    // cursor parpadeante (tick_blink lo consulta)
+    bool setting_history_{true};  // guardar historial (record_visit lo consulta)
+    bool setting_instant_{true};  // búsqueda instantánea al teclear
+
+    // Caché REAL de la última búsqueda: con la instantánea apagada, la caja
+    // se re-pinta sin volver a consultar el índice hasta el próximo Enter.
+    std::vector<search::SearchHit> last_hits_;
+    double last_query_secs_{0.0};
 
     std::shared_ptr<search::SearchIndex> index_sp_;
     std::string pages_path_;
@@ -405,9 +475,16 @@ private:
         std::ostringstream h;
         h << "<div style=\"background-color: #ffffff; border-bottom: 1px solid #dadce0; padding: 8px 10px;\">"
              "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 7px;\">";
+        // ☰ Menú real (Historial/Descargas/Configuración/Acerca de): tres
+        // barras = tres cajas 14×2 que RASTERIZA el motor, no un emoji.
+        h << "<div data-action=\"menu\" style=\"background-color: #f1f3f4; padding: 7px 10px; border-radius: 8px;\">"
+             "<div style=\"width: 14px; height: 2px; background-color: #3c4043; margin-bottom: 3px;\"></div>"
+             "<div style=\"width: 14px; height: 2px; background-color: #3c4043; margin-bottom: 3px;\"></div>"
+             "<div style=\"width: 14px; height: 2px; background-color: #3c4043;\"></div>"
+             "</div>";
         if (W >= 640) // en móvil el espacio es oro: sin logo en el chrome
             h << "<div data-action=\"home\" style=\"margin-right: 4px;\">"
-                 "<span style=\"color: #1a73e8; font-size: 18px; font-weight: 800;\">Nuby</span></div>";
+                 "<span style=\"color: #202124; font-size: 18px; font-weight: 800;\">Nuby</span></div>";
         h << navbtn("back", "&lt;") << navbtn("fwd", "&gt;") << navbtn("reload", "R")
           << "<div data-action=\"focus-url\" style=\"flex-grow: 1; background-color: #f1f3f4; border: 2px solid " << ring
           << "; border-radius: 18px; padding: 6px 12px;\">"
@@ -590,6 +667,7 @@ private:
             return true;
         }
         focus_ = Focus::NONE;
+        if (action == "menu") { navigate("nuby://menu"); return true; }
         if (action == "back" && !back_stack_.empty()) {
             fwd_stack_.push_back(current_url_);
             std::string u = back_stack_.back(); back_stack_.pop_back();
@@ -775,6 +853,12 @@ private:
         if (url == "nuby://about") { show_about(record ? url : current_url_); if (record) {} return; }
         if (url == "nuby://history") { show_history(); return; }
         if (url == "nuby://clear-history") { history_.clear(); show_history(); return; }
+        if (url == "nuby://menu") { show_menu(); return; }
+        if (url == "nuby://downloads") { show_downloads(); return; }
+        if (url == "nuby://clear-downloads") { downloads_.clear(); show_downloads(); return; }
+        if (url == "nuby://settings") { show_settings(); return; }
+        // nuby://set/<opcion>/<valor> — Configuración que SÍ aplica cambios
+        if (url.rfind("nuby://set/", 0) == 0) { apply_setting(url.substr(11)); return; }
 
         load_web(url, "GET", "");
     }
@@ -858,6 +942,9 @@ private:
             if (l.find("[Nuby JS error]") != std::string::npos) ++js_err;
         if (js_err) status_ += " · JS: " + std::to_string(js_err) + " error(es)";
         record_visit(current_url_, current_title_);
+        // DESCARGA REAL registrada en el menú ☰ → Descargas: son los bytes
+        // exactos del cuerpo HTTP que el motor acaba de traerse de la red.
+        record_download(current_url_, current_title_, body.size());
 
         // Guarda la URL base resuelta para los enlaces relativos
         content_base_url_ = pp.base_href.empty() ? current_url_ : net::Fetcher::resolve_url(current_url_, pp.base_href);
@@ -1127,6 +1214,7 @@ private:
 
     void record_visit(const std::string& url, const std::string& title) {
         if (url.rfind("nuby://", 0) == 0) return;
+        if (!setting_history_) return; // opción REAL: historial desactivado → no se guarda
         HistoryEntry e{url, title, timestamp_now()};
         history_.push_front(e);
         while (history_.size() > 60) history_.pop_back();
@@ -1151,48 +1239,67 @@ private:
     }
 
     void render_home() {
-        // Home limpia estilo buscador profesional: logo, caja, un botón.
-        // NADA de texto técnico decorativo — ningún buscador real lo lleva.
-        // max-width no existe en el motor: la caja se centra con el padding
-        // lateral calculado desde el ancho REAL de la sesión (honesto).
-        const int pad = std::max(18, (W - 620) / 2);
-        const char* sb_border = (focus_ == Focus::SEARCH) ? "#1a73e8" : "#dadce0";
-        std::ostringstream h;
-        h << "<div style=\"padding: 120px " << pad << "px 40px " << pad << "px;\">"
+        // Home estilo la referencia del usuario (captura 2026-08-08): fondo
+        // blanco, wordmark "Nuby" NEGRO grande, píldora redondeada con el
+        // botón- flecha negro DENTRO a la derecha. Sin texto decorativo.
+        //
+        // Detalle REAL de rasterizado: el motor redondea RELLENOS pero no
+        // bordes, así que el anillo de la píldora se construye con dos
+        // cajas concéntricas (externa = color de anillo, interna = blanco).
+        // No es un truco visual: son dos FillRoundedRect reales del motor.
+        const int pad = (W > 596) ? (W - 560) / 2 : 18;
+        const char* ring = (focus_ == Focus::SEARCH) ? "#1a73e8" : "#dadce0";
+        // Placeholder RESPONSIVO real: se elige el texto que CABE según el
+        // ancho de la sesión (si no cabe, la caja se desborda y el botón
+        // negro quedaría fuera de la píldora — visto en móvil 412px).
+        const char* placeholder =
+            (W >= 620) ? "Buscar videojuegos, tecnolog\u00eda, noticias\u2026"
+          : (W >= 430) ? "Buscar videojuegos, tecnolog\u00eda\u2026"
+                       : "Buscar\u2026";
 
-          // Logo con colores de marca (como los buscadores grandes)
-             "<div style=\"text-align: center; margin-bottom: 34px;\">"
-               "<span style=\"color: #4285F4; font-size: 60px; font-weight: 800;\">N</span>"
-               "<span style=\"color: #EA4335; font-size: 60px; font-weight: 800;\">u</span>"
-               "<span style=\"color: #FBBC05; font-size: 60px; font-weight: 800;\">b</span>"
-               "<span style=\"color: #34A853; font-size: 60px; font-weight: 800;\">y</span>"
+        std::ostringstream h;
+        h << "<div style=\"padding: 96px " << pad << "px 40px " << pad << "px;\">"
+
+          // Wordmark negro sólido (el antialiasing del rasterizador lo suaviza)
+             "<div style=\"text-align: center; margin-bottom: 30px;\">"
+               "<span style=\"color: #202124; font-size: 60px; font-weight: 800;\">Nuby</span>"
              "</div>"
 
-          // Caja de búsqueda pill (omnibox: busca O navega)
-             "<div data-nuby-input=\"search\" style=\"border: 1px solid " << sb_border
-          << "; border-radius: 24px; padding: 12px 18px; background-color: #ffffff;\">"
-               "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
-               "<span style=\"color: #9aa0a6; font-size: 16px; font-weight: 700;\">Q&nbsp;&nbsp;</span>"
-               "<span style=\"color: " << (input_search_.empty() && focus_ != Focus::SEARCH ? "#9aa0a6" : "#202124")
-          << "; font-size: 16px;\">"
+          // Píldora de búsqueda (omnibox: busca O navega)
+             "<div data-nuby-input=\"search\" style=\"background-color: " << ring
+          << "; border-radius: 25px; padding: 1px;\">"
+               "<div style=\"background-color: #ffffff; border-radius: 24px; padding: 9px 6px 9px 16px;\">"
+                 "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
+                   "<span style=\"color: #9aa0a6; font-size: 16px; font-weight: 700;\">Q&nbsp;&nbsp;</span>"
+                   "<span style=\"color: "
+          << (input_search_.empty() && focus_ != Focus::SEARCH ? "#5f6368" : "#202124")
+          << "; font-size: 15px; margin-left: 6px;\">"
           << esc(focus_ == Focus::SEARCH ? input_search_
-                 : (input_search_.empty() ? "Buscar o escribir una URL" : input_search_))
+                 : (input_search_.empty() ? placeholder : input_search_))
           << "</span>";
         if (focus_ == Focus::SEARCH && caret_on_)
             h << "<div style=\"width: 2px; height: 20px; background-color: #1a73e8; margin-left: 2px;\"></div>";
-        h << "</div></div>"
+        h <<     "<div style=\"flex-grow: 1;\"></div>"
 
-          // Botón buscar (Enter también sirve; ambos caminos corren el mismo código)
-             "<div style=\"text-align: center; margin-top: 26px;\">"
-               "<div data-action=\"do-search\" style=\"display: inline-block; width: 160px; text-align: center; background-color: #f8f9fa; border: 1px solid #dfe1e5; border-radius: 6px; padding: 8px 0px;\">"
-                 "<span style=\"color: #3c4043; font-size: 14px;\">Buscar con Nuby</span></div>"
+          // Botón IR: círculo negro con flecha blanca, DENTRO de la píldora
+                 "<div data-action=\"do-search\" style=\"width: 38px; height: 38px; border-radius: 19px; background-color: #202124;\">"
+                   "<div style=\"text-align: center; margin-top: 8px;\">"
+                     "<span style=\"color: #ffffff; font-size: 18px; font-weight: 700;\">\u2192</span>"
+                   "</div>"
+                 "</div>"
+                 "</div>"
+               "</div>"
              "</div>"
 
-          // Footer funcional discreto (enlaces, no pancartas)
+          // Footer funcional discreto (enlaces reales, no pancartas)
              "<div style=\"text-align: center; margin-top: 120px;\">"
                "<a href=\"nuby://about\" style=\"color: #70757a; font-size: 12px;\">Acerca de Nuby</a>"
                "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
                "<a href=\"nuby://history\" style=\"color: #70757a; font-size: 12px;\">Historial</a>"
+               "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
+               "<a href=\"nuby://downloads\" style=\"color: #70757a; font-size: 12px;\">Descargas</a>"
+               "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
+               "<a href=\"nuby://menu\" style=\"color: #70757a; font-size: 12px;\">Men\u00fa</a>"
              "</div>"
           "</div>";
         render_content_doc(h.str(), "", {});
@@ -1206,9 +1313,19 @@ private:
         current_title_ = q + " - Buscar";
 
         auto t0 = std::chrono::steady_clock::now();
-        auto hits = index_sp_->query(q, 24);
-        double secs = std::chrono::duration<double>(
+        last_hits_ = index_sp_->query(q, 24); // consulta REAL → caché de ESTA sesión
+        last_query_secs_ = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - t0).count();
+        render_results_display();
+    }
+
+    // Pinta resultados desde la caché REAL (sin re-consultar el índice).
+    // La usa la opción "búsqueda instantánea: desactivada": al teclear solo
+    // se actualiza la caja; BM25 vuelve a correr en el próximo Enter.
+    void render_results_display() {
+        const std::string& q = search_of_;
+        const auto& hits = last_hits_;
+        double secs = last_query_secs_;
         status_ = std::to_string(hits.size()) + " resultados";
 
         const int pad = (W >= 720) ? 60 : 18;
@@ -1350,7 +1467,191 @@ private:
               "</div>";
         }
         h << "<div style=\"margin-top: 18px;\">"
-             "<span data-action=\"clear-history\" style=\"color: #b3261e; font-size: 13px; font-weight: 700;\">vaciar historial</span>"
+             "<a href=\"nuby://clear-history\" style=\"color: #b3261e; font-size: 13px; font-weight: 700;\">vaciar historial</a>"
+             "<span style=\"color: #999;\"> · </span>"
+             "<a href=\"nuby://menu\" style=\"color: #0b57d0; font-size: 13px;\">menú</a>"
+             "<span style=\"color: #999;\"> · </span>"
+             "<a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 13px;\">inicio</a></div>"
+          "</div>";
+        render_content_doc(h.str(), "", {});
+        rebuild_chrome();
+    }
+
+    // ---------------- ☰ Menú (cajón lateral pintado por el motor) ----------
+    void show_menu() {
+        mode_ = Mode::MENU;
+        current_url_ = "nuby://menu";
+        input_url_ = current_url_;
+        current_title_ = "Menú";
+        status_ = "Menú";
+        const int panel_w = std::min(320, W - 56);
+        const int panel_h = std::max(430, H - CHROME_H);
+        const std::string sep =
+            "<div style=\"height: 1px; background-color: #ececec; margin: 6px 0;\"></div>";
+        std::ostringstream h;
+        auto item = [&](const std::string& label, const std::string& href2,
+                        const std::string& sub) {
+            h << "<a href=\"" << href2 << "\" style=\"display: block; padding: 9px 20px;\">"
+                 "<span style=\"color: #202124; font-size: 15px;\">" << label << "</span>";
+            if (!sub.empty())
+                h << "<div style=\"margin-top: 2px;\"><span style=\"color: #80868b; font-size: 11px;\">"
+                  << esc(sub) << "</span></div>";
+            h << "</a>";
+        };
+
+        h << "<div style=\"display: flex; flex-direction: row;\">"
+             "<div style=\"width: " << panel_w << "px; height: " << panel_h << "px; background-color: #ffffff;\">"
+             "<div style=\"padding: 16px 20px 8px 20px;\">"
+               "<span style=\"color: #202124; font-size: 24px; font-weight: 800;\">Nuby</span>"
+             "</div>"
+             "<div style=\"margin: 0 20px 8px 20px; padding: 5px 10px; background-color: #f1f3f4; border-radius: 10px;\">"
+               "<span style=\"color: #5f6368; font-size: 11px;\">motor C++ · índice BM25 · "
+          << index_sp_->document_count() << " páginas reales</span>"
+             "</div>"
+          << sep;
+        item("Historial", "nuby://history",
+             std::to_string(history_.size()) + " visitas reales en esta sesión");
+        item("Descargas", "nuby://downloads",
+             std::to_string(downloads_.size()) + " páginas bajadas por el motor");
+        item("Configuración", "nuby://settings", "texto, cursor, historial…");
+        h << sep;
+        item("Acerca de Nuby", "nuby://about", "la verdad técnica del motor");
+        h << sep;
+        item("Cerrar menú", "nuby://home", "");
+        h <<   "</div>"
+             "<div style=\"width: 1px; background-color: #e0e0e0;\"></div>"
+             "</div>";
+        render_content_doc(h.str(), "", {});
+        rebuild_chrome();
+    }
+
+    // ---------------- Descargas (registro REAL de red de esta sesión) ------
+    void show_downloads() {
+        mode_ = Mode::DOWNLOADS;
+        current_url_ = "nuby://downloads";
+        input_url_ = current_url_;
+        current_title_ = "Descargas";
+        status_ = std::to_string(downloads_.size()) + " descargas reales en esta sesión";
+        const int pad = (W >= 720) ? 60 : 20;
+        std::ostringstream h;
+        h << "<div style=\"padding: 26px " << pad << "px;\">"
+             "<h1 style=\"color: #111111; font-size: 26px; margin: 0 0 6px 0;\">Descargas</h1>"
+             "<p style=\"color: #5f6368; font-size: 12px; margin-bottom: 16px;\">Páginas web que el motor "
+             "ha descargado de la red en ESTA sesión, con sus bytes exactos. "
+             "Aquí no hay entradas de muestra: si está vacío es que aún no se ha bajado nada.</p>";
+        if (downloads_.empty()) {
+            h << "<p style=\"color: #555; font-size: 14px;\">Aún no hay descargas reales. "
+                 "Navega a una página web y aparecerá aquí.</p>";
+        }
+        for (const auto& d : downloads_) {
+            std::string kb = d.bytes >= 1024
+                ? std::to_string(d.bytes / 1024) + " KB"
+                : std::to_string(d.bytes) + " B";
+            h << "<div style=\"margin-bottom: 14px;\">"
+                 "<a href=\"" << esc(d.url) << "\" style=\"color: #0b57d0; font-size: 14px;\">"
+              << esc(d.title.empty() ? d.url : d.title) << "</a>"
+                 "<div style=\"margin-top: 1px;\">"
+                   "<span style=\"color: #188038; font-size: 12px; font-weight: 700;\">" << kb << "</span>"
+                   "<span style=\"color: #888888; font-size: 12px;\"> · " << esc(d.when)
+              << " · " << esc(d.url) << "</span>"
+                 "</div>"
+              "</div>";
+        }
+        h << "<div style=\"margin-top: 18px;\">"
+             "<a href=\"nuby://clear-downloads\" style=\"color: #b3261e; font-size: 13px; font-weight: 700;\">vaciar lista</a>"
+             "<span style=\"color: #999;\"> · </span>"
+             "<a href=\"nuby://menu\" style=\"color: #0b57d0; font-size: 13px;\">menú</a>"
+             "<span style=\"color: #999;\"> · </span>"
+             "<a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 13px;\">inicio</a></div>"
+          "</div>";
+        render_content_doc(h.str(), "", {});
+        rebuild_chrome();
+    }
+
+    // ---------------- Configuración (cada opción APLICA un cambio real) ----
+    void apply_setting(const std::string& optval) {
+        auto slash = optval.find('/');
+        std::string key = slash == std::string::npos ? optval : optval.substr(0, slash);
+        std::string val = slash == std::string::npos ? "" : optval.substr(slash + 1);
+        if (key == "textzoom") {
+            float z = (val == "0") ? 0.90f : (val == "2") ? 1.25f : 1.0f;
+            paint::FontRasterizer::set_text_zoom(z); // cambia MEDIDA y TRAZADO (real, global)
+            status_ = "Zoom de texto aplicado: " + std::to_string((int)(paint::FontRasterizer::text_zoom() * 100)) + "%";
+        } else if (key == "blink") {
+            setting_blink_ = (val == "1");
+            status_ = std::string("Cursor parpadeante: ") + (setting_blink_ ? "activado" : "desactivado");
+        } else if (key == "instant") {
+            setting_instant_ = (val == "1");
+            status_ = std::string("Búsqueda instantánea: ") + (setting_instant_ ? "activada" : "desactivada");
+        } else if (key == "history") {
+            setting_history_ = (val == "1");
+            status_ = std::string("Guardar historial: ") + (setting_history_ ? "activado" : "desactivado");
+        } else {
+            status_ = "Opción desconocida: " + key;
+        }
+        // Re-render HONESTO: la geometría pudo cambiar (zoom) → regenerar todo
+        show_settings();
+    }
+
+    void show_settings() {
+        mode_ = Mode::SETTINGS;
+        current_url_ = "nuby://settings";
+        input_url_ = current_url_;
+        current_title_ = "Configuración";
+        const int pad = (W >= 720) ? 60 : 20;
+        const float z = paint::FontRasterizer::text_zoom();
+        std::ostringstream h;
+        std::string cur_key; // clave de la opción en curso (la usa el lambda choice)
+
+        auto row_head = [&](const std::string& label, const std::string& sub) {
+            h << "<div style=\"margin-bottom: 4px;\">"
+                 "<span style=\"color: #202124; font-size: 15px;\">" << label << "</span>"
+                 "<div style=\"margin-top: 1px;\"><span style=\"color: #80868b; font-size: 11px;\">"
+              << esc(sub) << "</span></div></div>";
+        };
+        auto choice = [&](const std::string& val, const std::string& label, bool current) {
+            if (current)
+                h << "<span style=\"color: #202124; font-size: 13px; font-weight: 700;\">  " << label << " ✓  </span>";
+            else
+                h << "<a href=\"nuby://set/" << cur_key << "/" << val
+                  << "\" style=\"color: #0b57d0; font-size: 13px;\">  " << label << "  </a>";
+        };
+
+        h << "<div style=\"padding: 26px " << pad << "px;\">"
+             "<h1 style=\"color: #111111; font-size: 26px; margin: 0 0 6px 0;\">Configuración</h1>"
+             "<p style=\"color: #5f6368; font-size: 12px; margin-bottom: 18px;\">Cada opción cambia "
+             "comportamiento REAL del motor en el momento. Nada aquí es decorativo.</p>";
+
+        // 1) Tamaño de texto — zoom global real (medida + trazado)
+        cur_key = "textzoom";
+        row_head("Tamaño de texto", "Zoom global del motor: afecta al layout, no es un filtro.");
+        choice("0", "Pequeño", z < 0.95f);
+        choice("1", "Normal", z >= 0.95f && z < 1.15f);
+        choice("2", "Grande", z >= 1.15f);
+        h << "<div style=\"height: 1px; background-color: #ececec; margin: 14px 0;\"></div>";
+
+        // 2) Cursor parpadeante
+        cur_key = "blink";
+        row_head("Cursor parpadeante", "Si lo apagas, el cursor queda fijo y el motor deja de re-renderizar cada 550 ms.");
+        choice("1", "Activado", setting_blink_);
+        choice("0", "Desactivado", !setting_blink_);
+        h << "<div style=\"height: 1px; background-color: #ececec; margin: 14px 0;\"></div>";
+
+        // 3) Búsqueda instantánea
+        cur_key = "instant";
+        row_head("Búsqueda instantánea", "Activada: BM25 corre por tecla. Apagada: la búsqueda corre solo al pulsar Enter.");
+        choice("1", "Activada", setting_instant_);
+        choice("0", "Desactivada", !setting_instant_);
+        h << "<div style=\"height: 1px; background-color: #ececec; margin: 14px 0;\"></div>";
+
+        // 4) Guardar historial
+        cur_key = "history";
+        row_head("Guardar historial", "Apagado: las visitas dejan de registrarse (privacidad real, verificable en Historial).");
+        choice("1", "Activado", setting_history_);
+        choice("0", "Desactivado", !setting_history_);
+
+        h << "<div style=\"margin-top: 22px;\">"
+             "<a href=\"nuby://menu\" style=\"color: #0b57d0; font-size: 13px;\">menú</a>"
              "<span style=\"color: #999;\"> · </span>"
              "<a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 13px;\">inicio</a></div>"
           "</div>";

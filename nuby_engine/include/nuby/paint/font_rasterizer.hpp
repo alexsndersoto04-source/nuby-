@@ -132,10 +132,28 @@ private:
             {0x00B0, {0x18,0x24,0x24,0x18,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}}, // °
             {0x00A9, {0x00,0x3C,0x42,0x99,0xA1,0xA1,0x99,0x42,0x3C,0x00,0x00,0x00}}, // ©
             {0x2022, {0x00,0x00,0x00,0x00,0x3C,0x3C,0x3C,0x3C,0x00,0x00,0x00,0x00}}, // •
+            {0x2192, {0x00,0x00,0x10,0x08,0x04,0x7E,0x04,0x08,0x10,0x00,0x00,0x00}}, // →
+            {0x2190, {0x00,0x00,0x10,0x20,0x40,0xFC,0x40,0x20,0x10,0x00,0x00,0x00}}, // ←
+            {0x2630, {0x00,0x00,0x7E,0x7E,0x00,0x7E,0x7E,0x00,0x7E,0x7E,0x00,0x00}}, // ☰
+            {0x2713, {0x00,0x00,0x02,0x06,0x0C,0xD8,0x70,0x20,0x00,0x00,0x00,0x00}}, // ✓
         };
         for (const auto& g : specials) if (g.cp == cp) return &g;
         return nullptr;
     }
+
+public:
+    // ---------------- Zoom de texto REAL (opción de Configuración) ---------
+    // Factor global que aplica tanto al MEDIR (text_shaper usa text_zoom())
+    // como al PINTAR (render_glyph/glyph_advance): si la medición y el
+    // trazado escalan igual, el texto grande vuelve a fluir sin solapes.
+    // Es un ajuste de verdad: cambia la geometría del layout, no un filtro.
+    static float& zoom_storage() { static float z = 1.0f; return z; }
+    static void set_text_zoom(float z) {
+        if (z < 0.7f) z = 0.7f;
+        if (z > 1.8f) z = 1.8f;
+        zoom_storage() = z;
+    }
+    static float text_zoom() { return zoom_storage(); }
 
 public:
     // Mapea codepoints acentuados a (letra base ASCII + diacrítico).
@@ -160,8 +178,9 @@ public:
 
     // Avance REAL y uniforme: la fuente 8x12 es monoespaciada por naturaleza.
     // La misma métrica la usa el shaper para medir → cero solapes.
+    // (Multiplicada por el zoom de texto: medir y pintar escalan juntos.)
     static float glyph_advance(float font_size, int font_weight) {
-        float adv = font_size * 0.60f;
+        float adv = font_size * 0.60f * text_zoom();
         if (font_weight >= 700) adv *= 1.06f;
         return adv;
     }
@@ -195,37 +214,54 @@ public:
                 bitmap = get_glyph_bitmap('?'); // desconocido → signo visible, honesto
             }
         }
-        float scale = font_size / 14.0f;
-        int bold_extra = (font_weight >= 700) ? 1 : 0;
+        const float scale = font_size / 14.0f * text_zoom();
+        const bool bold = (font_weight >= 700);
+        // En negrita los trazos engordan un píxel: el glifo se evalúa también
+        // desplazado una columna de bitmap y se toma la unión de coberturas.
+        const float bold_shift = bold ? 1.0f : 0.0f;
 
-        for (int row = 0; row < 12; ++row) {
-            uint8_t bits = bitmap[row];
-            for (int col = 0; col < 8; ++col) {
-                if ((bits >> (7 - col)) & 1) {
-                    for (int dy = 0; dy < std::ceil(scale); ++dy) {
-                        for (int dx = 0; dx < std::ceil(scale) + bold_extra; ++dx) {
-                            int px = static_cast<int>(x + col * scale + dx);
-                            int py = static_cast<int>(y + row * scale + dy);
+        // ---------------- ANTIALIASING REAL (2026-08-10) -------------------
+        // Antes: cada bit del glifo pintaba un BLOQUE sólido de ceil(scale)²
+        // píxeles → bordes de sierra, ilegible en tamaños grandes.
+        // Ahora: supersampling 3×3 por píxel. La cobertura (0..1) es el
+        // porcentaje del píxel tapado por el glifo y se mezcla con el fondo.
+        // Es antialiasing de verdad (mismo principio que ClearType sin su
+        // componente sub-píxel): los bordes salen grises y suaves, medidos
+        // píxel a píxel, no desenfocados con un filtro posterior.
+        const int x0 = std::max(0, (int)std::floor(x) - 1);
+        const int y0 = std::max(0, (int)std::floor(y) - 1);
+        const int x1 = std::min(buffer_w, (int)std::ceil(x + (8.0f + bold_shift) * scale) + 1);
+        const int y1 = std::min(buffer_h, (int)std::ceil(y + 12 * scale) + 1);
 
-                            if (px >= 0 && px < buffer_w && py >= 0 && py < buffer_h) {
-                                // Alpha blend
-                                size_t idx = py * buffer_w + px;
-                                uint32_t bg = buffer[idx];
-                                uint8_t bg_a = (bg >> 24) & 0xFF;
-                                uint8_t bg_r = (bg >> 16) & 0xFF;
-                                uint8_t bg_g = (bg >> 8) & 0xFF;
-                                uint8_t bg_b = bg & 0xFF;
+        auto bit_at = [&](float bx, float by) -> bool {
+            if (bx < 0.0f || bx >= 8.0f || by < 0.0f || by >= 12.0f) return false;
+            int col = (int)bx, row = (int)by;
+            return ((bitmap[row] >> (7 - col)) & 1) != 0;
+        };
 
-                                float alpha = color.a / 255.0f;
-                                uint8_t out_r = static_cast<uint8_t>(color.r * alpha + bg_r * (1.0f - alpha));
-                                uint8_t out_g = static_cast<uint8_t>(color.g * alpha + bg_g * (1.0f - alpha));
-                                uint8_t out_b = static_cast<uint8_t>(color.b * alpha + bg_b * (1.0f - alpha));
-
-                                buffer[idx] = (0xFF << 24) | (out_r << 16) | (out_g << 8) | out_b;
-                            }
-                        }
+        const float base_alpha = color.a / 255.0f;
+        for (int py = y0; py < y1; ++py) {
+            for (int px = x0; px < x1; ++px) {
+                // 9 submuestras uniformes dentro del píxel
+                int cov = 0;
+                for (int sy = 0; sy < 3; ++sy) {
+                    for (int sx = 0; sx < 3; ++sx) {
+                        float bx = (px - x + (sx + 0.5f) / 3.0f) / scale;
+                        float by = (py - y + (sy + 0.5f) / 3.0f) / scale;
+                        if (bit_at(bx, by) || (bold && bit_at(bx - bold_shift, by))) ++cov;
                     }
                 }
+                if (!cov) continue;
+                float alpha = base_alpha * (cov / 9.0f);
+                size_t idx = (size_t)py * buffer_w + px;
+                uint32_t bg = buffer[idx];
+                uint8_t bg_r = (bg >> 16) & 0xFF;
+                uint8_t bg_g = (bg >> 8) & 0xFF;
+                uint8_t bg_b = bg & 0xFF;
+                uint8_t out_r = static_cast<uint8_t>(color.r * alpha + bg_r * (1.0f - alpha));
+                uint8_t out_g = static_cast<uint8_t>(color.g * alpha + bg_g * (1.0f - alpha));
+                uint8_t out_b = static_cast<uint8_t>(color.b * alpha + bg_b * (1.0f - alpha));
+                buffer[idx] = (0xFFu << 24) | ((uint32_t)out_r << 16) | ((uint32_t)out_g << 8) | out_b;
             }
         }
     }
