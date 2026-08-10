@@ -632,12 +632,15 @@ void test_configuracion_real() {
     std::cout << "[Test] Configuración real (zoom de texto aplicado)...\n";
     app::BrowserShell sh;
     const float base = paint::FontRasterizer::glyph_advance(16.0f, 400);
+    const float w100 = layout::TextShaper::measure_text_width("hola", 16.0f, 400);
     sh.go("nuby://set/textzoom/2"); // Grande = 125%
     const float zoomed = paint::FontRasterizer::glyph_advance(16.0f, 400);
+    const float w125 = layout::TextShaper::measure_text_width("hola", 16.0f, 400);
     CHECK(paint::FontRasterizer::text_zoom() > 1.2f, "el zoom quedó aplicado en el motor");
     CHECK(zoomed > base * 1.2f, "la MEDIDA del glifo creció de verdad");
-    const float w = layout::TextShaper::measure_text_width("hola", 16.0f, 400);
-    CHECK(w > 4 * base * 1.2f, "el shaper (layout) mide con el zoom aplicado");
+    // Con tipografía proporcional real (TTF) cada letra tiene su ancho: la
+    // invariant honesta es que el layout escala con el zoom, no con '0.6*N'.
+    CHECK(w125 > w100 * 1.2f, "el shaper (layout) mide con el zoom aplicado");
     sh.go("nuby://set/textzoom/1"); // restaurar para el resto de la suite
     CHECK(std::fabs(paint::FontRasterizer::text_zoom() - 1.0f) < 0.001f, "zoom restaurado al 100%");
     std::cout << "  [✔] configuración real OK\n";

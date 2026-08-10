@@ -67,6 +67,10 @@ public:
     static constexpr int CHROME_H = 58; // UNA fila (omnibox), como manda el diseño moderno
     int width() const { return W; }
     int height() const { return H; }
+    // Sin barra superior EN LA HOME (petición del usuario 2026-08-10: la
+    // referencia no lleva chrome en el inicio). El resto de vistas la tienen.
+    int chrome_h() const { return mode_ == Mode::HOME ? 0 : CHROME_H; }
+    int visible_h() const { return H - chrome_h(); }
 
     // Re-renderiza TODO a un nuevo tamaño de ventana (móvil ↔ escritorio).
     void set_viewport(int w, int h) {
@@ -123,15 +127,16 @@ public:
 
     bool handle_click(int x, int y) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (y < CHROME_H) {
+        const int ch = chrome_h();
+        if (y < ch) {
             return click_chrome(x, y);
         }
-        return click_content(x, y - CHROME_H + scroll_y_);
+        return click_content(x, y - ch + scroll_y_);
     }
 
     bool handle_wheel(int dy) {
         std::lock_guard<std::mutex> lock(mutex_);
-        int max_scroll = std::max(0, content_height_ - (H - CHROME_H));
+        int max_scroll = std::max(0, content_height_ - visible_h());
         int old = scroll_y_;
         scroll_y_ = std::max(0, std::min(max_scroll, scroll_y_ + dy));
         if (scroll_y_ != old) { compose(); return true; }
@@ -507,14 +512,17 @@ private:
     // ---------------- Composición: chrome + contenido → frame ----------------
     void compose() {
         if (frame_.size() != (size_t)(W * H)) frame_.assign((size_t)W * H, 0xFFFFFFFF);
-        if (chrome_fb_.size() != (size_t)(W * CHROME_H)) rebuild_chrome_only();
-        // 1) chrome
-        std::copy(chrome_fb_.begin(), chrome_fb_.end(), frame_.begin());
+        const int ch = chrome_h();
+        if (ch > 0) {
+            if (chrome_fb_.size() != (size_t)(W * ch)) rebuild_chrome_only();
+            // 1) chrome (solo cuando la vista actual lo muestra; la home no)
+            std::copy(chrome_fb_.begin(), chrome_fb_.end(), frame_.begin());
+        }
         // 2) contenido (slice con scroll)
-        int visible = H - CHROME_H;
+        int visible = visible_h();
         for (int row = 0; row < visible; ++row) {
             int src_row = row + scroll_y_;
-            auto dst = frame_.begin() + (size_t)(CHROME_H + row) * W;
+            auto dst = frame_.begin() + (size_t)(ch + row) * W;
             if (src_row >= 0 && src_row < content_height_ &&
                 (size_t)((src_row + 1) * W) <= content_fb_.size()) {
                 auto src = content_fb_.begin() + (size_t)src_row * W;
@@ -541,11 +549,11 @@ private:
         content_fb_ = res->pixels;
 
         // Altura real del contenido: camina el layout tree
-        content_height_ = H - CHROME_H;
+        content_height_ = visible_h();
         if (res->layout_tree) {
             float max_bottom = 0;
             walk_bottom(res->layout_tree, max_bottom);
-            content_height_ = std::max(H - CHROME_H, std::min((int)max_bottom + 12, CONTENT_CAP));
+            content_height_ = std::max(visible_h(), std::min((int)max_bottom + 12, CONTENT_CAP));
         }
 
         // Ejecuta los scripts inline con el intérprete REAL
@@ -570,7 +578,7 @@ private:
             if (res->layout_tree) {
                 float max_bottom = 0;
                 walk_bottom(res->layout_tree, max_bottom);
-                content_height_ = std::max(H - CHROME_H, std::min((int)max_bottom + 12, CONTENT_CAP));
+                content_height_ = std::max(visible_h(), std::min((int)max_bottom + 12, CONTENT_CAP));
             }
             // Re-bind del intérprete al documento nuevo (el anterior quedó muerto)
             {
@@ -756,8 +764,12 @@ private:
             }
         }
 
+        // -------- Navegación interna del menú desde el contenido --------
+        const std::string act = el->get_attribute("data-action");
+        if (act == "menu") { navigate("nuby://menu"); return true; }
+
         // Botón "Buscar con Nuby" (mismo camino que Enter: cero duplicación)
-        if (el->get_attribute("data-action") == "do-search") {
+        if (act == "do-search") {
             focus_ = Focus::NONE;
             rebuild_chrome();
             if (!input_search_.empty()) show_search_results(input_search_);
@@ -831,7 +843,7 @@ private:
             if (res->layout_tree) {
                 float max_bottom = 0;
                 walk_bottom(res->layout_tree, max_bottom);
-                content_height_ = std::max(H - CHROME_H, std::min((int)max_bottom + 12, CONTENT_CAP));
+                content_height_ = std::max(visible_h(), std::min((int)max_bottom + 12, CONTENT_CAP));
             }
         }
         compose();
@@ -952,10 +964,10 @@ private:
         // Render + scripts (render_content_doc también mide altura real)
         content_result_ = parse_res;
         content_fb_ = parse_res->pixels;
-        content_height_ = H - CHROME_H;
+        content_height_ = visible_h();
         if (parse_res->layout_tree) {
             float mb = 0; walk_bottom(parse_res->layout_tree, mb);
-            content_height_ = std::max(H - CHROME_H, std::min((int)mb + 12, CONTENT_CAP));
+            content_height_ = std::max(visible_h(), std::min((int)mb + 12, CONTENT_CAP));
         }
 
         // UN SOLO intérprete por página. ANTES los scripts corrían DOS veces
@@ -1030,7 +1042,7 @@ private:
                 content_fb_ = parse_res->pixels;
                 if (parse_res->layout_tree) {
                     float mb2 = 0; walk_bottom(parse_res->layout_tree, mb2);
-                    content_height_ = std::max(H - CHROME_H, std::min((int)mb2 + 12, CONTENT_CAP));
+                    content_height_ = std::max(visible_h(), std::min((int)mb2 + 12, CONTENT_CAP));
                 }
             }
         }
@@ -1202,7 +1214,7 @@ private:
         content_fb_ = res->pixels;
         if (res->layout_tree) {
             float mb = 0; walk_bottom(res->layout_tree, mb);
-            content_height_ = std::max(H - CHROME_H, std::min((int)mb + 12, CONTENT_CAP));
+            content_height_ = std::max(visible_h(), std::min((int)mb + 12, CONTENT_CAP));
         }
         // el intérprete ligado a ESTE documento se conserva (render_document)
         auto eng = engine_content_->get_js_engine();
@@ -1258,11 +1270,25 @@ private:
                        : "Buscar\u2026";
 
         std::ostringstream h;
-        h << "<div style=\"padding: 96px " << pad << "px 40px " << pad << "px;\">"
+        h << "<div style=\"padding: 12px " << pad << "px 40px " << pad << "px;\">"
 
-          // Wordmark negro sólido (el antialiasing del rasterizador lo suaviza)
-             "<div style=\"text-align: center; margin-bottom: 30px;\">"
-               "<span style=\"color: #202124; font-size: 60px; font-weight: 800;\">Nuby</span>"
+          // Fila superior EN LA PÁGINA (la home no lleva barra de chrome):
+          // ☰ menú + badge honesto del stack, como en la referencia del usuario
+             "<div style=\"display: flex; flex-direction: row; align-items: center; margin-bottom: 80px;\">"
+               "<div data-action=\"menu\" style=\"padding: 8px 4px;\">"
+                 "<div style=\"width: 16px; height: 2px; background-color: #3c4043; margin-bottom: 3px;\"></div>"
+                 "<div style=\"width: 16px; height: 2px; background-color: #3c4043; margin-bottom: 3px;\"></div>"
+                 "<div style=\"width: 16px; height: 2px; background-color: #3c4043;\"></div>"
+               "</div>"
+               "<div style=\"margin-left: 12px; padding: 5px 10px; background-color: #f1f3f4; border-radius: 10px;\">"
+                 "<span style=\"color: #5f6368; font-size: 11px;\">motor C++ · índice BM25 · "
+          << index_sp_->document_count() << " páginas</span>"
+               "</div>"
+             "</div>"
+
+          // Wordmark negro sólido (TTF real: curvas suaves, cero píxeles)
+             "<div style=\"text-align: center; margin-bottom: 26px;\">"
+               "<div style=\"line-height: 74px;\"><span style=\"color: #202124; font-size: 60px; font-weight: 800;\">Nuby</span></div>"
              "</div>"
 
           // Píldora de búsqueda (omnibox: busca O navega)
@@ -1273,7 +1299,7 @@ private:
                    "<span style=\"color: #9aa0a6; font-size: 16px; font-weight: 700;\">Q&nbsp;&nbsp;</span>"
                    "<span style=\"color: "
           << (input_search_.empty() && focus_ != Focus::SEARCH ? "#5f6368" : "#202124")
-          << "; font-size: 15px; margin-left: 6px;\">"
+          << "; font-size: 15px; margin-left: 8px;\">"
           << esc(focus_ == Focus::SEARCH ? input_search_
                  : (input_search_.empty() ? placeholder : input_search_))
           << "</span>";
@@ -1333,7 +1359,7 @@ private:
         h << "<div style=\"padding: 18px " << pad << "px 40px " << pad << "px;\">"
           // fila superior: mini-logo + caja con la query (como todo buscador)
              "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 14px; margin-bottom: 10px;\">"
-               "<a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 20px; font-weight: 800;\">Nuby</a>"
+               "<div style=\"line-height: 30px;\"><a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 20px; font-weight: 800;\">Nuby</a></div>"
                "<div data-nuby-input=\"search\" style=\"flex-grow: 1; max-width: 560px; border: 1px solid #dfe1e5; border-radius: 20px; padding: 8px 14px;\">"
                  "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
                  "<span style=\"color: #202124; font-size: 15px;\">"
@@ -1485,7 +1511,7 @@ private:
         current_title_ = "Menú";
         status_ = "Menú";
         const int panel_w = std::min(320, W - 56);
-        const int panel_h = std::max(430, H - CHROME_H);
+        const int panel_h = std::max(430, visible_h());
         const std::string sep =
             "<div style=\"height: 1px; background-color: #ececec; margin: 6px 0;\"></div>";
         std::ostringstream h;

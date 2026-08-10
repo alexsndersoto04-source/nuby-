@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../core/types.hpp"
+#include "ttf_font.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
+#include <unordered_map>
 
 namespace nuby::paint {
 
@@ -142,6 +145,87 @@ private:
     }
 
 public:
+    // ---------------- Fuentes TrueType REALES (texto suave) ----------------
+    // Carga perezosa y compartida. Si el .ttf no está en disco, ttf_ready()
+    // es false y TODO sigue con el bitmap interno (nunca se rompe).
+    static TrueTypeFont& ttf(bool bold) {
+        static TrueTypeFont regular = [] {
+            TrueTypeFont f; load_font_file(f, "DejaVuSans.ttf"); return f;
+        }();
+        static TrueTypeFont boldf = [] {
+            TrueTypeFont f; load_font_file(f, "DejaVuSans-Bold.ttf"); return f;
+        }();
+        return (bold && boldf.loaded()) ? boldf : regular;
+    }
+    static bool ttf_ready() { return ttf(false).loaded(); }
+
+    // Avance por CODEPOINT real (proporcional con TTF; uniforme con bitmap)
+    static float advance_cp(uint32_t cp, float font_size, int font_weight) {
+        if (ttf_ready())
+            return ttf(font_weight >= 700).advance(cp, font_size * text_zoom());
+        return glyph_advance(font_size, font_weight);
+    }
+
+private:
+    static void load_font_file(TrueTypeFont& f, const char* name) {
+        static const char* dirs[] = {
+            "data/fonts/", "../data/fonts/", "nuby_engine/data/fonts/", ""
+        };
+        for (const char* d : dirs) {
+            if (f.load(std::string(d) + name)) return;
+        }
+    }
+
+    // Caché de glifos rasterizados (como hacen los navegadores de verdad):
+    // cada (codepoint, tamaño efectivo, negrita) se rasteriza UNA vez.
+    static TrueTypeFont::RasterResult cached_raster(TrueTypeFont& f, uint32_t cp,
+                                                    float size_eff, bool bold) {
+        static std::mutex mx;
+        static std::unordered_map<uint64_t, TrueTypeFont::RasterResult> cache;
+        uint64_t key = ((uint64_t)cp << 33) |
+                       ((uint64_t)(uint32_t)std::lround(size_eff * 4) << 1) |
+                       (bold ? 1u : 0u);
+        std::lock_guard<std::mutex> lk(mx);
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+        if (cache.size() > 4000) cache.clear();
+        auto rr = f.raster(cp, size_eff);
+        cache.emplace(key, rr);
+        return rr;
+    }
+
+    // Ruta TTF: trazado por curvas Bezier reales + blending por alfa
+    static void render_glyph_ttf(std::vector<uint32_t>& buffer, int buffer_w, int buffer_h,
+                                 uint32_t cp, float x, float y, float font_size,
+                                 int font_weight, const core::Color& color) {
+        const float size_eff = font_size * text_zoom();
+        auto& f = ttf(font_weight >= 700);
+        auto rr = cached_raster(f, cp, size_eff, font_weight >= 700);
+        if (!rr.g.ok()) return; // espacio y glifos vacíos: solo avanzan
+        const int base_x = (int)std::lround(x);
+        const int baseline = (int)std::lround(y + f.ascent_px(size_eff));
+        const float ca = color.a / 255.0f;
+        for (int gy = 0; gy < rr.g.h; ++gy) {
+            int dy = baseline + rr.g.oy + gy;
+            if (dy < 0 || dy >= buffer_h) continue;
+            for (int gx = 0; gx < rr.g.w; ++gx) {
+                int dx = base_x + rr.g.ox + gx;
+                if (dx < 0 || dx >= buffer_w) continue;
+                uint8_t cov = rr.g.alpha[(size_t)gy * rr.g.w + gx];
+                if (!cov) continue;
+                float alpha = ca * (cov / 255.0f);
+                size_t idx = (size_t)dy * buffer_w + dx;
+                uint32_t bgv = buffer[idx];
+                uint8_t br = (bgv >> 16) & 0xFF, bg = (bgv >> 8) & 0xFF, bb = bgv & 0xFF;
+                uint8_t or_ = (uint8_t)(color.r * alpha + br * (1.0f - alpha));
+                uint8_t og  = (uint8_t)(color.g * alpha + bg * (1.0f - alpha));
+                uint8_t ob  = (uint8_t)(color.b * alpha + bb * (1.0f - alpha));
+                buffer[idx] = (0xFFu << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+            }
+        }
+    }
+
+public:
     // ---------------- Zoom de texto REAL (opción de Configuración) ---------
     // Factor global que aplica tanto al MEDIR (text_shaper usa text_zoom())
     // como al PINTAR (render_glyph/glyph_advance): si la medición y el
@@ -193,6 +277,12 @@ public:
     // Versión por codepoint: soporta ASCII + especiales + acentuados compuestos
     static void render_glyph(std::vector<uint32_t>& buffer, int buffer_w, int buffer_h,
                              uint32_t cp, float x, float y, float font_size, int font_weight, const core::Color& color) {
+        // Ruta preferida 2026-08-10: TrueType REAL (curvas suaves).
+        // Si los .ttf no están en disco, la ruta bitmap de abajo sale al paso.
+        if (ttf_ready()) {
+            render_glyph_ttf(buffer, buffer_w, buffer_h, cp, x, y, font_size, font_weight, color);
+            return;
+        }
         const uint8_t* bitmap = nullptr;
         uint8_t composed[12];
         int mark = 0;

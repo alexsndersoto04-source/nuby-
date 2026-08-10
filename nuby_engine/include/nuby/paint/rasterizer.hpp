@@ -221,7 +221,7 @@ public:
                      (((unsigned char)text[i + 2] & 0x3F) << 6) | ((unsigned char)text[i + 3] & 0x3F); i += 4;
             } else { cp = 0xFFFD; i += 1; }
             FontRasterizer::render_glyph(framebuffer_, width_, height_, cp, cx, y, font_size, font_weight, color);
-            cx += FontRasterizer::glyph_advance(font_size, font_weight);
+            cx += FontRasterizer::advance_cp(cp, font_size, font_weight);
         }
     }
 

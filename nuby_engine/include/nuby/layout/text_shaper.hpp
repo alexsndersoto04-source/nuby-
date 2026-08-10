@@ -37,9 +37,22 @@ public:
 
     static float measure_text_width(const std::string& text, float font_size, int font_weight) {
         float width = 0.0f;
-        // Cuenta codepoints UTF-8 (los bytes de continuación no suman)
-        for (unsigned char c : text) {
-            if ((c & 0xC0) != 0x80) width += estimate_char_width((char)c, font_size, font_weight);
+        // Avance POR CODEPOINT real (con TTF son avances proporcionales del
+        // propio archivo de fuente; UTF-8 decodificado de verdad, no por byte)
+        for (size_t i = 0; i < text.size();) {
+            uint32_t cp;
+            unsigned char c = (unsigned char)text[i];
+            if (c < 0x80) { cp = c; i += 1; }
+            else if ((c & 0xE0) == 0xC0 && i + 1 < text.size()) {
+                cp = ((c & 0x1F) << 6) | ((unsigned char)text[i + 1] & 0x3F); i += 2;
+            } else if ((c & 0xF0) == 0xE0 && i + 2 < text.size()) {
+                cp = ((c & 0x0F) << 12) | (((unsigned char)text[i + 1] & 0x3F) << 6) |
+                     ((unsigned char)text[i + 2] & 0x3F); i += 3;
+            } else if ((c & 0xF8) == 0xF0 && i + 3 < text.size()) {
+                cp = ((c & 0x07) << 18) | (((unsigned char)text[i + 1] & 0x3F) << 12) |
+                     (((unsigned char)text[i + 2] & 0x3F) << 6) | ((unsigned char)text[i + 3] & 0x3F); i += 4;
+            } else { cp = c; i += 1; }
+            width += paint::FontRasterizer::advance_cp(cp, font_size, font_weight);
         }
         return width;
     }
