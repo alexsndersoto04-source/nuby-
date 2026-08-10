@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101824">
+  <meta name="description" content="Página de inicio de Nuby">
+  <title>Nuby — Inicio</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-top: #1b2a3f;
+      --bg-bottom: #0c121c;
+      --surface: rgba(22, 34, 50, .82);
+      --surface-hover: rgba(74, 105, 145, .22);
+      --line: rgba(190, 214, 240, .12);
+      --text: #f7f9fc;
+      --muted: #aebdce;
+      --accent: #75b8ff;
+      --accent-soft: rgba(117, 184, 255, .17);
+      --shadow: 0 16px 48px rgba(0, 0, 0, .32);
+      font-family: Inter, Roboto, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 50% -14%, rgba(83, 142, 208, .25), transparent 42%),
+        linear-gradient(155deg, var(--bg-top), var(--bg-bottom) 72%);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    button, input { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    .app-shell { min-height: 100dvh; padding-bottom: 105px; }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: clamp(16px, 4vw, 50px);
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 20px 0;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex: 0 0 auto;
+      color: white;
+      text-decoration: none;
+      letter-spacing: -.04em;
+      font-size: 1.47rem;
+      font-weight: 780;
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 31px;
+      height: 31px;
+      border-radius: 10px;
+      color: #0e1722;
+      background: linear-gradient(135deg, #a9d5ff, #65aaff);
+      box-shadow: 0 7px 18px rgba(64, 148, 243, .28);
+      letter-spacing: -.1em;
+      font-size: 1rem;
+    }
+
+    .compact-search {
+      position: relative;
+      max-width: 550px;
+      flex: 1;
+      margin-inline: auto;
+    }
+    .compact-search svg, .search-field svg { pointer-events: none; }
+    .compact-search svg {
+      position: absolute;
+      top: 50%; left: 15px;
+      width: 18px; height: 18px;
+      transform: translateY(-50%);
+      color: var(--muted);
+    }
+    .compact-search input {
+      width: 100%;
+      height: 42px;
+      padding: 0 18px 0 45px;
+      outline: none;
+      border: 1px solid var(--line);
+      border-radius: 21px;
+      background: rgba(8, 15, 24, .34);
+      color: var(--text);
+      font-size: .92rem;
+      transition: border-color .2s ease, background .2s ease;
+    }
+    input::placeholder { color: var(--muted); opacity: .9; }
+    input:focus { border-color: rgba(117, 184, 255, .65); background: rgba(7, 14, 23, .58); }
+
+    main {
+      display: grid;
+      place-items: center;
+      min-height: calc(100dvh - 181px);
+      padding: 38px 24px 64px;
+    }
+    .hero { width: min(100%, 720px); text-align: center; }
+    .hero-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 18px;
+      letter-spacing: -.06em;
+      font-size: clamp(2.6rem, 8vw, 4.6rem);
+      font-weight: 800;
+    }
+    .hero-logo .brand-mark { width: .73em; height: .73em; border-radius: .23em; font-size: .4em; }
+    .hero p { margin: 0 0 31px; color: var(--muted); font-size: clamp(.95rem, 2vw, 1.07rem); }
+
+    .search-field { position: relative; width: 100%; }
+    .search-field svg {
+      position: absolute;
+      left: 23px; top: 50%;
+      width: 22px; height: 22px;
+      transform: translateY(-50%);
+      color: #89bff7;
+    }
+    .search-field input {
+      width: 100%;
+      height: 65px;
+      padding: 0 58px;
+      border: 1px solid rgba(198, 222, 250, .2);
+      border-radius: 30px;
+      outline: none;
+      background: rgba(250, 253, 255, .96);
+      color: #1d2938;
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.8);
+      font-size: 1.02rem;
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+    .search-field input::placeholder { color: #687689; }
+    .search-field input:focus { transform: translateY(-2px); box-shadow: 0 20px 55px rgba(0,0,0,.42), 0 0 0 4px var(--accent-soft); }
+    .key-hint {
+      position: absolute;
+      right: 16px; top: 50%;
+      transform: translateY(-50%);
+      padding: 4px 7px;
+      border: 1px solid #d4dce5;
+      border-radius: 6px;
+      color: #687689;
+      background: #f8fafc;
+      font-size: .7rem;
+      line-height: 1;
+    }
+    .quick-links { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 25px; }
+    .quick-links button {
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(15, 25, 38, .36);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: .84rem;
+      transition: background .2s ease, color .2s ease;
+    }
+    .quick-links button:hover { background: var(--surface-hover); color: white; }
+
+    .bottom-nav {
+      position: fixed;
+      z-index: 5;
+      right: 0; bottom: 0; left: 0;
+      display: flex;
+      justify-content: center;
+      padding: 0 14px max(11px, env(safe-area-inset-bottom));
+      border-top: 1px solid var(--line);
+      background: rgba(12, 18, 28, .76);
+      backdrop-filter: blur(18px) saturate(130%);
+      -webkit-backdrop-filter: blur(18px) saturate(130%);
+    }
+    .nav-content { display: grid; grid-template-columns: repeat(6, 1fr); width: min(850px, 100%); }
+    .nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      min-width: 0;
+      height: 72px;
+      border: 0;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: .7rem;
+      white-space: nowrap;
+      transition: color .2s ease, background .2s ease;
+    }
+    .nav-item svg { width: 21px; height: 21px; stroke-width: 1.8; }
+    .nav-item:hover, .nav-item:focus-visible { color: #eaf4ff; background: var(--surface-hover); outline: none; }
+    .nav-item.active { color: var(--accent); }
+    .nav-item.active svg { fill: currentColor; }
+
+    @media (max-width: 590px) {
+      .topbar { width: calc(100% - 24px); padding: 14px 0; gap: 12px; }
+      .brand { font-size: 1.24rem; } .brand-mark { width: 27px; height: 27px; }
+      .compact-search input { height: 39px; font-size: .78rem; }
+      .compact-search svg { left: 12px; width: 16px; }
+      .compact-search input { padding-left: 38px; }
+      main { min-height: calc(100dvh - 164px); padding-inline: 18px; }
+      .nav-content { gap: 1px; }
+      .nav-item { height: 67px; font-size: .57rem; letter-spacing: -.02em; }
+      .nav-item svg { width: 19px; height: 19px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#inicio" aria-label="Nuby, ir al inicio"><span class="brand-mark">N</span><span>Nuby</span></a>
+      <form class="compact-search" role="search" id="top-search">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+        <input aria-label="Buscar videojuegos o tecnología" name="q" placeholder="Buscar videojuegos, tecnología" autocomplete="off">
+      </form>
+    </header>
+
+    <main id="inicio">
+      <section class="hero" aria-labelledby="welcome-title">
+        <h1 class="hero-logo" id="welcome-title"><span class="brand-mark">N</span>Nuby</h1>
+        <p>Tu espacio para descubrir videojuegos, tecnología y mucho más.</p>
+        <form class="search-field" role="search" id="main-search">
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
+          <input aria-label="Buscar en Nuby" name="q" placeholder="Buscar videojuegos, tecnología" autocomplete="off" autofocus>
+          <span class="key-hint" aria-hidden="true">Enter</span>
+        </form>
+        <div class="quick-links" aria-label="Búsquedas sugeridas">
+          <button type="button" data-query="Videojuegos">Videojuegos</button>
+          <button type="button" data-query="Tecnología">Tecnología</button>
+          <button type="button" data-query="Noticias">Noticias</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <nav class="bottom-nav" aria-label="Navegación principal">
+    <div class="nav-content">
+      <button class="nav-item active" type="button" data-section="Inicio" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Inicio</span></button>
+      <button class="nav-item" type="button" data-section="@wikipedia"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"/></svg><span>@wikipedia</span></button>
+      <button class="nav-item" type="button" data-section="Acerca de Nuby"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.2v.1" stroke-linecap="round"/></svg><span>Acerca de Nuby</span></button>
+      <button class="nav-item" type="button" data-section="Historial"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Historial</span></button>
+      <button class="nav-item" type="button" data-section="Descargas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v11M8 10l4 4 4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Descargas</span></button>
+      <button class="nav-item" type="button" data-section="Menú"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/></svg><span>Menú</span></button>
+    </div>
+  </nav>
+
+  <script>
+    (() => {
+      const inputs = [...document.querySelectorAll('input[name="q"]')];
+      const setQuery = value => inputs.forEach(input => { input.value = value; });
+      document.querySelectorAll('form[role="search"]').forEach(form => form.addEventListener('submit', event => {
+        event.preventDefault();
+        const query = form.elements.q.value.trim();
+        if (query) window.location.href = 'https://www.google.com/search?q=' + encodeURIComponent(query);
+      }));
+      document.querySelectorAll('[data-query]').forEach(button => button.addEventListener('click', () => {
+        setQuery(button.dataset.query);
+        document.querySelector('#main-search input').focus();
+      }));
+      document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(item => { item.classList.remove('active'); item.removeAttribute('aria-current'); });
+        button.classList.add('active'); button.setAttribute('aria-current', 'page');
+        if (button.dataset.section === 'Inicio') document.querySelector('#inicio').scrollIntoView({ behavior: 'smooth' });
+      }));
+    })();
+  </script>
+</body>
+</html>
