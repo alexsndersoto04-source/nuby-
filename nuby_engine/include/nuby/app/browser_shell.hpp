@@ -1251,83 +1251,58 @@ private:
     }
 
     void render_home() {
-        // Home estilo la referencia del usuario (captura 2026-08-08): fondo
-        // blanco, wordmark "Nuby" NEGRO grande, píldora redondeada con el
-        // botón- flecha negro DENTRO a la derecha. Sin texto decorativo.
-        //
-        // Detalle REAL de rasterizado: el motor redondea RELLENOS pero no
-        // bordes, así que el anillo de la píldora se construye con dos
-        // cajas concéntricas (externa = color de anillo, interna = blanco).
-        // No es un truco visual: son dos FillRoundedRect reales del motor.
-        const int pad = (W > 596) ? (W - 560) / 2 : 18;
+        // HOME NATIVA: este HTML/CSS no se envía como página web al cliente.
+        // BrowserShell lo entrega al pipeline propio HTML → CSS → layout →
+        // display-list → rasterizador de Nuby y el monitor solo muestra el frame.
+        const int side = W >= 680 ? (W - 580) / 2 : 18;
+        const int top_gap = H >= 700 ? 112 : (H >= 520 ? 70 : 38);
         const char* ring = (focus_ == Focus::SEARCH) ? "#1a73e8" : "#dadce0";
-        // Placeholder RESPONSIVO real: se elige el texto que CABE según el
-        // ancho de la sesión (si no cabe, la caja se desborda y el botón
-        // negro quedaría fuera de la píldora — visto en móvil 412px).
-        const char* placeholder =
-            (W >= 620) ? "Buscar videojuegos, tecnolog\u00eda, noticias\u2026"
-          : (W >= 430) ? "Buscar videojuegos, tecnolog\u00eda\u2026"
-                       : "Buscar\u2026";
+        const char* placeholder = W < 390 ? "Buscar en Nuby..." : "Buscar videojuegos, tecnología";
+        const int nav_gap = W < 390 ? 7 : 14;
 
         std::ostringstream h;
-        h << "<div style=\"padding: 12px " << pad << "px 40px " << pad << "px;\">"
-
-          // Fila superior EN LA PÁGINA (la home no lleva barra de chrome):
-          // ☰ menú + badge honesto del stack, como en la referencia del usuario
-             "<div style=\"display: flex; flex-direction: row; align-items: center; margin-bottom: 80px;\">"
-               "<div data-action=\"menu\" style=\"padding: 8px 4px;\">"
-                 "<div style=\"width: 16px; height: 2px; background-color: #3c4043; margin-bottom: 3px;\"></div>"
-                 "<div style=\"width: 16px; height: 2px; background-color: #3c4043; margin-bottom: 3px;\"></div>"
-                 "<div style=\"width: 16px; height: 2px; background-color: #3c4043;\"></div>"
-               "</div>"
-               "<div style=\"margin-left: 12px; padding: 5px 10px; background-color: #f1f3f4; border-radius: 10px;\">"
-                 "<span style=\"color: #5f6368; font-size: 11px;\">motor C++ · índice BM25 · "
-          << index_sp_->document_count() << " páginas</span>"
-               "</div>"
-             "</div>"
-
-          // Wordmark negro sólido (TTF real: curvas suaves, cero píxeles)
-             "<div style=\"text-align: center; margin-bottom: 26px;\">"
-               "<div style=\"line-height: 74px;\"><span style=\"color: #202124; font-size: 60px; font-weight: 800;\">Nuby</span></div>"
-             "</div>"
-
-          // Píldora de búsqueda (omnibox: busca O navega)
-             "<div data-nuby-input=\"search\" style=\"background-color: " << ring
-          << "; border-radius: 25px; padding: 1px;\">"
-               "<div style=\"background-color: #ffffff; border-radius: 24px; padding: 9px 6px 9px 16px;\">"
-                 "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
-                   "<span style=\"color: #9aa0a6; font-size: 16px; font-weight: 700;\">Q&nbsp;&nbsp;</span>"
-                   "<span style=\"color: "
-          << (input_search_.empty() && focus_ != Focus::SEARCH ? "#5f6368" : "#202124")
-          << "; font-size: 15px; margin-left: 8px;\">"
-          << esc(focus_ == Focus::SEARCH ? input_search_
-                 : (input_search_.empty() ? placeholder : input_search_))
-          << "</span>";
+        h << "<div style=\"background-color: #f8f9fa; padding: 18px " << side
+          << "px 14px " << side << "px;\">"
+          // Encabezado nativo, con marca y perfil.
+          << "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
+          << "<span style=\"color: #202124; font-size: 24px; font-weight: 300;\">Nuby</span>"
+          << "<div style=\"flex-grow: 1;\"></div>"
+          << "<div data-action=\"menu\" style=\"width: 34px; height: 34px; border-radius: 17px; background-color: #e1e3e1;\">"
+          << "<div style=\"text-align: center; margin-top: 8px;\"><span style=\"color: #3c4043; font-size: 14px;\">N</span></div></div></div>"
+          // Zona central de búsqueda.
+          << "<div style=\"margin-top: " << top_gap << "px; text-align: center;\">"
+          << "<div style=\"line-height: 68px;\"><span style=\"color: #202124; font-size: 58px; font-weight: 300;\">Nu</span><span style=\"color: #1a73e8; font-size: 58px; font-weight: 400;\">by</span></div>"
+          << "<div style=\"margin-top: 28px; background-color: " << ring << "; border-radius: 30px; padding: 1px;\">"
+          << "<div data-nuby-input=\"search\" style=\"background-color: #ffffff; border-radius: 29px; padding: 10px 10px 10px 18px;\">"
+          << "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
+          // Lupa vectorial aproximada con primitivas nativas, no imagen.
+          << "<span style=\"color: #5f6368; font-size: 18px;\">⌕</span>"
+          << "<span style=\"color: " << (input_search_.empty() && focus_ != Focus::SEARCH ? "#5f6368" : "#202124")
+          << "; font-size: 15px; margin-left: 12px;\">"
+          << esc(focus_ == Focus::SEARCH ? input_search_ : (input_search_.empty() ? placeholder : input_search_)) << "</span>";
         if (focus_ == Focus::SEARCH && caret_on_)
-            h << "<div style=\"width: 2px; height: 20px; background-color: #1a73e8; margin-left: 2px;\"></div>";
-        h <<     "<div style=\"flex-grow: 1;\"></div>"
-
-          // Botón IR: círculo negro con flecha blanca, DENTRO de la píldora
-                 "<div data-action=\"do-search\" style=\"width: 38px; height: 38px; border-radius: 19px; background-color: #202124;\">"
-                   "<div style=\"text-align: center; margin-top: 8px;\">"
-                     "<span style=\"color: #ffffff; font-size: 18px; font-weight: 700;\">\u2192</span>"
-                   "</div>"
-                 "</div>"
-                 "</div>"
-               "</div>"
-             "</div>"
-
-          // Footer funcional discreto (enlaces reales, no pancartas)
-             "<div style=\"text-align: center; margin-top: 120px;\">"
-               "<a href=\"nuby://about\" style=\"color: #70757a; font-size: 12px;\">Acerca de Nuby</a>"
-               "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
-               "<a href=\"nuby://history\" style=\"color: #70757a; font-size: 12px;\">Historial</a>"
-               "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
-               "<a href=\"nuby://downloads\" style=\"color: #70757a; font-size: 12px;\">Descargas</a>"
-               "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
-               "<a href=\"nuby://menu\" style=\"color: #70757a; font-size: 12px;\">Men\u00fa</a>"
-             "</div>"
-          "</div>";
+            h << "<div style=\"width: 2px; height: 19px; background-color: #1a73e8; margin-left: 2px;\"></div>";
+        h << "<div style=\"flex-grow: 1;\"></div>"
+          << "<div data-action=\"do-search\" style=\"width: 36px; height: 36px; border-radius: 18px; background-color: #e8f0fe;\">"
+          << "<div style=\"text-align: center; margin-top: 7px;\"><span style=\"color: #1a73e8; font-size: 18px;\">⌕</span></div></div>"
+          << "</div></div></div>"
+          << "<div style=\"margin-top: 17px;\"><span style=\"color: #5f6368; font-size: 12px;\">Busca rápidamente en la web con Nuby</span></div></div>"
+          // Navegación principal pintada por el motor. Los enlaces usan la
+          // navegación interna real y por tanto no son botones decorativos.
+          << "<div style=\"margin-top: " << (H >= 600 ? 108 : 56) << "px; background-color: #ffffff; padding: 12px 6px;\">"
+          << "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
+          << "<a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 12px;\">⌂ Inicio</a>"
+          << "<div style=\"width: " << nav_gap << "px;\"></div>"
+          << "<div data-nuby-input=\"search\" style=\"padding: 2px;\"><span style=\"color: #5f6368; font-size: 12px;\">⌕ Buscar</span></div>"
+          << "<div style=\"width: " << nav_gap << "px;\"></div>"
+          << "<a href=\"nuby://history\" style=\"color: #5f6368; font-size: 12px;\">★ Favoritos</a>"
+          << "<div style=\"width: " << nav_gap << "px;\"></div>"
+          << "<a href=\"nuby://settings\" style=\"color: #5f6368; font-size: 12px;\">⚙ Config.</a>"
+          << "<div style=\"width: " << nav_gap << "px;\"></div>"
+          << "<a href=\"nuby://menu\" style=\"color: #5f6368; font-size: 12px;\">☰ Menú</a>"
+          << "</div></div>"
+          << "<div style=\"text-align: center; margin-top: 16px;\"><span style=\"color: #5f6368; font-size: 12px;\">Nuby v2.4.1 — Hecho con ♥ para navegadores modernos.</span></div>"
+          << "</div>";
         render_content_doc(h.str(), "", {});
     }
 
