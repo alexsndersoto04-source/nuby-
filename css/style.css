@@ -1,0 +1,191 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  color: #c8c8c8;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+#game-wrap {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#game {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #05060a;
+  image-rendering: pixelated;
+}
+
+/* Overlays (pantallas) */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: radial-gradient(ellipse at center, rgba(10,12,20,0.85) 0%, rgba(0,0,0,0.97) 70%);
+  z-index: 10;
+  padding: 24px;
+  transition: opacity 0.5s ease;
+}
+
+.overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay h1 {
+  font-size: clamp(48px, 12vw, 120px);
+  font-weight: 100;
+  letter-spacing: 18px;
+  color: #d8d8d8;
+  text-indent: 18px;
+  margin-bottom: 10px;
+  text-shadow: 0 0 40px rgba(120,160,255,0.25);
+}
+
+.overlay h2 {
+  font-size: clamp(30px, 7vw, 60px);
+  font-weight: 300;
+  letter-spacing: 8px;
+  color: #c0392b;
+  margin-bottom: 24px;
+}
+
+#win-screen h2 { color: #4a7a5a; }
+
+.overlay .sub {
+  font-size: clamp(14px, 3vw, 20px);
+  font-weight: 300;
+  letter-spacing: 3px;
+  color: #7a8090;
+  margin-bottom: 40px;
+}
+
+.overlay p {
+  color: #8a90a0;
+  font-weight: 300;
+  line-height: 1.8;
+}
+
+.overlay button {
+  background: transparent;
+  border: 1px solid #5a6478;
+  color: #d0d4dc;
+  padding: 16px 48px;
+  font-size: 18px;
+  letter-spacing: 6px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin-top: 10px;
+}
+
+.overlay button:hover, .overlay button:active {
+  background: rgba(255,255,255,0.08);
+  border-color: #aab2c4;
+  letter-spacing: 8px;
+}
+
+.overlay button.secondary {
+  margin-top: 16px;
+  border-color: #2f3644;
+  color: #8a92a4;
+  font-size: 14px;
+  letter-spacing: 4px;
+  padding: 12px 36px;
+}
+.overlay button.secondary:hover { letter-spacing: 6px; }
+
+.controls-hint {
+  margin-top: 50px;
+  font-size: 13px;
+  color: #555c6c;
+  letter-spacing: 1px;
+}
+.controls-hint .mobile-hint { display: none; margin-top: 8px; color: #3f4654; }
+
+@media (pointer: coarse) {
+  .controls-hint .mobile-hint { display: block; }
+}
+
+/* HUD */
+#hud {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  padding: 16px 20px;
+  z-index: 5;
+  pointer-events: none;
+}
+#hud.hidden { display: none; }
+#objective {
+  font-size: 13px;
+  letter-spacing: 3px;
+  color: rgba(180,190,210,0.55);
+  text-transform: uppercase;
+}
+
+.hud-buttons {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(20,26,38,0.6);
+  border: 1px solid rgba(120,140,180,0.25);
+  color: #c8d0e0;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+.icon-btn:active { background: rgba(60,70,90,0.6); }
+
+/* Controles táctiles */
+#touch-controls {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+#touch-controls.hidden { display: none; }
+
+.touch-btn {
+  position: absolute;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: rgba(120,140,180,0.12);
+  border: 1px solid rgba(160,180,220,0.25);
+  color: rgba(220,230,255,0.7);
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  backdrop-filter: blur(2px);
+}
+.touch-btn:active { background: rgba(120,140,180,0.3); }
+
+#btn-left  { bottom: 30px; left: 24px; }
+#btn-right { bottom: 30px; left: 120px; }
+#btn-jump  { bottom: 30px; right: 30px; }
