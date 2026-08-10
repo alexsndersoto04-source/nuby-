@@ -42,37 +42,37 @@ static std::string get_monitor_html() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nuby — monitor remoto</title>
+<title>Nuby</title>
 <style>
-  html,body{margin:0;padding:0;background:#0b0b0c;height:100%;display:flex;
-    flex-direction:column;align-items:center;justify-content:center;
-    font-family:system-ui,sans-serif}
-  #screen{image-rendering:pixelated;max-width:100vw;max-height:92vh;
-    background:#fff;box-shadow:0 8px 40px rgba(0,0,0,.6);border-radius:6px}
-  #hint{color:#666;font-size:12px;margin-top:10px;text-align:center}
-  #kbd{position:fixed;left:-999px;top:0;opacity:.01}
+  /* Pantalla completa, cero decoración técnica: esto es un navegador,
+     no un póster de sí mismo. El canvas ES la ventana. */
+  html,body{margin:0;padding:0;background:#fff;height:100%;width:100%;
+    overflow:hidden;font-family:system-ui,sans-serif}
+  #screen{display:block;position:fixed;inset:0;width:100vw;height:100vh;
+    image-rendering:auto;background:#fff}
+  /* El captador de teclado: INVISIBLE PERO DENTRO de la pantalla. Antes
+     estaba a left:-999px y Chrome/Android se negaba a abrir el teclado
+     virtual para un input fuera de la vista (bug real del móvil). */
+  #kbd{position:fixed;left:8px;bottom:8px;width:44px;height:44px;
+    opacity:.015;border:0;padding:0;z-index:10;pointer-events:none}
 </style>
 </head>
 <body>
 <canvas id="screen" width="1024" height="640"></canvas>
-<input id="kbd" autocomplete="off" autocapitalize="off">
-<div id="hint">NUBY · Cada pixel de la imagen lo calculo el motor C++ —
-este canvas solo los muestra (como un escritorio remoto). Click, rueda y
-teclado viajan al motor. El motor renderiza AL TAMAÑO de tu pantalla.
-<span id="stat"></span></div>
+<input id="kbd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
 <script>
 (function(){
   var cv=document.getElementById('screen'), ctx=cv.getContext('2d');
-  var kbd=document.getElementById('kbd'), stat=document.getElementById('stat');
+  var kbd=document.getElementById('kbd');
   var W=1024,H=640,lastSeq=-1;
   var img=ctx.createImageData(W,H);
 
-  // Viewport real por sesión: le decimos al motor el tamaño de nuestra
-  // pantalla y él renderiza a esa medida (responsive DE VERDAD).
+  // Viewport real por sesión: le decimos al motor el tamaño EXACTO de
+  // nuestra ventana (el canvas la cubre entera) y él renderiza a medida.
   var lastSentW=0, lastSentH=0, resizeTimer=null;
   function sendSize(){
     var w=Math.max(240,Math.min(1920,window.innerWidth));
-    var h=Math.max(320,Math.min(2160,window.innerHeight-56));
+    var h=Math.max(320,Math.min(2160,window.innerHeight));
     if(w===lastSentW&&h===lastSentH)return;
     lastSentW=w;lastSentH=h;
     post('k=resize&w='+w+'&h='+h,function(){setTimeout(poll,200);setTimeout(poll,700);});
@@ -93,24 +93,59 @@ teclado viajan al motor. El motor renderiza AL TAMAÑO de tu pantalla.
   }
   cv.addEventListener('mousedown',function(ev){
     var p=scale(ev);
-    kbd.focus();
+    kbd.focus(); // gesto del usuario → el teclado virtual SÍ puede abrirse
     post('k=click&x='+p.x+'&y='+p.y,function(){setTimeout(poll,120);setTimeout(poll,500);});
   });
+  // En táctil mousedown llega tarde; touchstart adelanta el foco del teclado
+  cv.addEventListener('touchstart',function(ev){
+    kbd.focus();
+  },{passive:true});
   cv.addEventListener('wheel',function(ev){
     ev.preventDefault();
     post('k=wheel&dy='+Math.round(ev.deltaY),function(){setTimeout(poll,80);});
   },{passive:false});
+  // Scroll táctil: arrastrar el dedo = rueda (traducción honesta, la
+  // pantalla remota no tiene eventos táctiles nativos)
+  var lastTouchY=null;
+  document.addEventListener('touchmove',function(ev){
+    if(ev.touches.length!==1)return;
+    ev.preventDefault();
+    var y=ev.touches[0].clientY;
+    if(lastTouchY!==null){
+      var dy=lastTouchY-y;
+      if(Math.abs(dy)>10){post('k=wheel&dy='+Math.round(dy*2.2),function(){setTimeout(poll,90);});lastTouchY=y;}
+    }
+  },{passive:false});
+  document.addEventListener('touchstart',function(ev){
+    lastTouchY = ev.touches.length===1 ? ev.touches[0].clientY : null;
+  },{passive:true});
+  document.addEventListener('touchend',function(){lastTouchY=null;},{passive:true});
+
+  // TEXTO: camino principal = evento 'input' del captador (sobrevive a
+  // teclados virtuales, IME, autocorrector y pegar; keydown NO llega
+  // confiable desde el teclado del teléfono — bug real del móvil).
+  kbd.addEventListener('input',function(){
+    var v=kbd.value; if(!v)return;
+    for(var i=0;i<v.length;i++){
+      var cp=v.codePointAt(i); if(cp>0xFFFF)i++; // pares suplentes UTF-16
+      (function(c){post('k=char&cp='+c,function(){setTimeout(poll,110);});})(cp);
+    }
+    kbd.value='';
+  });
   window.addEventListener('keydown',function(ev){
     if(ev.metaKey||ev.ctrlKey||ev.altKey)return;
     var k=ev.key;
     if(k==='Backspace'||k==='Enter'||k==='Escape'){
       ev.preventDefault();
       post('k=key&key='+k,function(){setTimeout(poll,150);setTimeout(poll,600);});
-    } else if(k.length===1){
+    } else if(k.length===1 && ev.target!==kbd){
+      // PC con foco fuera del captador: mandar la letra directo
       ev.preventDefault();
       var cp=k.codePointAt(0);
       post('k=char&cp='+cp,function(){setTimeout(poll,120);});
     }
+    // si el foco está EN kbd, el evento 'input' de arriba hace el trabajo
+    // (evita enviar cada letra DOS veces — bug que inflaba las búsquedas)
   });
 
   // Decodificador del RLE propio de Nuby (formato PackBits por píxel):
@@ -136,7 +171,6 @@ teclado viajan al motor. El motor renderiza AL TAMAÑO de tu pantalla.
     ctx.putImageData(img,0,0);
   }
 
-  var frames=0, t0=Date.now();
   function poll(){
     fetch('/frame.seq').then(function(r){return r.json()}).then(function(j){
       if(j.seq===lastSeq)return;
@@ -148,10 +182,7 @@ teclado viajan al motor. El motor renderiza AL TAMAÑO de tu pantalla.
         if(w!==W||h!==H){
           W=w;H=h;cv.width=w;cv.height=h;img=ctx.createImageData(w,h);
         }
-        decodeRLE(bytes,img); lastSeq=j.seq; frames++;
-        var secs=(Date.now()-t0)/1000;
-        stat.textContent='· '+(ab.byteLength/1024).toFixed(0)+' KB/frame RLE · seq '+j.seq+
-          ' · '+w+'x'+h;
+        decodeRLE(bytes,img); lastSeq=j.seq;
       });
     }).catch(function(){});
   }

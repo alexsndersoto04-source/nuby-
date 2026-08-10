@@ -53,7 +53,7 @@ public:
     // se encogía entero → texto ilegible. Ya no es constexpr: es por sesión.
     int W{1024};                        // ancho ventana virtual
     int H{640};                         // alto ventana virtual
-    static constexpr int CHROME_H = 92; // alto de la barra superior
+    static constexpr int CHROME_H = 58; // UNA fila (omnibox), como manda el diseño moderno
     int width() const { return W; }
     int height() const { return H; }
 
@@ -67,8 +67,21 @@ public:
         engine_chrome_->set_viewport(W, CHROME_H);
         engine_content_->set_viewport(W, CONTENT_CAP);
         scroll_y_ = 0; // el alto visible cambió; el scroll viejo no aplica
-        refresh_content(); // re-layout del documento vivo al nuevo ancho
-        rebuild_chrome();  // incluye compose() del frame final
+        // Las páginas INTERNAS hornean medidas del viewport en su markup
+        // (centrado por padding, caja responsiva): con un resize hay que
+        // RE-GENERARLAS, no solo re-maquetar el HTML viejo (bug real: la
+        // home quedaba centrada para el ancho anterior).
+        switch (mode_) {
+            case Mode::HOME: render_home(); break;
+            case Mode::RESULTS:
+                if (!search_of_.empty()) show_search_results(search_of_);
+                else render_home();
+                break;
+            case Mode::ABOUT: show_about(about_back_); break;
+            case Mode::HISTORY: show_history(); break;
+            default: refresh_content(); break; // páginas web reales: mismo DOM, nuevo ancho
+        }
+        rebuild_chrome(); // incluye compose() del frame final
     }
     static constexpr int CONTENT_CAP = 8000; // tope de alto de página (seguridad)
 
@@ -121,6 +134,8 @@ public:
         if (select_all_) { field.clear(); select_all_ = false; } // comportamiento real de url-bar
         field += utf8_encode(codepoint);
         if (focus_ == Focus::SEARCH && mode_ == Mode::HOME) render_home();
+        else if (focus_ == Focus::SEARCH && mode_ == Mode::RESULTS)
+            show_search_results(input_search_); // Instant Search real: BM25 en μs por tecla
         rebuild_chrome();
         return true;
     }
@@ -144,6 +159,8 @@ public:
             if (field.empty()) return false;
             pop_utf8(field);
             if (focus_ == Focus::SEARCH && mode_ == Mode::HOME) render_home();
+            else if (focus_ == Focus::SEARCH && mode_ == Mode::RESULTS)
+                show_search_results(input_search_);
             rebuild_chrome();
             return true;
         }
@@ -175,7 +192,8 @@ public:
                 focus_ = Focus::NONE;
                 std::string q = input_search_;
                 rebuild_chrome();
-                show_search_results(q);
+                // Google no dispara búsquedas vacías: no-op honesto
+                if (!q.empty()) show_search_results(q);
                 return true;
             }
             return false;
@@ -257,6 +275,7 @@ private:
     std::string input_url_{"nuby://home"};
     std::string input_search_;
     std::string search_of_;
+    std::string about_back_{"nuby://home"};
     bool select_all_{false};
 
     int scroll_y_{0};
@@ -355,52 +374,47 @@ private:
     }
 
     // ---------------- Chrome (barra superior) HTML ----------------
+    // Profesional = limpio: UNA fila con navegación + omnibox. Nada de
+    // letreros técnicos permanentes (ningún navegador real los tiene).
     std::string chrome_html() const {
         bool url_focused = (focus_ == Focus::URL);
         std::string shown = url_focused ? input_url_ : current_url_;
         // scroll horizontal honesto: se ven los últimos caracteres
-        const size_t MAX_VIS = 86;
-        if (shown.size() > MAX_VIS) shown = "…" + shown.substr(shown.size() - MAX_VIS);
+        size_t max_vis = (size_t)std::max(24, W / 9); // ~9px/char a 15px
+        if (shown.size() > max_vis) shown = "…" + shown.substr(shown.size() - max_vis);
 
         std::string caret;
         if (url_focused && caret_on_)
-            caret = "<div style=\"width: 2px; height: 22px; background-color: #111111; margin-left: 1px;\"></div>";
+            caret = "<div style=\"width: 2px; height: 20px; background-color: #1a73e8; margin-left: 1px;\"></div>";
 
         std::string lock;
         if (current_url_.rfind("https://", 0) == 0)
-            lock = "<span style=\"color: #188038; font-size: 13px; font-weight: 700;\">TLS·</span>";
+            lock = "<span style=\"color: #188038; font-size: 12px; font-weight: 700;\">TLS </span>";
         else if (current_url_.rfind("http://", 0) == 0)
-            lock = "<span style=\"color: #b45309; font-size: 13px; font-weight: 700;\">http·</span>";
+            lock = "<span style=\"color: #b45309; font-size: 12px; font-weight: 700;\">http </span>";
 
-        std::string ring = url_focused ? "#0b57d0" : "#c7c7c7";
-        std::string title_right = esc(current_title_);
-        if (title_right.size() > 34) title_right = title_right.substr(0, 33) + "…";
+        std::string ring = url_focused ? "#1a73e8" : "#dadce0";
+
+        auto navbtn = [](const char* action, const char* sym) {
+            return std::string("<div data-action=\"") + action +
+                   "\" style=\"background-color: #f1f3f4; padding: 5px 12px; border-radius: 8px;\">"
+                   "<span style=\"color: #3c4043; font-size: 15px; font-weight: 700;\">" + sym +
+                   "</span></div>";
+        };
 
         std::ostringstream h;
-        h << "<div style=\"background-color: #f2f2f2; padding: 8px 10px 6px 10px;\">"
-
-             "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 8px;\">"
-               "<div data-action=\"home\" style=\"background-color: #111111; padding: 6px 12px; border-radius: 8px;\">"
-                 "<span style=\"color: #ffffff; font-size: 15px; font-weight: 800;\">NUBY</span></div>"
-               "<div data-action=\"back\" style=\"background-color: #e4e4e4; padding: 6px 11px; border-radius: 8px;\">"
-                 "<span style=\"color: #111111; font-size: 15px; font-weight: 700;\">&lt;</span></div>"
-               "<div data-action=\"fwd\" style=\"background-color: #e4e4e4; padding: 6px 11px; border-radius: 8px;\">"
-                 "<span style=\"color: #111111; font-size: 15px; font-weight: 700;\">&gt;</span></div>"
-               "<div data-action=\"reload\" style=\"background-color: #e4e4e4; padding: 6px 11px; border-radius: 8px;\">"
-                 "<span style=\"color: #111111; font-size: 15px; font-weight: 700;\">R</span></div>"
-               "<div data-action=\"focus-url\" style=\"flex-grow: 1; background-color: #ffffff; border: 2px solid " << ring << "; border-radius: 10px; padding: 7px 10px;\">"
-                 "<div style=\"display: flex; flex-direction: row; align-items: center;\">" << lock
-                 << "<span style=\"color: #202020; font-size: 15px;\">" << esc(shown) << "</span>" << caret
-                 << "</div></div>"
+        h << "<div style=\"background-color: #ffffff; border-bottom: 1px solid #dadce0; padding: 8px 10px;\">"
+             "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 7px;\">";
+        if (W >= 640) // en móvil el espacio es oro: sin logo en el chrome
+            h << "<div data-action=\"home\" style=\"margin-right: 4px;\">"
+                 "<span style=\"color: #1a73e8; font-size: 18px; font-weight: 800;\">Nuby</span></div>";
+        h << navbtn("back", "&lt;") << navbtn("fwd", "&gt;") << navbtn("reload", "R")
+          << "<div data-action=\"focus-url\" style=\"flex-grow: 1; background-color: #f1f3f4; border: 2px solid " << ring
+          << "; border-radius: 18px; padding: 6px 12px;\">"
+             "<div style=\"display: flex; flex-direction: row; align-items: center;\">" << lock
+          << "<span style=\"color: #202124; font-size: 15px;\">" << esc(shown) << "</span>" << caret
+          << "</div></div>"
              "</div>"
-
-             "<div style=\"display: flex; flex-direction: row; justify-content: space-between; margin-top: 7px;\">"
-               "<span style=\"color: #555555; font-size: 12px;\">" << esc(status_line()) << "</span>"
-        << (W >= 520 ? std::string(
-               "<div data-action=\"about\" style=\"padding: 0px 4px;\">"
-                 "<span style=\"color: #0b57d0; font-size: 12px; font-weight: 700;\">nuby://about · motor propio, cero Chrome</span></div>")
-                     : std::string(""))
-        <<    "</div>"
           "</div>";
         return h.str();
     }
@@ -434,28 +448,6 @@ private:
         }
         dirty_ = true;
     }
-    // Barra de estado honesta y responsive: una sola línea que QUEPA en el
-    // ancho real de la sesión (trunca con … como los tooltips de un
-    // navegador), reservando sitio al bloque "nuby://about" si existe.
-    std::string status_line() const {
-        // Medida EXACTA con el mismo shaper del engine: nada de estimar.
-        // 44px = paddings/márgenes del chrome; 300px = bloque about (si cabe).
-        float avail = (float)W - 44.0f - (W >= 520 ? 300.0f : 0.0f);
-        auto fits = [&](const std::string& s) {
-            return layout::TextShaper::measure_text_width(s, 12.0f, 400) <= avail;
-        };
-        if (fits(status_)) return status_;
-        // truncar por PALABRAS hasta que quepa con la elipsis (UX de verdad)
-        auto words = core::StringUtils::split_whitespace(status_);
-        std::string out;
-        for (auto& w : words) {
-            std::string cand = out.empty() ? w : out + " " + w;
-            if (!fits(cand + " …")) break;
-            out = cand;
-        }
-        return out.empty() ? status_.substr(0, 1) + "…" : out + " …";
-    }
-
     void rebuild_chrome_only() {
         auto res = engine_chrome_->render_page(chrome_html());
         chrome_result_ = std::make_shared<RenderResult>(std::move(res));
@@ -686,12 +678,25 @@ private:
             }
         }
 
-        // Input propio de Nuby (caja de búsqueda en la home)
+        // Botón "Buscar con Nuby" (mismo camino que Enter: cero duplicación)
+        if (el->get_attribute("data-action") == "do-search") {
+            focus_ = Focus::NONE;
+            rebuild_chrome();
+            if (!input_search_.empty()) show_search_results(input_search_);
+            return true;
+        }
+
+        // Input propio de Nuby (caja de búsqueda en home y en resultados)
         if (el->has_attribute("data-nuby-input")) {
             focus_ = Focus::SEARCH;
-            input_search_.clear();
-            status_ = "Escribe tu busqueda y pulsa Enter — indice local BM25 real";
-            render_home();
+            if (mode_ == Mode::RESULTS) {
+                // como Google: la caja de resultados edita LA QUERY ACTUAL
+                input_search_ = search_of_;
+                show_search_results(search_of_);
+            } else {
+                input_search_.clear();
+                render_home();
+            }
             rebuild_chrome();
             return true;
         }
@@ -1146,33 +1151,48 @@ private:
     }
 
     void render_home() {
+        // Home limpia estilo buscador profesional: logo, caja, un botón.
+        // NADA de texto técnico decorativo — ningún buscador real lo lleva.
+        // max-width no existe en el motor: la caja se centra con el padding
+        // lateral calculado desde el ancho REAL de la sesión (honesto).
+        const int pad = std::max(18, (W - 620) / 2);
+        const char* sb_border = (focus_ == Focus::SEARCH) ? "#1a73e8" : "#dadce0";
         std::ostringstream h;
-        h << "<div style=\"padding: 48px 60px;\">"
-             "<div style=\"text-align: center; margin-bottom: 8px;\">"
-               "<h1 style=\"color: #111111; font-size: 54px; font-weight: 800; margin: 0;\">NUBY</h1>"
+        h << "<div style=\"padding: 120px " << pad << "px 40px " << pad << "px;\">"
+
+          // Logo con colores de marca (como los buscadores grandes)
+             "<div style=\"text-align: center; margin-bottom: 34px;\">"
+               "<span style=\"color: #4285F4; font-size: 60px; font-weight: 800;\">N</span>"
+               "<span style=\"color: #EA4335; font-size: 60px; font-weight: 800;\">u</span>"
+               "<span style=\"color: #FBBC05; font-size: 60px; font-weight: 800;\">b</span>"
+               "<span style=\"color: #34A853; font-size: 60px; font-weight: 800;\">y</span>"
              "</div>"
-             "<div style=\"text-align: center; margin-bottom: 26px;\">"
-               "<span style=\"color: #666666; font-size: 14px;\">cada pixel de esta pagina lo rasteriza el motor C++, no tu navegador</span>"
-             "</div>"
-             "<div data-nuby-input=\"search\" style=\"border: 2px solid "
-          << std::string(focus_ == Focus::SEARCH ? "#0b57d0" : "#bbb") << "; border-radius: 24px; padding: 13px 20px; margin: 0 auto; max-width: 620px;\">"
+
+          // Caja de búsqueda pill (omnibox: busca O navega)
+             "<div data-nuby-input=\"search\" style=\"border: 1px solid " << sb_border
+          << "; border-radius: 24px; padding: 12px 18px; background-color: #ffffff;\">"
                "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
-               "<span style=\"color: #888888; font-size: 15px; font-weight: 700;\">Q&nbsp; </span>"
-               "<span style=\"color: " << (input_search_.empty() && focus_ != Focus::SEARCH ? "#9a9a9a" : "#111111")
+               "<span style=\"color: #9aa0a6; font-size: 16px; font-weight: 700;\">Q&nbsp;&nbsp;</span>"
+               "<span style=\"color: " << (input_search_.empty() && focus_ != Focus::SEARCH ? "#9aa0a6" : "#202124")
           << "; font-size: 16px;\">"
-          << esc(focus_ == Focus::SEARCH ? input_search_ : (input_search_.empty() ? "Busca en el indice local (rastreo real)…" : input_search_))
+          << esc(focus_ == Focus::SEARCH ? input_search_
+                 : (input_search_.empty() ? "Buscar o escribir una URL" : input_search_))
           << "</span>";
         if (focus_ == Focus::SEARCH && caret_on_)
-            h << "<div style=\"width: 2px; height: 20px; background-color: #111111; margin-left: 2px;\"></div>";
+            h << "<div style=\"width: 2px; height: 20px; background-color: #1a73e8; margin-left: 2px;\"></div>";
         h << "</div></div>"
+
+          // Botón buscar (Enter también sirve; ambos caminos corren el mismo código)
              "<div style=\"text-align: center; margin-top: 26px;\">"
-               "<span style=\"color: #444444; font-size: 13px;\">Escribe una URL arriba, o busca en el indice: "
-             << std::to_string(index_sp_->document_count()) << " paginas reales rastreadas · ranking BM25</span>"
+               "<div data-action=\"do-search\" style=\"display: inline-block; width: 160px; text-align: center; background-color: #f8f9fa; border: 1px solid #dfe1e5; border-radius: 6px; padding: 8px 0px;\">"
+                 "<span style=\"color: #3c4043; font-size: 14px;\">Buscar con Nuby</span></div>"
              "</div>"
-             "<div style=\"text-align: center; margin-top: 14px;\">"
-               "<a href=\"nuby://about\" style=\"color: #0b57d0; font-size: 13px;\">que es real y que no en este navegador</a>"
-               "<span style=\"color: #999999; font-size: 13px;\"> · </span>"
-               "<a href=\"nuby://history\" style=\"color: #0b57d0; font-size: 13px;\">historial</a>"
+
+          // Footer funcional discreto (enlaces, no pancartas)
+             "<div style=\"text-align: center; margin-top: 120px;\">"
+               "<a href=\"nuby://about\" style=\"color: #70757a; font-size: 12px;\">Acerca de Nuby</a>"
+               "<span style=\"color: #dadce0; font-size: 12px;\">  ·  </span>"
+               "<a href=\"nuby://history\" style=\"color: #70757a; font-size: 12px;\">Historial</a>"
              "</div>"
           "</div>";
         render_content_doc(h.str(), "", {});
@@ -1183,35 +1203,48 @@ private:
         search_of_ = q;
         current_url_ = "nuby://search?q=" + url_encode(q);
         input_url_ = current_url_;
-        current_title_ = "Buscar: " + q;
+        current_title_ = q + " - Buscar";
 
-        status_ = "Buscando en indice BM25…";
-        rebuild_chrome();
-        auto t0 = now_ms();
+        auto t0 = std::chrono::steady_clock::now();
         auto hits = index_sp_->query(q, 24);
-        long ms = now_ms() - t0;
-        status_ = std::to_string(hits.size()) + " resultados en " + std::to_string(ms) +
-                  " ms · BM25 sobre " + std::to_string(index_sp_->document_count()) + " docs reales";
+        double secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        status_ = std::to_string(hits.size()) + " resultados";
 
+        const int pad = (W >= 720) ? 60 : 18;
         std::ostringstream h;
-        h << "<div style=\"padding: 26px 60px;\">"
-             "<div style=\"margin-bottom: 4px;\">"
-               "<a href=\"nuby://home\" style=\"color: #111111; font-size: 22px; font-weight: 800;\">NUBY</a>"
-             "</div>"
-             "<p style=\"color: #555555; font-size: 13px; margin-bottom: 18px;\">Resultados para «" << esc(q)
-          << "» — puntuados con BM25 de verdad, nada prefabricado</p>";
+        h << "<div style=\"padding: 18px " << pad << "px 40px " << pad << "px;\">"
+          // fila superior: mini-logo + caja con la query (como todo buscador)
+             "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 14px; margin-bottom: 10px;\">"
+               "<a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 20px; font-weight: 800;\">Nuby</a>"
+               "<div data-nuby-input=\"search\" style=\"flex-grow: 1; max-width: 560px; border: 1px solid #dfe1e5; border-radius: 20px; padding: 8px 14px;\">"
+                 "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
+                 "<span style=\"color: #202124; font-size: 15px;\">"
+          << esc(focus_ == Focus::SEARCH ? input_search_ : q) << "</span>";
+        if (focus_ == Focus::SEARCH && caret_on_)
+            h << "<div style=\"width: 2px; height: 18px; background-color: #1a73e8; margin-left: 2px;\"></div>";
+        h <<   "</div></div></div>"
+          // conteo honesto estilo Google: dentro de la página, gris, pequeño
+             "<p style=\"color: #70757a; font-size: 12px; margin-bottom: 20px;\">Cerca de "
+          << std::to_string(hits.size()) << " resultados (" << secs_str(secs) << " segundos)</p>";
 
         if (hits.empty()) {
-            h << "<p style=\"color: #333333; font-size: 15px;\">Sin resultados en el indice local. "
-                 "Navega a sitios reales y cada visita se indexa automaticamente.</p>";
+            h << "<p style=\"color: #202124; font-size: 15px;\">No se encontraron resultados para «"
+              << esc(q) << "».</p>"
+                 "<p style=\"color: #4d5156; font-size: 13px;\">Prueba con otras palabras, o navega a sitios "
+                 "web: cada pagina que abras se indexa automaticamente.</p>";
         }
         for (const auto& hit : hits) {
-            h << "<div style=\"margin-bottom: 18px;\">"
-                 "<div style=\"margin-bottom: 1px;\"><span style=\"color: #0f7a34; font-size: 12px;\">"
-              << esc(hit.doc->domain) << " · score " << score_str(hit.score) << "</span></div>"
-                 "<a href=\"" << esc(hit.doc->url) << "\" style=\"color: #0b57d0; font-size: 17px; font-weight: 700;\">"
+            // layout de resultado de buscador serio: URL breadcrumbs arriba,
+            // título azul, snippet gris. Sin scores ni cajas técnicas.
+            h << "<div style=\"margin-bottom: 24px;\">"
+                 "<div style=\"margin-bottom: 2px;\">"
+                   "<span style=\"color: #202124; font-size: 12px;\">" << esc(hit.doc->domain) << "</span>"
+                   "<span style=\"color: #5f6368; font-size: 12px;\"> › " << esc(crumb_of(hit.doc->url)) << "</span>"
+                 "</div>"
+                 "<a href=\"" << esc(hit.doc->url) << "\" style=\"color: #1a0dab; font-size: 17px; font-weight: 700;\">"
               << esc(hit.doc->title) << "</a>"
-                 "<p style=\"color: #3c3c3c; font-size: 13px; margin-top: 2px;\">" << esc(hit.snippet) << "</p>"
+                 "<p style=\"color: #4d5156; font-size: 13px; margin-top: 3px;\">" << esc(hit.snippet) << "</p>"
               "</div>";
         }
         h << "</div>";
@@ -1219,18 +1252,34 @@ private:
         rebuild_chrome();
     }
 
-    static std::string score_str(double s) {
+    static std::string secs_str(double s) {
         char buf[32];
-        snprintf(buf, sizeof buf, "%.2f", s);
+        snprintf(buf, sizeof buf, "%.4f", s);
         return buf;
+    }
+
+    // breadcrumb honesto: sección principal del path (como Google hoy):
+    // ja.wikipedia.org/wiki/… → "wiki". Nada de percent-encodings crudos.
+    static std::string crumb_of(const std::string& url) {
+        auto pos = url.find("://");
+        std::string rest = pos != std::string::npos ? url.substr(pos + 3) : url;
+        auto slash = rest.find('/');
+        if (slash == std::string::npos || slash + 1 >= rest.size()) return "inicio";
+        std::string path = rest.substr(slash + 1);
+        auto end = path.find('/');
+        std::string first = end == std::string::npos ? path : path.substr(0, end);
+        if (first.empty()) return "inicio";
+        if (first.size() > 24) first = first.substr(0, 23) + "…";
+        return first;
     }
 
     void show_error(const std::string& url, const std::string& err) {
         mode_ = Mode::ERROR_PAGE;
         current_title_ = "Error";
         status_ = "Fallo de navegacion";
+        const int pad_e = (W >= 720) ? 70 : 24;
         std::ostringstream h;
-        h << "<div style=\"padding: 60px 70px;\">"
+        h << "<div style=\"padding: 60px " << pad_e << "px;\">"
              "<h1 style=\"color: #b3261e; font-size: 26px; margin: 0 0 14px 0;\">No se pudo abrir la pagina</h1>"
              "<p style=\"color: #333333; font-size: 15px; margin-bottom: 8px;\"><strong>" << esc(url) << "</strong></p>"
              "<p style=\"color: #555555; font-size: 14px; margin-bottom: 22px;\">" << esc(err) << "</p>"
@@ -1244,12 +1293,14 @@ private:
 
     void show_about(const std::string& back_to) {
         mode_ = Mode::ABOUT;
+        about_back_ = back_to; // para re-generar bien tras un resize
         current_url_ = "nuby://about";
         input_url_ = "nuby://about";
         current_title_ = "Nuby — la verdad tecnica";
         status_ = "nuby://about";
+        const int pad_about = (W >= 720) ? 60 : 20;
         std::ostringstream h;
-        h << "<div style=\"padding: 34px 60px;\">"
+        h << "<div style=\"padding: 30px " << pad_about << "px;\">"
              "<h1 style=\"color: #111111; font-size: 28px; margin: 0 0 12px 0;\">Que es real aqui (y que no)</h1>"
              "<p style=\"font-size: 14px; color: #333;\">Esta pagina, la barra de arriba y todo lo que ves "
              "lo calcularon el parser HTML, la cascada CSS, el motor de layout y el rasterizador de Nuby. "
@@ -1285,8 +1336,9 @@ private:
         input_url_ = current_url_;
         current_title_ = "Historial";
         status_ = std::to_string(history_.size()) + " visitas reales en esta sesion";
+        const int pad_h = (W >= 720) ? 60 : 20;
         std::ostringstream h;
-        h << "<div style=\"padding: 30px 60px;\">"
+        h << "<div style=\"padding: 26px " << pad_h << "px;\">"
              "<h1 style=\"color: #111111; font-size: 26px; margin: 0 0 14px 0;\">Historial de navegacion</h1>";
         if (history_.empty()) {
             h << "<p style=\"color: #555; font-size: 14px;\">Todavia no has visitado ninguna pagina web real.</p>";

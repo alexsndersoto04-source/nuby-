@@ -218,7 +218,10 @@ private:
                 continue;
             }
             float sp = (it.space_before && !cur.idx.empty()) ? space_w(n) : 0.0f;
-            if (!cur.idx.empty() && cur.width + sp + it.width > maxw && maxw > 50.0f) {
+            // Tolerancia subpíxel de 0.5px: sin ella, una línea medida a un
+            // ancho EXACTO (flex shrink-to-fit) envuelve por epsilon de
+            // redondeo flotante ("thrash"). Los motores reales hacen lo mismo.
+            if (!cur.idx.empty() && cur.width + sp + it.width > maxw + 0.5f && maxw > 50.0f) {
                 lines.push_back(cur);          // wrap real
                 cur = Line{};
                 sp = 0.0f;                     // el espacio al inicio de línea se come (spec)
