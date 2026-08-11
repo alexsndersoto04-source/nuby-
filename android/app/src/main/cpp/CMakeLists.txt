@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(nuby_gpu LANGUAGES CXX)
+add_library(nuby_gpu SHARED nuby_gpu.cpp)
+target_compile_features(nuby_gpu PRIVATE cxx_std_20)
+find_library(log-lib log)
+find_library(gles-lib GLESv3)
+target_link_libraries(nuby_gpu PRIVATE ${log-lib} ${gles-lib})

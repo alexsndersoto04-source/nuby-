@@ -1,0 +1,31 @@
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp
+
+# Binarios de arquitectura (ARM64 / x86_64)
+nuby_engine/bin/
+bin/
+
+# Node / Capacitor
+node_modules/
+package-lock.json
+
+# Builds de Android
+android/app/build/
+android/build/
+android/.gradle/
+android/captures/
+android/local.properties
+android/app/release/
+
+# Builds web
+dist/
+build/
+
+# Workflows
+.github/workflows/build-apk.yml
