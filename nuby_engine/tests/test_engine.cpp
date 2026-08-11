@@ -11,11 +11,13 @@
 
 #include "../include/nuby/nuby_engine.hpp"
 #include "../include/nuby/media/png_decoder.hpp"
+#include "../include/nuby/media/jpeg_decoder.hpp"
 #include "../include/nuby/search/search_index.hpp"
 #include "../include/nuby/js/js_engine.hpp"
 #include "../include/nuby/net/fetcher.hpp"
 #include "../include/nuby/app/browser_shell.hpp"
 #include <iostream>
+#include <fstream>
 #include <cassert>
 #include <cmath>
 
@@ -39,6 +41,9 @@ void test_html_dom() {
     std::cout << "  [✔] parser y DOM OK\n";
 }
 
+static void walk_runs_check(const std::shared_ptr<layout::LayoutBox>& b,
+                            uint32_t want_rgb, bool& all_ok, bool& seen);
+
 void test_css_cascade() {
     std::cout << "[Test] CSS Cascade & especificidad...\n";
     // La especificidad real: id > clase > elemento
@@ -48,6 +53,14 @@ void test_css_cascade() {
     auto span = res.document->get_element_by_id("s");
     CHECK(span != nullptr, "span no encontrado");
     CHECK(span->get_attribute("id") == "s", "atributo id");
+
+    auto res_vars = NubyBrowserEngine(800, 600).render_page(
+        "<div id=\"v\"><span id=\"sv\">vartext</span></div>",
+        "#v { --main-color: #334455; } #sv { color: var(--main-color); }");
+    bool v_ok = true, v_seen = false;
+    walk_runs_check(res_vars.layout_tree, 0x334455, v_ok, v_seen);
+    CHECK(v_seen && v_ok, "variable CSS --main-color heredada y resuelta con var()");
+
     std::cout << "  [✔] cascada OK\n";
 }
 
@@ -324,6 +337,20 @@ void test_png_decoder() {
         b64dec("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAFNeavDAAAACklEQVR42mNgAAAAAgAB5Sfe/AAAAABJRU5ErkJggg=="), img, err);
     CHECK(!still_ok && err.find("Adam7") != std::string::npos,
           "Adam7 debía fallar con mensaje honesto, no renderizar");
+
+    // WebP real: decodificado vía JpegDecoder::decode (ImageMagick convert real del sistema)
+    int sys_ret = system("convert -size 8x8 xc:green /tmp/test_nuby.webp 2>/dev/null");
+    if (sys_ret == 0) {
+        std::ifstream wf("/tmp/test_nuby.webp", std::ios::binary);
+        if (wf) {
+            std::string wbytes((std::istreambuf_iterator<char>(wf)), std::istreambuf_iterator<char>());
+            media::Image wimg;
+            std::string werr;
+            bool wok = media::JpegDecoder::decode(wbytes, wimg, werr);
+            CHECK(wok && wimg.width == 8 && wimg.height == 8, "WebP decodificado por fallback convert");
+        }
+    }
+
     std::cout << "  [✔] decodificador PNG OK\n";
 }
 
@@ -572,6 +599,50 @@ void test_js_interpreter() {
     bool budget = false;
     try { js.eval("while (true) {}"); } catch (...) { budget = true; }
     CHECK(budget, "bucle infinito debe cortarse con presupuesto");
+
+    // 6. DOM extendido: querySelector, querySelectorAll, createElement, appendChild, removeChild, getAttribute/setAttribute, addEventListener, children, array
+    js.eval(R"(
+        var cont = document.querySelector("#out");
+        cont.setAttribute("class", "activo");
+        var nuevo = document.createElement("p");
+        nuevo.textContent = "parrafo creado";
+        cont.appendChild(nuevo);
+        var res = document.querySelectorAll("p");
+        console.log("queryAll count=" + res.length);
+        console.log("hijo=" + cont.children[0].textContent);
+        cont.removeChild(nuevo);
+        console.log("hijos post=" + cont.children.length);
+    )");
+    CHECK(doc->get_element_by_id("out")->get_attribute("class") == "activo", "setAttribute real modificado desde JS");
+    CHECK(js.get_console_logs()[js.get_console_logs().size() - 3] == "queryAll count=1", "querySelectorAll con res.length real");
+    CHECK(js.get_console_logs()[js.get_console_logs().size() - 2] == "hijo=parrafo creado", "acceso a cont.children[0] real");
+    CHECK(js.get_console_logs().back() == "hijos post=0", "removeChild elimina el hijo real del DOM");
+
+    // addEventListener real con auto-id
+    js.eval(R"(
+        var btn = document.createElement("button");
+        btn.textContent = "click me";
+        document.querySelector("#out").appendChild(btn);
+        btn.addEventListener("click", function() {
+            document.querySelector("#out").setAttribute("data-clicked", "si");
+        });
+    )");
+    auto child_el = std::static_pointer_cast<html::Element>(doc->get_element_by_id("out")->get_children().back());
+    std::string auto_id = child_el->get_attribute("id");
+    CHECK(!auto_id.empty(), "auto-id asignado a boton sin id");
+    js.dispatch_click(auto_id);
+    CHECK(doc->get_element_by_id("out")->get_attribute("data-clicked") == "si", "addEventListener click disparó callback real");
+
+    // 7. localStorage real en JS
+    js.eval(R"(
+        localStorage.setItem("sesion_key", "valor_123");
+        console.log("ls=" + localStorage.getItem("sesion_key"));
+        localStorage.removeItem("sesion_key");
+        console.log("ls_del=" + localStorage.getItem("sesion_key"));
+    )");
+    CHECK(js.get_console_logs()[js.get_console_logs().size() - 2] == "ls=valor_123", "localStorage.setItem/getItem real");
+    CHECK(js.get_console_logs().back() == "ls_del=undefined", "localStorage.removeItem real");
+
     std::cout << "  [✔] intérprete JS OK\n";
 }
 

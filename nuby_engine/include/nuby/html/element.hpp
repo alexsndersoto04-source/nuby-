@@ -156,6 +156,9 @@ public:
         return result;
     }
 
+    std::shared_ptr<Element> query_selector(const std::string& selector, bool include_self = false);
+    std::vector<std::shared_ptr<Element>> query_selector_all(const std::string& selector, bool include_self = false);
+
     std::string to_string(int indent = 0) const override {
         std::string ind(indent * 2, ' ');
         std::string res = ind + "<" + tag_name_;

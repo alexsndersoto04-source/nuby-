@@ -63,6 +63,16 @@ public:
         return root_element_->get_elements_by_class_name(cls);
     }
 
+    std::shared_ptr<Element> query_selector(const std::string& selector) {
+        if (!root_element_) return nullptr;
+        return root_element_->query_selector(selector, true);
+    }
+
+    std::vector<std::shared_ptr<Element>> query_selector_all(const std::string& selector) {
+        if (!root_element_) return {};
+        return root_element_->query_selector_all(selector, true);
+    }
+
     void set_text_content(const std::string&) override {}
 
     std::string to_string(int indent = 0) const override {

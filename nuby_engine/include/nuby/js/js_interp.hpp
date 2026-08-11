@@ -13,17 +13,19 @@
 //   4. EVALUADOR: recorre el AST ejecutando de verdad
 //
 // Subconjunto soportado (todo real, nada simulado):
-//   • var/let/const, asignación, números, strings, booleanos, undefined
+//   • var/let/const, asignación, números, strings, booleanos, undefined, arrays
 //   • + - * / % (y concatenación con +), == != < > <= >=, && || !
 //   • if/else, while, for(;;), funciones con return y closures
 //   • console.log(...)
-//   • document.getElementById("id") → handle real del elemento
+//   • document.getElementById("id") / querySelector("sel") / querySelectorAll("sel") / createElement("tag")
+//   • elem.querySelector / querySelectorAll / children
+//   • elem.getAttribute / setAttribute / appendChild / removeChild / addEventListener("click", fn)
 //   • elem.innerHTML = "<b>..</b>"  → parsea el fragmento y MUTA el DOM
 //   • elem.textContent (get/set)
 //   • elem.onclick = function(){...} → se dispara con clicks reales
 //   • atributos onclick="..." de HTML → se ejecutan al hacer click
 //
-// Lo que NO soporta todavía (honesto): objetos literales, arrays, clases,
+// Lo que NO soporta todavía (honesto): objetos literales, clases,
 // prototypes, try/catch, async, y el 99% del DOM API estándar. Las webs
 // con JS pesado no funcionarán: no lo ocultamos.
 // ============================================================================
@@ -408,6 +410,13 @@ private:
                 m->str = advance().text;
                 m->kids.push_back(n);
                 n = m;
+            } else if (match("[")) {
+                auto idx_expr = expression();
+                expect("]");
+                auto m = Node::make(NK::MEMBER, n->line);
+                m->kids.push_back(n);
+                m->kids.push_back(idx_expr);
+                n = m;
             } else if (check("(")) {
                 int line = advance().line;
                 auto c = Node::make(NK::CALL, line);
@@ -475,12 +484,13 @@ struct Function {
 };
 
 struct Value {
-    enum Kind { UNDEFINED, BOOL, NUMBER, STRING, ELEMENT, FUNCTION } kind{UNDEFINED};
+    enum Kind { UNDEFINED, BOOL, NUMBER, STRING, ELEMENT, FUNCTION, ARRAY } kind{UNDEFINED};
     bool b{false};
     double n{0};
     std::string s;
     std::shared_ptr<html::Element> elem;
     std::shared_ptr<Function> fn;
+    std::vector<Value> arr;
 
     static Value undefined() { return {}; }
     static Value boolean(bool v) { Value x; x.kind = BOOL; x.b = v; return x; }
@@ -488,6 +498,7 @@ struct Value {
     static Value string(std::string v) { Value x; x.kind = STRING; x.s = std::move(v); return x; }
     static Value element(std::shared_ptr<html::Element> e) { Value x; x.kind = ELEMENT; x.elem = std::move(e); return x; }
     static Value function(std::shared_ptr<Function> f) { Value x; x.kind = FUNCTION; x.fn = std::move(f); return x; }
+    static Value array(std::vector<Value> a) { Value x; x.kind = ARRAY; x.arr = std::move(a); return x; }
 
     bool truthy() const {
         switch (kind) {
@@ -509,6 +520,14 @@ struct Value {
             case STRING: return s;
             case ELEMENT: return elem ? "[Elemento <" + elem->get_tag_name() + ">]" : "null";
             case FUNCTION: return "[funcion " + (fn ? fn->name : "") + "]";
+            case ARRAY: {
+                std::string res = "[";
+                for (size_t i = 0; i < arr.size(); ++i) {
+                    if (i > 0) res += ", ";
+                    res += arr[i].to_str();
+                }
+                return res + "]";
+            }
         }
         return "";
     }
@@ -546,7 +565,9 @@ struct Env {
 // ---------------------------------------------------------------------------
 class Interpreter {
 public:
-    explicit Interpreter(std::shared_ptr<html::Document> doc) : doc_(std::move(doc)) {
+    explicit Interpreter(std::shared_ptr<html::Document> doc,
+                         std::unordered_map<std::string, std::string>* storage = nullptr)
+        : doc_(std::move(doc)), storage_(storage ? storage : &default_storage_) {
         global_ = std::make_shared<Env>();
     }
 
@@ -558,6 +579,7 @@ public:
 
     // Ejecuta un programa JS completo
     void run(const std::string& source) {
+        op_budget_ = 400000;
         Lexer lex(source);
         Parser parser(lex.run());
         auto ast = parser.parse_program();
@@ -566,6 +588,7 @@ public:
 
     // Dispara el handler onclick registrado para un elemento (click real)
     bool dispatch_click(const std::string& element_id) {
+        op_budget_ = 400000;
         // handlers registrados por JS: elem.onclick = fn
         auto it = click_handlers_.find(element_id);
         if (it != click_handlers_.end()) {
@@ -595,6 +618,8 @@ private:
     std::vector<std::string> logs_;
     bool dom_mutated_{false};
     std::unordered_map<std::string, std::shared_ptr<Function>> click_handlers_;
+    std::unordered_map<std::string, std::string> default_storage_;
+    std::unordered_map<std::string, std::string>* storage_{nullptr};
     int op_budget_{400000}; // freno antibucles infinitos (real y necesario)
 
     void tick(int line) {
@@ -732,6 +757,7 @@ private:
                 case Value::STRING: return a.s == b.s;
                 case Value::ELEMENT: return a.elem == b.elem;
                 case Value::FUNCTION: return a.fn == b.fn;
+                case Value::ARRAY: return &a.arr == &b.arr;
             }
         }
         if ((a.kind == Value::NUMBER || a.kind == Value::STRING || a.kind == Value::BOOL) &&
@@ -763,11 +789,20 @@ private:
         throw std::runtime_error("Nuby JS: asignacion invalida");
     }
 
-    // obj.prop = valor   (innerHTML / textContent / onclick)
+    // obj.prop = valor   (innerHTML / textContent / onclick / ar[i] = v)
     Value assign_member(const std::shared_ptr<Node>& lhs, const std::shared_ptr<Node>& rhs_node,
                         std::shared_ptr<Env> env) {
         Value obj = eval(lhs->kids[0], env);
         Value v = eval(rhs_node, env);
+        if (obj.kind == Value::ARRAY && lhs->kids.size() > 1) {
+            Value idx = eval(lhs->kids[1], env);
+            int i = (int)idx.to_num();
+            if (i >= 0 && i < (int)obj.arr.size()) {
+                obj.arr[i] = v;
+                return v;
+            }
+            return Value::undefined();
+        }
         if (obj.kind != Value::ELEMENT || !obj.elem)
             throw std::runtime_error("Nuby JS: solo elementos del DOM tienen propiedades asignables");
 
@@ -784,8 +819,14 @@ private:
             return v;
         }
         if (lhs->str == "onclick") {
-            if (v.kind == Value::FUNCTION && obj.elem->has_attribute("id")) {
-                click_handlers_[obj.elem->get_attribute("id")] = v.fn;
+            if (v.kind == Value::FUNCTION) {
+                std::string id = obj.elem->get_attribute("id");
+                if (id.empty()) {
+                    static int auto_id = 1;
+                    id = "__nuby_autoid_" + std::to_string(auto_id++);
+                    obj.elem->set_attribute("id", id);
+                }
+                click_handlers_[id] = v.fn;
             }
             return v;
         }
@@ -813,7 +854,10 @@ private:
 
         // document es un builtin, no una variable
         if (n->kids[0]->kind == NK::IDENT && n->kids[0]->str == "document") {
-            if (n->str == "getElementById") return Value::string("__builtin_getElementById");
+            if (n->str == "getElementById" || n->str == "querySelector" ||
+                n->str == "querySelectorAll" || n->str == "createElement") {
+                return Value::string("__builtin_doc_" + n->str);
+            }
             if (n->str == "title") return Value::string(doc_ ? doc_->get_title() : "");
             throw std::runtime_error("Nuby JS: document." + n->str + " no soportado en el subconjunto");
         }
@@ -821,17 +865,55 @@ private:
             if (n->str == "log") return Value::string("__builtin_console_log");
             throw std::runtime_error("Nuby JS: console." + n->str + " no soportado");
         }
+        if (n->kids[0]->kind == NK::IDENT && n->kids[0]->str == "localStorage") {
+            if (n->str == "getItem" || n->str == "setItem" ||
+                n->str == "removeItem" || n->str == "clear") {
+                return Value::string("__builtin_ls_" + n->str);
+            }
+            throw std::runtime_error("Nuby JS: localStorage." + n->str + " no soportado");
+        }
+
+        if (obj.kind == Value::ARRAY) {
+            if (n->str == "length") return Value::number((double)obj.arr.size());
+            if (n->kids.size() > 1) {
+                Value idx = eval(n->kids[1], env);
+                int i = (int)idx.to_num();
+                if (i >= 0 && i < (int)obj.arr.size()) return obj.arr[i];
+                return Value::undefined();
+            }
+            try {
+                size_t pos = 0;
+                int i = std::stoi(n->str, &pos);
+                if (pos == n->str.size() && i >= 0 && i < (int)obj.arr.size()) return obj.arr[i];
+            } catch (...) {}
+            return Value::undefined();
+        }
 
         if (obj.kind == Value::ELEMENT && obj.elem) {
             if (n->str == "innerHTML" || n->str == "textContent")
                 return Value::string(obj.elem->get_text_content());
             if (n->str == "id") return Value::string(obj.elem->get_id());
             if (n->str == "tagName") return Value::string(obj.elem->get_tag_name());
+            if (n->str == "children") {
+                std::vector<Value> kids;
+                for (const auto& c : obj.elem->get_children()) {
+                    if (c && c->is_element()) {
+                        kids.push_back(Value::element(std::static_pointer_cast<html::Element>(c)));
+                    }
+                }
+                return Value::array(kids);
+            }
+            if (n->str == "querySelector" || n->str == "querySelectorAll" ||
+                n->str == "getAttribute" || n->str == "setAttribute" ||
+                n->str == "appendChild" || n->str == "removeChild" ||
+                n->str == "addEventListener") {
+                return Value::string("__builtin_elem_" + n->str);
+            }
         }
         if (obj.kind == Value::STRING) {
             if (n->str == "length") return Value::number((double)obj.s.size());
         }
-        if (obj.kind == Value::STRING && (obj.s == "__builtin_getElementById" || obj.s == "__builtin_console_log"))
+        if (obj.kind == Value::STRING && obj.s.rfind("__builtin_", 0) == 0)
             return obj; // se resuelve en CALL
         return Value::undefined();
     }
@@ -839,14 +921,36 @@ private:
     Value eval_call(const std::shared_ptr<Node>& n, std::shared_ptr<Env> env) {
         auto& callee = n->kids[0];
 
-        // Builtins representados como strings marcador (truco interno, transparente)
+        // Builtins representados como metodos de document, console, o elementos DOM
         if (callee->kind == NK::MEMBER && callee->kids[0]->kind == NK::IDENT) {
             const std::string& base = callee->kids[0]->str;
-            if (base == "document" && callee->str == "getElementById") {
-                Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
-                auto el = doc_ ? doc_->get_element_by_id(arg.to_str()) : nullptr;
-                if (!el) return Value::undefined();
-                return Value::element(el);
+            if (base == "document") {
+                if (callee->str == "getElementById") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    auto el = doc_ ? doc_->get_element_by_id(arg.to_str()) : nullptr;
+                    if (!el) return Value::undefined();
+                    return Value::element(el);
+                }
+                if (callee->str == "querySelector") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    auto el = doc_ ? doc_->query_selector(arg.to_str()) : nullptr;
+                    return el ? Value::element(el) : Value::undefined();
+                }
+                if (callee->str == "querySelectorAll") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    std::vector<Value> items;
+                    if (doc_) {
+                        for (const auto& e : doc_->query_selector_all(arg.to_str())) {
+                            items.push_back(Value::element(e));
+                        }
+                    }
+                    return Value::array(items);
+                }
+                if (callee->str == "createElement") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    auto el = doc_ ? doc_->create_element(arg.to_str()) : nullptr;
+                    return el ? Value::element(el) : Value::undefined();
+                }
             }
             if (base == "console" && callee->str == "log") {
                 std::string line;
@@ -856,6 +960,97 @@ private:
                 }
                 logs_.push_back(line);
                 return Value::undefined();
+            }
+            if (base == "localStorage") {
+                if (callee->str == "getItem") {
+                    Value k = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    auto it = storage_->find(k.to_str());
+                    if (it == storage_->end()) return Value::undefined();
+                    return Value::string(it->second);
+                }
+                if (callee->str == "setItem") {
+                    Value k = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    Value v = n->kids.size() > 2 ? eval(n->kids[2], env) : Value::undefined();
+                    (*storage_)[k.to_str()] = v.to_str();
+                    return Value::undefined();
+                }
+                if (callee->str == "removeItem") {
+                    Value k = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    storage_->erase(k.to_str());
+                    return Value::undefined();
+                }
+                if (callee->str == "clear") {
+                    storage_->clear();
+                    return Value::undefined();
+                }
+            }
+        }
+
+        if (callee->kind == NK::MEMBER) {
+            Value recv = eval(callee->kids[0], env);
+            if (recv.kind == Value::ELEMENT && recv.elem) {
+                if (callee->str == "querySelector") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    auto el = recv.elem->query_selector(arg.to_str());
+                    return el ? Value::element(el) : Value::undefined();
+                }
+                if (callee->str == "querySelectorAll") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    std::vector<Value> items;
+                    for (const auto& e : recv.elem->query_selector_all(arg.to_str())) {
+                        items.push_back(Value::element(e));
+                    }
+                    return Value::array(items);
+                }
+                if (callee->str == "getAttribute") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    return Value::string(recv.elem->get_attribute(arg.to_str()));
+                }
+                if (callee->str == "setAttribute") {
+                    Value arg1 = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    Value arg2 = n->kids.size() > 2 ? eval(n->kids[2], env) : Value::undefined();
+                    std::string attr_val = arg2.to_str();
+                    if (!attr_val.empty() && (attr_val.front() == '"' || attr_val.front() == '\'')) {
+                        if (attr_val.size() >= 2 && attr_val.back() == attr_val.front()) {
+                            attr_val = attr_val.substr(1, attr_val.size() - 2);
+                        }
+                    }
+                    recv.elem->set_attribute(arg1.to_str(), attr_val);
+                    dom_mutated_ = true;
+                    return Value::undefined();
+                }
+                if (callee->str == "appendChild") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    if (arg.kind == Value::ELEMENT && arg.elem) {
+                        recv.elem->append_child(arg.elem);
+                        dom_mutated_ = true;
+                        return arg;
+                    }
+                    return Value::undefined();
+                }
+                if (callee->str == "removeChild") {
+                    Value arg = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    if (arg.kind == Value::ELEMENT && arg.elem) {
+                        recv.elem->remove_child(arg.elem);
+                        dom_mutated_ = true;
+                        return arg;
+                    }
+                    return Value::undefined();
+                }
+                if (callee->str == "addEventListener") {
+                    Value event_name = n->kids.size() > 1 ? eval(n->kids[1], env) : Value::undefined();
+                    Value fn_val = n->kids.size() > 2 ? eval(n->kids[2], env) : Value::undefined();
+                    if (event_name.to_str() == "click" && fn_val.kind == Value::FUNCTION) {
+                        std::string id = recv.elem->get_attribute("id");
+                        if (id.empty()) {
+                            static int auto_id = 1;
+                            id = "__nuby_autoid_" + std::to_string(auto_id++);
+                            recv.elem->set_attribute("id", id);
+                        }
+                        click_handlers_[id] = fn_val.fn;
+                    }
+                    return Value::undefined();
+                }
             }
         }
 

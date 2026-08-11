@@ -255,6 +255,7 @@ private:
 
     std::shared_ptr<layout::LayoutBox> current_layout_tree_;
     std::shared_ptr<js::JSEngine> current_js_engine_;
+    std::unordered_map<std::string, std::string> session_local_storage_;
 
     void generate_display_list(const std::shared_ptr<layout::LayoutBox>& box, paint::DisplayList& dl) {
         if (!box) return;
@@ -413,7 +414,7 @@ public:
         }
 
         // Stage 3: JavaScript Execution & DOM Mutators
-        current_js_engine_ = std::make_shared<js::JSEngine>(current_document_);
+        current_js_engine_ = std::make_shared<js::JSEngine>(current_document_, &session_local_storage_);
         if (!js_code.empty()) {
             core::ScopedTimer timer(result.profiler, "JS_Execution", "Real interpreter: lexer + AST + eval");
             try {
@@ -489,7 +490,7 @@ public:
         // Stage 3: JS — conserva el intérprete ligado a ESTE documento
         if (!current_js_engine_ || !current_js_engine_->interpreter() ||
             current_js_engine_->interpreter()->document().get() != doc.get()) {
-            current_js_engine_ = std::make_shared<js::JSEngine>(current_document_);
+            current_js_engine_ = std::make_shared<js::JSEngine>(current_document_, &session_local_storage_);
         }
 
         // Stage 4: Layout

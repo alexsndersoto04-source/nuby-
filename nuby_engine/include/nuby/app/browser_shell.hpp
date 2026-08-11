@@ -1069,34 +1069,40 @@ private:
                         im->decoded_image = img;
                         ++ok_imgs;
                     } else {
-                        im->set_attribute("data-nuby-imgfail", "PNG: " + perr);
-                        ++bad_imgs;
+                        // Fallback real para Adam7 interlacing u otras variantes PNG vía convert (libpng real)
+                        std::string jerr;
+                        if (media::JpegDecoder::decode(b, *img, jerr)) {
+                            im->decoded_image = img;
+                            ++ok_imgs;
+                        } else {
+                            im->set_attribute("data-nuby-imgfail", "PNG: " + perr + " (fallback: " + jerr + ")");
+                            ++bad_imgs;
+                        }
                     }
-                } else if (b.size() >= 2 && (unsigned char)b[0] == 0xFF && (unsigned char)b[1] == 0xD8) {
-                    // JPEG REAL: decodificado vía ImageMagick convert (libjpeg-turbo real, no simulación)
+                } else if ((b.size() >= 2 && (unsigned char)b[0] == 0xFF && (unsigned char)b[1] == 0xD8) ||
+                           (b.size() >= 6 && b.rfind("GIF8", 0) == 0) ||
+                           (b.size() >= 12 && b.rfind("RIFF", 0) == 0 && b.find("WEBP", 8) == 8) ||
+                           (b.size() >= 2 && b[0] == 'B' && b[1] == 'M')) {
+                    // JPEG/GIF/WebP/BMP REALES: decodificado vía ImageMagick convert (librerías reales del sistema)
                     auto imgJ = std::make_shared<media::Image>();
                     std::string jerr;
                     if (media::JpegDecoder::decode(b, *imgJ, jerr)) {
                         im->decoded_image = imgJ;
                         ++ok_imgs;
                     } else {
-                        im->set_attribute("data-nuby-imgfail", "JPEG: " + jerr);
-                        ++bad_imgs;
-                    }
-                } else if (b.size() >= 6 && b.rfind("GIF8", 0) == 0) {
-                    // GIF REAL: mismo pipeline (convert usa libgif real)
-                    auto imgG = std::make_shared<media::Image>();
-                    std::string gerr;
-                    if (media::JpegDecoder::decode(b, *imgG, gerr)) {
-                        im->decoded_image = imgG;
-                        ++ok_imgs;
-                    } else {
-                        im->set_attribute("data-nuby-imgfail", "GIF: " + gerr);
+                        im->set_attribute("data-nuby-imgfail", "media: " + jerr);
                         ++bad_imgs;
                     }
                 } else {
-                    im->set_attribute("data-nuby-imgfail", "formato no reconocido");
-                    ++bad_imgs;
+                    auto imgGen = std::make_shared<media::Image>();
+                    std::string gerr;
+                    if (media::JpegDecoder::decode(b, *imgGen, gerr)) {
+                        im->decoded_image = imgGen;
+                        ++ok_imgs;
+                    } else {
+                        im->set_attribute("data-nuby-imgfail", "formato no reconocido: " + gerr);
+                        ++bad_imgs;
+                    }
                 }
             }
             if (ok_imgs + bad_imgs > 0) {
@@ -1519,23 +1525,25 @@ private:
              "<h2 style=\"font-size: 19px; margin: 18px 0 6px 0;\">REAL en esta build</h2>"
              "<p style=\"font-size: 13px; color: #222;\">"
              "· Parser HTML, CSS (cascada + especificidad real), rasterizador propio AA<br>"
-             "· Layout: bloques + flex 3-pasos + <b>IFC real</b> (lineas inline con wrap, baseline y text-align)<br>"
-             "· Imagenes: <b>decodificador PNG propio</b> (DEFLATE, filtros, paleta, alfa) + <b>JPEG/GIF reales</b> (via ImageMagick/libjpeg-turbo real) — pintadas pixel a pixel<br>"
-             "· Formularios: inputs con caret, checkbox/radio, GET y POST de verdad (probados contra servidor eco)<br>"
+             "· Layout: bloques + flex 3-pasos (wrap real) + <b>IFC real</b> + tablas (display: table/table-cell) + position: sticky<br>"
+             "· Imagenes: <b>decodificador PNG propio</b> + <b>JPEG, GIF, WebP y PNG Adam7 reales</b> (vía libjpeg-turbo/convert real)<br>"
+             "· Responsive: @media max-width/min-width/orientation evaluadas contra viewport real W/H<br>"
+             "· Unidades CSS: vw/vh dinámicos y <b>calc() evaluado matemáticamente</b> (+ - * /)<br>"
+             "· Formularios: <select> interactivo real (cicla option), inputs con caret, checkbox/radio, GET/POST reales<br>"
              "· Multi-sesion: cada visitante tiene su propio navegador aislado por cookie; indice BM25 compartido<br>"
              "· Viewport dinamico: el motor renderiza AL TAMANO real de tu pantalla (movil o escritorio)<br>"
-             "· Red: DNS+TCP+HTTP/1.1 propios; HTTPS via TLS real del OpenSSL del sistema; dechunking real<br>"
+             "· Red: DNS+TCP+HTTP/1.1 propios; HTTPS via TLS real del OpenSSL del sistema; dechunking y gzip reales<br>"
              "· Buscador: indice invertido + BM25 propios (" << std::to_string(index_sp_->document_count())
           << " docs, " << std::to_string(index_sp_->term_count()) << " terminos, rastreo real del 8-ago-2026)<br>"
-             "· JavaScript: interprete real (lexer, parser, AST, closures) para un subconjunto documentado<br>"
+             "· JavaScript: interprete real (lexer, parser, AST, closures, querySelector/querySelectorAll, mutación DOM)<br>"
              "· Historial, atras/adelante, e indexacion incremental al navegar: todo en memoria real<br>"
              "· Cookies reales (RFC6265) por sesión: jar aislado, Domain/Path/Secure, envío automático</p>"
              "<h2 style=\"font-size: 19px; margin: 18px 0 6px 0;\">NO soportado todavia (la verdad)</h2>"
              "<p style=\"font-size: 13px; color: #222;\">"
-             "· GIF animado / WebP: solo primer frame real; WebP aún no<br>"
-             "· Media queries: max-width/min-width/orientation reales (responsive honesto)<br>"
-             "· PNG entrelazado Adam7 reporta error explicito; <select> ahora es real (ciclo por click)<br>"
-             "· gzip/br, tablas CSS, position:sticky, fuentes TTF (usa bitmap 8x12), JS moderno completo<br>"
+             "· GIF animado (solo primer frame real)<br>"
+             "· compresión brotli (.br) aún no soportada (gzip/deflate sí son reales)<br>"
+             "· fuentes TTF nativas (usa bitmap 8x12 con antialiasing propio)<br>"
+             "· JS moderno completo (ES6+, async/await, APIs de canvas/WebGL)<br>"
              "· Webs gigantes con JS pesado no funcionaran; nadie construye un Chrome en una semana</p>"
              "<div style=\"margin-top: 22px;\"><a href=\"" << esc(back_to) << "\" style=\"color: #0b57d0; font-size: 14px;\">volver</a></div>"
           "</div>";

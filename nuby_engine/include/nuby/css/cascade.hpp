@@ -2,6 +2,7 @@
 
 #include "css_rule.hpp"
 #include "css_value.hpp"
+#include "css_parser.hpp"
 #include "../html/element.hpp"
 #include "../core/types.hpp"
 #include "../core/string_utils.hpp"
@@ -10,6 +11,7 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <functional>
 
 namespace nuby::css {
 
@@ -71,6 +73,8 @@ struct ComputedStyle {
 
     int z_index{0};
     float opacity{1.0f};
+
+    std::unordered_map<std::string, std::string> custom_props;
 
     // Matched rules for DevTools inspector
     struct MatchedRuleInfo {
@@ -187,7 +191,8 @@ private:
         user_agent_sheet_ = parser.parse();
     }
 
-    bool matches_simple_selector(const SimpleSelector& sel, const std::shared_ptr<html::Element>& elem) {
+public:
+    static bool matches_simple_selector(const SimpleSelector& sel, const std::shared_ptr<html::Element>& elem) {
         switch (sel.type) {
             case SimpleSelectorType::UNIVERSAL:
                 return true;
@@ -213,14 +218,14 @@ private:
         }
     }
 
-    bool matches_compound_selector(const CompoundSelector& compound, const std::shared_ptr<html::Element>& elem) {
+    static bool matches_compound_selector(const CompoundSelector& compound, const std::shared_ptr<html::Element>& elem) {
         for (const auto& s : compound.simple_selectors) {
             if (!matches_simple_selector(s, elem)) return false;
         }
         return true;
     }
 
-    bool matches_complex_selector(const ComplexSelector& complex, const std::shared_ptr<html::Element>& elem) {
+    static bool matches_complex_selector(const ComplexSelector& complex, const std::shared_ptr<html::Element>& elem) {
         if (complex.compound_selectors.empty()) return false;
 
         // Match from right to left (browsers evaluate right-to-left for performance!)
@@ -260,10 +265,30 @@ private:
 
         return comp_idx < 0;
     }
+private:
 
     void apply_declaration(ComputedStyle& style, const std::string& prop, const std::string& val, float parent_font_size) {
         std::string p = core::StringUtils::to_lower(prop);
         std::string v = core::StringUtils::trim(val);
+
+        if (p.size() >= 3 && p[0] == '-' && p[1] == '-') {
+            style.custom_props[p] = v;
+            return;
+        }
+
+        if (v.find("var(--") != std::string::npos) {
+            size_t pos = 0;
+            while ((pos = v.find("var(--", pos)) != std::string::npos) {
+                size_t end = v.find(')', pos + 6);
+                if (end == std::string::npos) break;
+                std::string var_name = v.substr(pos + 4, end - (pos + 4));
+                std::string rep = "";
+                auto it = style.custom_props.find(var_name);
+                if (it != style.custom_props.end()) rep = it->second;
+                v.replace(pos, (end - pos) + 1, rep);
+            }
+            v = core::StringUtils::trim(v);
+        }
 
         if (p == "display") {
             if (v == "none") style.display = Display::NONE;
@@ -438,6 +463,7 @@ public:
             style.font_size = parent_style->font_size;
             style.line_height = parent_style->line_height;
             style.text_align = parent_style->text_align;
+            style.custom_props = parent_style->custom_props;
         }
 
         // Struct to collect and sort matched declarations by specificity
@@ -512,3 +538,40 @@ public:
 };
 
 } // namespace nuby::css
+
+namespace nuby::html {
+
+inline std::shared_ptr<Element> Element::query_selector(const std::string& selector, bool include_self) {
+    auto all = query_selector_all(selector, include_self);
+    return all.empty() ? nullptr : all.front();
+}
+
+inline std::vector<std::shared_ptr<Element>> Element::query_selector_all(const std::string& selector, bool include_self) {
+    std::vector<std::shared_ptr<Element>> result;
+    css::CSSParser parser("");
+    auto complex = parser.parse_complex_selector(selector);
+
+    std::function<void(const std::shared_ptr<Element>&)> walk = [&](const std::shared_ptr<Element>& el) {
+        if (css::CascadeEngine::matches_complex_selector(complex, el)) {
+            result.push_back(el);
+        }
+        for (const auto& child : el->get_children()) {
+            if (child && child->is_element()) {
+                walk(std::static_pointer_cast<Element>(child));
+            }
+        }
+    };
+
+    if (include_self) {
+        walk(std::static_pointer_cast<Element>(shared_from_this()));
+    } else {
+        for (const auto& child : get_children()) {
+            if (child && child->is_element()) {
+                walk(std::static_pointer_cast<Element>(child));
+            }
+        }
+    }
+    return result;
+}
+
+} // namespace nuby::html

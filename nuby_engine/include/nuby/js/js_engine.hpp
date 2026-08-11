@@ -22,8 +22,9 @@ using JSValue = Value; // el valor real del intérprete reemplaza al struct viej
 
 class JSEngine {
 public:
-    explicit JSEngine(std::shared_ptr<html::Document> doc)
-        : interp_(std::make_shared<Interpreter>(std::move(doc))) {}
+    explicit JSEngine(std::shared_ptr<html::Document> doc,
+                      std::unordered_map<std::string, std::string>* storage = nullptr)
+        : interp_(std::make_shared<Interpreter>(std::move(doc), storage)) {}
 
     // Ejecuta código con el intérprete REAL. Lanza std::runtime_error
     // si el programa usa sintaxis fuera del subconjunto soportado.

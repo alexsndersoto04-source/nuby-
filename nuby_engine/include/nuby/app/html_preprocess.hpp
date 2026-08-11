@@ -252,11 +252,11 @@ static std::string filter_media(const std::string& css, int vw, int vh) {
     return out;
 }
 
-static std::string strip_at_rules(const std::string& css) {
+inline static std::string strip_at_rules(const std::string& css) {
     // Compat: sin viewport usa 1024x768 (fallback honesto para tests viejos)
     return filter_media(css, 1024, 768);
 }
-static std::string strip_at_rules(const std::string& css, int vw, int vh) {
+inline static std::string strip_at_rules(const std::string& css, int vw, int vh) {
     return filter_media(css, vw, vh);
 }
 
@@ -289,7 +289,7 @@ static std::string attr_value(const std::string& tag_src, const char* name) {
     return "";
 }
 
-static bool attr_present(const std::string& tag_src, const char* name) {
+inline static bool attr_present(const std::string& tag_src, const char* name) {
     std::string n = core::StringUtils::to_lower(tag_src);
     return n.find(core::StringUtils::to_lower(name)) != std::string::npos;
 }
