@@ -26,6 +26,7 @@
 // ============================================================================
 
 #include "url.hpp"
+#include "cookie_jar.hpp"
 #include "../core/string_utils.hpp"
 #include <string>
 #include <unordered_map>
@@ -47,7 +48,8 @@ struct FetchResult {
     int status_code{0};
     std::string status_message;
     std::unordered_map<std::string, std::string> headers;
-    std::string body;          // cuerpo ya des-chunkeado
+    std::vector<std::string> set_cookie_headers; // Set-Cookie crudos (múltiples, reales)
+    std::string body;          // cuerpo ya des-chunkeado y descomprimido
     std::string final_url;     // URL tras redirects
     std::string error;         // si no está vacío, la petición falló
     long elapsed_ms{0};
@@ -69,7 +71,8 @@ public:
 
     static FetchResult fetch(const std::string& raw_url, int max_redirects = 5,
                              const std::string& method = "GET",
-                             const std::string& body = "") {
+                             const std::string& body = "",
+                             CookieJar* jar = nullptr) {
         // method/body REALES: los formularios POST envían su cuerpo de verdad
         std::string cur_method = method, cur_body = body;
         auto t0 = now_ms();
@@ -84,11 +87,16 @@ public:
                 return res;
             }
 
+            // Cookie REAL: envía Cookie header si el jar tiene para este host/path
+            std::string cookie_hdr;
+            if (jar) {
+                cookie_hdr = jar->header_for(url.host, url.path + (url.query.empty()?"":"?"+url.query), url.scheme=="https");
+            }
             std::string raw;
             if (url.scheme == "https") {
-                raw = fetch_via_openssl(url, cur_method, cur_body, res.error);
+                raw = fetch_via_openssl(url, cur_method, cur_body, res.error, cookie_hdr);
             } else if (url.scheme == "http" || url.scheme.empty()) {
-                raw = fetch_via_socket(url, cur_method, cur_body, res.error);
+                raw = fetch_via_socket(url, cur_method, cur_body, res.error, cookie_hdr);
             } else {
                 res.error = "Esquema no soportado: " + url.scheme;
                 res.elapsed_ms = now_ms() - t0;
@@ -106,6 +114,12 @@ public:
                 return res;
             }
             res.final_url = current;
+            // Cookie REAL: guarda Set-Cookie del servidor en el jar de la sesión
+            if (jar && !res.set_cookie_headers.empty()) {
+                for (auto& sc : res.set_cookie_headers) {
+                    jar->add_from_header(sc, url.host, url.path);
+                }
+            }
 
             // Redirect?
             if (res.status_code >= 300 && res.status_code < 400) {
@@ -172,7 +186,8 @@ private:
 
     // ---- http:// : socket POSIX propio ------------------------------------
     static std::string fetch_via_socket(const URL& url, const std::string& method,
-                                        const std::string& body, std::string& err) {
+                                        const std::string& body, std::string& err,
+                                        const std::string& cookie_hdr = "") {
         struct addrinfo hints{}, *res_info = nullptr;
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
@@ -201,7 +216,7 @@ private:
             return "";
         }
 
-        std::string req = build_request(url, method, body);
+        std::string req = build_request(url, method, body, cookie_hdr);
         if (send(sock, req.c_str(), req.size(), 0) < 0) {
             close(sock); err = "Fallo al enviar la peticion"; return "";
         }
@@ -215,7 +230,8 @@ private:
     // Abrimos dos pipes: escribimos la petición HTTP al stdin del proceso
     // openssl y leemos la respuesta TLS-descifrada de su stdout.
     static std::string fetch_via_openssl(const URL& url, const std::string& method,
-                                         const std::string& body, std::string& err) {
+                                         const std::string& body, std::string& err,
+                                         const std::string& cookie_hdr = "") {
         int in_pipe[2], out_pipe[2];
         if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
             err = "No se pudieron crear pipes para TLS";
@@ -243,7 +259,7 @@ private:
 
         // PADRE
         close(in_pipe[0]); close(out_pipe[1]);
-        std::string req = build_request(url, method, body);
+        std::string req = build_request(url, method, body, cookie_hdr);
         ssize_t w = write(in_pipe[1], req.c_str(), req.size());
         (void)w;
         close(in_pipe[1]); // EOF → openssl envía y espera respuesta
@@ -266,7 +282,8 @@ private:
     }
 
     static std::string build_request(const URL& url, const std::string& method,
-                                     const std::string& body) {
+                                     const std::string& body,
+                                     const std::string& cookie_hdr = "") {
         std::ostringstream req;
         req << method << " " << url.path << (url.query.empty() ? "" : "?" + url.query) << " HTTP/1.1\r\n";
         req << "Host: " << url.host << "\r\n";
@@ -274,6 +291,7 @@ private:
         req << "Accept: text/html,application/xhtml+xml,text/css,*/*;q=0.5\r\n";
         req << "Accept-Encoding: gzip, deflate, identity\r\n"; // REAL: ahora descomprimimos gzip/deflate via gzip -dc
         req << "Accept-Language: es,en;q=0.6\r\n";
+        if (!cookie_hdr.empty()) req << "Cookie: " << cookie_hdr << "\r\n";
         if (!body.empty()) {
             req << "Content-Type: application/x-www-form-urlencoded\r\n";
             req << "Content-Length: " << body.size() << "\r\n";
@@ -328,8 +346,12 @@ private:
             if (!line.empty() && line.back() == '\r') line.pop_back();
             size_t colon = line.find(':');
             if (colon != std::string::npos) {
-                res.headers[core::StringUtils::trim(line.substr(0, colon))] =
-                    core::StringUtils::trim(line.substr(colon + 1));
+                std::string k = core::StringUtils::trim(line.substr(0, colon));
+                std::string v = core::StringUtils::trim(line.substr(colon + 1));
+                res.headers[k] = v;
+                if (core::StringUtils::to_lower(k) == "set-cookie") {
+                    res.set_cookie_headers.push_back(v);
+                }
             }
         }
 

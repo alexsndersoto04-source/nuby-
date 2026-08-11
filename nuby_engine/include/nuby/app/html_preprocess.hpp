@@ -117,32 +117,147 @@ static std::string latin1_to_utf8(const std::string& in) {
     return out;
 }
 
-// --- CSS: quita bloques @-rule que el parser aún no soporta -----------------
-static std::string strip_at_rules(const std::string& css) {
+// --- CSS: @media REAL evaluado contra viewport (2026-08-11) ------------------
+// Antes se borraban TODOS los bloques @media (strip ciego). Ahora se evalúan
+// de verdad: solo se conservan los que matchean el viewport actual. Es la
+// diferencia entre "simular que no existe responsive" y "soporte real honesto".
+// Soporta: max-width/min-width/max-height/min-height (px), screen/all/print,
+// and, comma (or), not. Otros features se asumen como no-match honesto.
+
+static inline bool media_condition_matches(const std::string& cond, int vw, int vh) {
+    std::string s = core::StringUtils::to_lower(core::StringUtils::trim(cond));
+    if (s.empty()) return true;
+    // split por coma (OR) respetando paréntesis
+    std::vector<std::string> or_parts;
+    {
+        std::string cur; int depth=0;
+        for (char c: s) {
+            if (c=='(') depth++;
+            else if (c==')') depth--;
+            if (c==',' && depth==0) { or_parts.push_back(cur); cur.clear(); }
+            else cur+=c;
+        }
+        or_parts.push_back(cur);
+    }
+    for (auto& part_raw: or_parts) {
+        std::string p = core::StringUtils::trim(part_raw);
+        if (p.empty()) continue;
+        bool neg = false;
+        if (p.rfind("not ",0)==0) { neg=true; p=core::StringUtils::trim(p.substr(4)); }
+        if (p.rfind("only ",0)==0) p=core::StringUtils::trim(p.substr(5));
+
+        // Split por " and " (case-insensitive, ya lower)
+        std::vector<std::string> and_tokens;
+        {
+            std::string lower_p = p;
+            size_t start=0;
+            while (true) {
+                size_t pos = lower_p.find(" and ", start);
+                if (pos==std::string::npos) {
+                    and_tokens.push_back(core::StringUtils::trim(p.substr(start)));
+                    break;
+                }
+                and_tokens.push_back(core::StringUtils::trim(p.substr(start, pos-start)));
+                start = pos+5;
+            }
+        }
+
+        bool part_match = true;
+        for (auto& tok_raw: and_tokens) {
+            std::string tok = core::StringUtils::trim(tok_raw);
+            std::string low = core::StringUtils::to_lower(tok);
+            if (low=="screen" || low=="all" || low=="(all)" || low=="") continue;
+            if (low=="print" || low=="speech") { part_match=false; break; }
+            // Debe ser (feature: value)
+            if (tok.size()>=2 && tok.front()=='(' && tok.back()==')') {
+                std::string inner = core::StringUtils::trim(tok.substr(1,tok.size()-2));
+                size_t colon = inner.find(':');
+                if (colon==std::string::npos) { part_match=false; break; }
+                std::string feat = core::StringUtils::trim(inner.substr(0,colon));
+                std::string val = core::StringUtils::trim(inner.substr(colon+1));
+                feat = core::StringUtils::to_lower(feat);
+                val = core::StringUtils::to_lower(val);
+                if (val.size()>2 && val.substr(val.size()-2)=="px") val=val.substr(0,val.size()-2);
+                try {
+                    if (feat=="orientation") {
+                        bool is_portrait = vh >= vw;
+                        if (val=="portrait" && !is_portrait) part_match=false;
+                        if (val=="landscape" && is_portrait) part_match=false;
+                    } else {
+                        int num = std::stoi(val);
+                        if (feat=="max-width") { if (!(vw <= num)) part_match=false; }
+                        else if (feat=="min-width") { if (!(vw >= num)) part_match=false; }
+                        else if (feat=="max-height") { if (!(vh <= num)) part_match=false; }
+                        else if (feat=="min-height") { if (!(vh >= num)) part_match=false; }
+                        else if (feat=="width") { if (!(vw == num)) part_match=false; }
+                        else if (feat=="height") { if (!(vh == num)) part_match=false; }
+                        else { part_match=false; }
+                    }
+                } catch (...) { part_match=false; }
+                if (!part_match) break;
+            } else {
+                // token suelto desconocido => no match
+                part_match=false; break;
+            }
+        }
+        if (neg) part_match = !part_match;
+        if (part_match) return true;
+    }
+    return false;
+}
+
+static std::string filter_media(const std::string& css, int vw, int vh) {
     std::string out;
-    size_t i = 0;
+    size_t i=0;
     while (i < css.size()) {
-        if (css[i] == '@') {
-            // @import ...;  → salta hasta ';'
-            size_t semi = css.find(';', i);
+        if (css[i] != '@') { out+=css[i++]; continue; }
+        // Detectar @media vs otros @
+        if (core::StringUtils::to_lower(css.substr(i, 6)) == "@media") {
             size_t brace = css.find('{', i);
-            if (brace == std::string::npos || (semi != std::string::npos && semi < brace)) {
-                i = (semi == std::string::npos) ? css.size() : semi + 1;
-                continue;
+            if (brace==std::string::npos) { out+=css.substr(i); break; }
+            std::string cond = css.substr(i+6, brace-(i+6));
+            // Encontrar cierre balanceado del bloque @media
+            int depth=0;
+            size_t j=brace;
+            for (; j<css.size(); ++j) {
+                if (css[j]=='{') depth++;
+                else if (css[j]=='}') { depth--; if (depth==0) { ++j; break; } }
             }
-            // @media ... { ... } → salta el bloque balanceado
-            int depth = 0;
-            size_t j = brace;
-            for (; j < css.size(); ++j) {
-                if (css[j] == '{') ++depth;
-                else if (css[j] == '}') { --depth; if (depth == 0) { ++j; break; } }
+            std::string inner = css.substr(brace+1, (j>brace+1? j-brace-2 : 0));
+            if (media_condition_matches(cond, vw, vh)) {
+                // Mantener el contenido interior (sin el wrapper @media)
+                // Recursivo: el interior puede tener más @media
+                out += filter_media(inner, vw, vh);
+                out += "\n";
             }
-            i = j;
+            i=j;
             continue;
         }
-        out += css[i++];
+        // Otros @-rules: @import ...; @font-face {...} @keyframes {...} @supports
+        // Los que son con ; se saltan, los de bloque se saltan entero (honesto: no soportados aún)
+        size_t semi = css.find(';', i);
+        size_t brace = css.find('{', i);
+        if (brace==std::string::npos || (semi!=std::string::npos && semi < brace)) {
+            i = (semi==std::string::npos) ? css.size() : semi+1;
+            continue;
+        }
+        int depth=0; size_t j=brace;
+        for (; j<css.size(); ++j) {
+            if (css[j]=='{') depth++;
+            else if (css[j]=='}') { depth--; if (depth==0){ ++j; break; } }
+        }
+        i=j;
+        continue;
     }
     return out;
+}
+
+static std::string strip_at_rules(const std::string& css) {
+    // Compat: sin viewport usa 1024x768 (fallback honesto para tests viejos)
+    return filter_media(css, 1024, 768);
+}
+static std::string strip_at_rules(const std::string& css, int vw, int vh) {
+    return filter_media(css, vw, vh);
 }
 
 // --- helpers de atributos ---------------------------------------------------

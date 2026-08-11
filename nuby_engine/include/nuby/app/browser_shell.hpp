@@ -29,6 +29,7 @@
 #include "../js/js_interp.hpp"
 #include "../media/png_decoder.hpp"
 #include "../media/jpeg_decoder.hpp"
+#include "../net/cookie_jar.hpp"
 #include "html_preprocess.hpp"
 #include <string>
 #include <vector>
@@ -285,6 +286,8 @@ public:
     }
     const std::deque<HistoryEntry>& history() const { return history_; }
     const std::deque<DownloadEntry>& downloads() const { return downloads_; }
+    const net::CookieJar& cookies() const { return cookie_jar_; }
+    size_t cookie_count() const { return cookie_jar_.size(); }
 
     // ---- Puente de teclado del monitor (móvil/PC) -------------------------
     // El monitor (canvas remoto) necesita saber si AHORA hay un campo de
@@ -368,6 +371,7 @@ private:
 
     std::shared_ptr<search::SearchIndex> index_sp_;
     std::string pages_path_;
+    net::CookieJar cookie_jar_; // jar REAL por sesión (aislado, como navegador real)
 
     std::shared_ptr<RenderResult> content_result_; // para hit-testing
     std::shared_ptr<js::Interpreter> js_;          // intérprete de la página actual
@@ -896,7 +900,7 @@ private:
         rebuild_chrome();
 
         auto t0 = now_ms();
-        auto res = net::Fetcher::fetch(url, 5, method, req_body);
+        auto res = net::Fetcher::fetch(url, 5, method, req_body, &cookie_jar_);
         long ms = now_ms() - t0;
 
         if (!res.error.empty()) {
@@ -927,13 +931,17 @@ private:
         // Preproceso REAL: extrae <style>/<script>, convierte <img>/<svg> en placeholders
         preprocess::PreparedPage pp = preprocess::prepare(body, current_url_);
 
-        // CSS externa (1 nivel, honesto)
+        // CSS externa REAL con @media evaluado contra viewport (2026-08-11)
+        // Antes se borraban TODOS los @media (responsive roto). Ahora se conservan
+        // solo los que matchean W/H reales de esta sesión.
         for (auto& css_href : pp.external_css) {
-            auto css_res = net::Fetcher::fetch(css_href, 2);
+            auto css_res = net::Fetcher::fetch(css_href, 2, "GET", "", &cookie_jar_);
             if (css_res.error.empty() && css_res.status_code < 400) {
-                pp.inline_css += "\n" + preprocess::strip_at_rules(css_res.body);
+                pp.inline_css += "\n" + preprocess::strip_at_rules(css_res.body, W, visible_h());
             }
         }
+        // @media en <style> inline también debe evaluarse contra viewport
+        pp.inline_css = preprocess::strip_at_rules(pp.inline_css, W, visible_h());
 
         // Scripts inline + externos REALES: van al intérprete antes del layout, así que
         // si el JS muta el DOM, lo mutado es lo que se pinta. Los <script src> se descargan
@@ -944,7 +952,7 @@ private:
         // JS externo REAL (2026-08-11): antes se ignoraba (TODO honesto). Ahora se descarga.
         size_t js_external_ok = 0, js_external_fail = 0;
         for (auto& js_href : pp.external_scripts) {
-            auto js_res = net::Fetcher::fetch(js_href, 2);
+            auto js_res = net::Fetcher::fetch(js_href, 2, "GET", "", &cookie_jar_);
             if (js_res.error.empty() && js_res.status_code < 400 && !js_res.body.empty()) {
                 // cap 200KB por script
                 std::string body = js_res.body.substr(0, 200*1024);
@@ -1021,7 +1029,7 @@ private:
                 }
                 std::string abs = net::Fetcher::resolve_url(
                     content_base_url_.empty() ? current_url_ : content_base_url_, src);
-                auto ires = net::Fetcher::fetch(abs, 3);
+                auto ires = net::Fetcher::fetch(abs, 3, "GET", "", &cookie_jar_);
                 if (!ires.error.empty() || ires.status_code >= 400) {
                     im->set_attribute("data-nuby-imgfail",
                         ires.error.empty() ? "HTTP " + std::to_string(ires.status_code) : ires.error);
@@ -1468,10 +1476,12 @@ private:
              "· Buscador: indice invertido + BM25 propios (" << std::to_string(index_sp_->document_count())
           << " docs, " << std::to_string(index_sp_->term_count()) << " terminos, rastreo real del 8-ago-2026)<br>"
              "· JavaScript: interprete real (lexer, parser, AST, closures) para un subconjunto documentado<br>"
-             "· Historial, atras/adelante, e indexacion incremental al navegar: todo en memoria real</p>"
+             "· Historial, atras/adelante, e indexacion incremental al navegar: todo en memoria real<br>"
+             "· Cookies reales (RFC6265) por sesión: jar aislado, Domain/Path/Secure, envío automático</p>"
              "<h2 style=\"font-size: 19px; margin: 18px 0 6px 0;\">NO soportado todavia (la verdad)</h2>"
              "<p style=\"font-size: 13px; color: #222;\">"
              "· GIF animado / WebP: solo primer frame real; WebP aún no<br>"
+             "· Media queries: max-width/min-width/orientation reales (responsive honesto)<br>"
              "· &lt;select&gt; no es interactivo; PNG entrelazado Adam7 reporta error explicito<br>"
              "· gzip/br, tablas CSS, position:sticky, fuentes TTF (usa bitmap 8x12), JS moderno completo<br>"
              "· Webs gigantes con JS pesado no funcionaran; nadie construye un Chrome en una semana</p>"
