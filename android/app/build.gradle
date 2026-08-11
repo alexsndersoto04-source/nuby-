@@ -1,40 +1,17 @@
-apply plugin: 'com.android.application'
+plugins { id 'com.android.application' }
 
 android {
-    namespace "com.sombra.game"
-    compileSdkVersion rootProject.ext.compileSdkVersion
-
+    namespace 'com.nuby.browser'
+    compileSdk 34
     defaultConfig {
-        applicationId "com.sombra.game"
-        minSdkVersion rootProject.ext.minSdkVersion
-        targetSdkVersion rootProject.ext.targetSdkVersion
+        applicationId 'com.nuby.browser'
+        minSdk 24
+        targetSdk 34
         versionCode 1
-        versionName "1.0"
+        versionName '2.4.1'
+        externalNativeBuild { cmake { cppFlags '-std=c++20 -Wall -Wextra' } }
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
     }
-
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-}
-
-repositories {
-    google()
-    mavenCentral()
-}
-
-dependencies {
-    implementation fileTree(include: ['*.jar'], dir: 'libs')
-    implementation "androidx.appcompat:appcompat:$rootProject.ext.androidxAppCompatVersion"
-    implementation "androidx.coordinatorlayout:coordinatorlayout:$rootProject.ext.androidxCoordinatorLayoutVersion"
-    implementation "androidx.core:core-splashscreen:$rootProject.ext.androidxCoreSplashScreenVersion"
-    implementation "androidx.webkit:webkit:$rootProject.ext.androidxWebkitVersion"
-    implementation project(':capacitor-android')
+    externalNativeBuild { cmake { path file('src/main/cpp/CMakeLists.txt'); version '3.22.1' } }
+    buildFeatures { buildConfig true }
 }

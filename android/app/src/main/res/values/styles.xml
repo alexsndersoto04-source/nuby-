@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
-    </style>
-    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme">
-        <item name="android:windowBackground">@android:color/black</item>
-    </style>
+  <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+    <item name="android:windowBackground">#07080A</item>
+    <item name="android:fontFamily">sans</item>
+    <item name="android:colorAccent">#1A73E8</item>
+  </style>
 </resources>
