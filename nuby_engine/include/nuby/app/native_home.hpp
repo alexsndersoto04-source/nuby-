@@ -1,4 +1,10 @@
-<!doctype html>
+#pragma once
+#include <string>
+
+namespace nuby::app {
+// HTML/CSS/JS vectorial servido por el motor C++; sin canvas ni frames rasterizados.
+inline std::string native_home_html() {
+    return R"NUBY_NATIVE(<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
@@ -275,3 +281,6 @@
   </script>
 </body>
 </html>
+)NUBY_NATIVE";
+}
+} // namespace nuby::app
