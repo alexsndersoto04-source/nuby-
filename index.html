@@ -2,275 +2,76 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101824">
-  <meta name="description" content="Página de inicio de Nuby">
-  <title>Nuby — Inicio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <title>Nuby</title>
   <style>
-    :root {
-      color-scheme: dark;
-      --bg-top: #1b2a3f;
-      --bg-bottom: #0c121c;
-      --surface: rgba(22, 34, 50, .82);
-      --surface-hover: rgba(74, 105, 145, .22);
-      --line: rgba(190, 214, 240, .12);
-      --text: #f7f9fc;
-      --muted: #aebdce;
-      --accent: #75b8ff;
-      --accent-soft: rgba(117, 184, 255, .17);
-      --shadow: 0 16px 48px rgba(0, 0, 0, .32);
-      font-family: Inter, Roboto, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-
-    * { box-sizing: border-box; }
-    html, body { min-height: 100%; }
-    body {
-      margin: 0;
-      min-width: 320px;
-      background:
-        radial-gradient(circle at 50% -14%, rgba(83, 142, 208, .25), transparent 42%),
-        linear-gradient(155deg, var(--bg-top), var(--bg-bottom) 72%);
-      color: var(--text);
-      overflow-x: hidden;
-    }
-
-    button, input { font: inherit; }
-    button { -webkit-tap-highlight-color: transparent; }
-    .app-shell { min-height: 100dvh; padding-bottom: 105px; }
-
-    .topbar {
-      display: flex;
-      align-items: center;
-      gap: clamp(16px, 4vw, 50px);
-      width: min(1180px, calc(100% - 32px));
-      margin: 0 auto;
-      padding: 20px 0;
-    }
-    .brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      flex: 0 0 auto;
-      color: white;
-      text-decoration: none;
-      letter-spacing: -.04em;
-      font-size: 1.47rem;
-      font-weight: 780;
-    }
-    .brand-mark {
-      display: grid;
-      place-items: center;
-      width: 31px;
-      height: 31px;
-      border-radius: 10px;
-      color: #0e1722;
-      background: linear-gradient(135deg, #a9d5ff, #65aaff);
-      box-shadow: 0 7px 18px rgba(64, 148, 243, .28);
-      letter-spacing: -.1em;
-      font-size: 1rem;
-    }
-
-    .compact-search {
-      position: relative;
-      max-width: 550px;
-      flex: 1;
-      margin-inline: auto;
-    }
-    .compact-search svg, .search-field svg { pointer-events: none; }
-    .compact-search svg {
-      position: absolute;
-      top: 50%; left: 15px;
-      width: 18px; height: 18px;
-      transform: translateY(-50%);
-      color: var(--muted);
-    }
-    .compact-search input {
-      width: 100%;
-      height: 42px;
-      padding: 0 18px 0 45px;
-      outline: none;
-      border: 1px solid var(--line);
-      border-radius: 21px;
-      background: rgba(8, 15, 24, .34);
-      color: var(--text);
-      font-size: .92rem;
-      transition: border-color .2s ease, background .2s ease;
-    }
-    input::placeholder { color: var(--muted); opacity: .9; }
-    input:focus { border-color: rgba(117, 184, 255, .65); background: rgba(7, 14, 23, .58); }
-
-    main {
-      display: grid;
-      place-items: center;
-      min-height: calc(100dvh - 181px);
-      padding: 38px 24px 64px;
-    }
-    .hero { width: min(100%, 720px); text-align: center; }
-    .hero-logo {
-      display: inline-flex;
-      align-items: center;
-      gap: 12px;
-      margin: 0 0 18px;
-      letter-spacing: -.06em;
-      font-size: clamp(2.6rem, 8vw, 4.6rem);
-      font-weight: 800;
-    }
-    .hero-logo .brand-mark { width: .73em; height: .73em; border-radius: .23em; font-size: .4em; }
-    .hero p { margin: 0 0 31px; color: var(--muted); font-size: clamp(.95rem, 2vw, 1.07rem); }
-
-    .search-field { position: relative; width: 100%; }
-    .search-field svg {
-      position: absolute;
-      left: 23px; top: 50%;
-      width: 22px; height: 22px;
-      transform: translateY(-50%);
-      color: #89bff7;
-    }
-    .search-field input {
-      width: 100%;
-      height: 65px;
-      padding: 0 58px;
-      border: 1px solid rgba(198, 222, 250, .2);
-      border-radius: 30px;
-      outline: none;
-      background: rgba(250, 253, 255, .96);
-      color: #1d2938;
-      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.8);
-      font-size: 1.02rem;
-      transition: transform .2s ease, box-shadow .2s ease;
-    }
-    .search-field input::placeholder { color: #687689; }
-    .search-field input:focus { transform: translateY(-2px); box-shadow: 0 20px 55px rgba(0,0,0,.42), 0 0 0 4px var(--accent-soft); }
-    .key-hint {
-      position: absolute;
-      right: 16px; top: 50%;
-      transform: translateY(-50%);
-      padding: 4px 7px;
-      border: 1px solid #d4dce5;
-      border-radius: 6px;
-      color: #687689;
-      background: #f8fafc;
-      font-size: .7rem;
-      line-height: 1;
-    }
-    .quick-links { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 25px; }
-    .quick-links button {
-      padding: 8px 12px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(15, 25, 38, .36);
-      color: var(--muted);
-      cursor: pointer;
-      font-size: .84rem;
-      transition: background .2s ease, color .2s ease;
-    }
-    .quick-links button:hover { background: var(--surface-hover); color: white; }
-
-    .bottom-nav {
-      position: fixed;
-      z-index: 5;
-      right: 0; bottom: 0; left: 0;
-      display: flex;
-      justify-content: center;
-      padding: 0 14px max(11px, env(safe-area-inset-bottom));
-      border-top: 1px solid var(--line);
-      background: rgba(12, 18, 28, .76);
-      backdrop-filter: blur(18px) saturate(130%);
-      -webkit-backdrop-filter: blur(18px) saturate(130%);
-    }
-    .nav-content { display: grid; grid-template-columns: repeat(6, 1fr); width: min(850px, 100%); }
-    .nav-item {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      min-width: 0;
-      height: 72px;
-      border: 0;
-      border-radius: 12px;
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: .7rem;
-      white-space: nowrap;
-      transition: color .2s ease, background .2s ease;
-    }
-    .nav-item svg { width: 21px; height: 21px; stroke-width: 1.8; }
-    .nav-item:hover, .nav-item:focus-visible { color: #eaf4ff; background: var(--surface-hover); outline: none; }
-    .nav-item.active { color: var(--accent); }
-    .nav-item.active svg { fill: currentColor; }
-
-    @media (max-width: 590px) {
-      .topbar { width: calc(100% - 24px); padding: 14px 0; gap: 12px; }
-      .brand { font-size: 1.24rem; } .brand-mark { width: 27px; height: 27px; }
-      .compact-search input { height: 39px; font-size: .78rem; }
-      .compact-search svg { left: 12px; width: 16px; }
-      .compact-search input { padding-left: 38px; }
-      main { min-height: calc(100dvh - 164px); padding-inline: 18px; }
-      .nav-content { gap: 1px; }
-      .nav-item { height: 67px; font-size: .57rem; letter-spacing: -.02em; }
-      .nav-item svg { width: 19px; height: 19px; }
-    }
+    :root { --text:#202124; --muted:#5f6368; --line:#dfe1e5; --blue:#1a73e8; --blue-soft:#e8f0fe; --white:#fff; font-family:"Segoe UI",Roboto,system-ui,sans-serif; }
+    * { box-sizing:border-box; } html,body { min-height:100%; } body { margin:0; color:var(--text); background:#fff; }
+    button,input { font:inherit; } button { -webkit-tap-highlight-color:transparent; }
+    .page { min-height:100dvh; display:flex; flex-direction:column; }
+    header { height:68px; display:flex; align-items:center; padding:0 clamp(20px,4vw,48px); }
+    .logo { color:var(--text); text-decoration:none; font-size:24px; font-weight:300; letter-spacing:-.5px; }
+    main { flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:24px 20px 38px; }
+    .search-area { width:min(584px,100%); text-align:center; transform:translateY(-5%); }
+    .search-box { display:flex; align-items:center; width:100%; height:48px; border:1px solid var(--line); border-radius:24px; background:var(--white); transition:box-shadow .2s,border-color .2s; }
+    .search-box:hover,.search-box:focus-within { border-color:transparent; box-shadow:0 1px 6px rgba(32,33,36,.28); }
+    .search-label { flex:0 0 auto; margin-left:14px; color:var(--muted); font-size:14px; }
+    .search-box input { flex:1; min-width:0; height:100%; border:0; outline:0; padding:0 12px; color:var(--text); background:transparent; font-size:16px; }
+    .search-box input::placeholder { color:var(--muted); opacity:1; }
+    .microphone { flex:0 0 auto; margin-right:14px; border:0; padding:5px; color:var(--muted); background:transparent; cursor:pointer; font-size:13px; }
+    .microphone:hover,.microphone:focus-visible { color:var(--blue); outline:0; }
+    .description { margin:20px 0 0; color:var(--muted); font-size:16px; line-height:1.45; }
+    footer { position:relative; padding:18px 20px max(24px,env(safe-area-inset-bottom)); text-align:center; }
+    .nav-lines { display:flex; flex-direction:column; align-items:center; gap:13px; }
+    .nav-line { display:flex; flex-wrap:wrap; justify-content:center; column-gap:40px; row-gap:10px; }
+    .nav-link { border:0; padding:0; color:var(--muted); background:transparent; cursor:pointer; font-size:14px; line-height:1.35; transition:color .2s; }
+    .nav-link:hover,.nav-link:focus-visible { color:var(--blue); text-decoration:underline; outline:0; }
+    .menu-card { position:fixed; z-index:20; left:50%; bottom:132px; width:min(330px,calc(100vw - 32px)); padding:8px; border-radius:8px; background:#fff; box-shadow:0 4px 20px rgba(0,0,0,.15); opacity:0; visibility:hidden; pointer-events:none; transform:translate(-50%,9px); transition:opacity .2s,transform .2s,visibility .2s; text-align:left; }
+    .menu-card.open { opacity:1; visibility:visible; pointer-events:auto; transform:translate(-50%,0); }
+    .menu-title { padding:9px 11px 6px; color:var(--muted); font-size:12px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; }
+    .menu-item { display:block; width:100%; border:0; border-radius:5px; padding:10px 11px; color:var(--text); background:transparent; cursor:pointer; text-align:left; font-size:14px; transition:background .2s,color .2s; }
+    .menu-item:hover,.menu-item:focus-visible { color:var(--blue); background:var(--blue-soft); outline:0; }
+    .modal { position:fixed; z-index:30; inset:0; display:grid; place-items:center; padding:20px; background:rgba(0,0,0,.4); opacity:0; visibility:hidden; transition:opacity .2s,visibility .2s; }
+    .modal.open { opacity:1; visibility:visible; }
+    .modal-card { position:relative; width:min(390px,100%); padding:31px 30px; border-radius:10px; background:#fff; box-shadow:0 4px 20px rgba(0,0,0,.15); text-align:center; transform:scale(.96); transition:transform .2s; }
+    .modal.open .modal-card { transform:scale(1); } .modal-card h2 { margin:0 0 13px; color:var(--text); font-size:32px; font-weight:300; } .modal-card p { margin:7px 0; color:var(--muted); font-size:15px; }
+    .close { position:absolute; top:10px; right:12px; border:0; color:var(--muted); background:transparent; cursor:pointer; font-size:14px; } .close:hover,.close:focus-visible { color:var(--blue); text-decoration:underline; outline:0; }
+    @media (max-width:480px) { header { height:60px; padding:0 20px; } main { padding:18px 16px 24px; } .search-area { transform:translateY(-7%); } .search-box { height:50px; } .search-label { display:none; } .description { font-size:15px; } footer { padding-inline:12px; } .nav-lines { gap:11px; } .nav-line { column-gap:25px; } .nav-link { font-size:13px; } .menu-card { bottom:145px; } }
   </style>
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <a class="brand" href="#inicio" aria-label="Nuby, ir al inicio"><span class="brand-mark">N</span><span>Nuby</span></a>
-      <form class="compact-search" role="search" id="top-search">
-        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
-        <input aria-label="Buscar videojuegos o tecnología" name="q" placeholder="Buscar videojuegos, tecnología" autocomplete="off">
-      </form>
-    </header>
-
-    <main id="inicio">
-      <section class="hero" aria-labelledby="welcome-title">
-        <h1 class="hero-logo" id="welcome-title"><span class="brand-mark">N</span>Nuby</h1>
-        <p>Tu espacio para descubrir videojuegos, tecnología y mucho más.</p>
-        <form class="search-field" role="search" id="main-search">
-          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.2 4.2"/></svg>
-          <input aria-label="Buscar en Nuby" name="q" placeholder="Buscar videojuegos, tecnología" autocomplete="off" autofocus>
-          <span class="key-hint" aria-hidden="true">Enter</span>
+  <div class="page">
+    <header><a class="logo" href="/" aria-label="Nuby, inicio">Nuby</a></header>
+    <main>
+      <section class="search-area" aria-label="Búsqueda en Nuby">
+        <form class="search-box" id="search-form" role="search">
+          <span class="search-label" aria-hidden="true">Buscar</span>
+          <input id="query" name="q" type="search" placeholder="Buscar videojuegos, tecnología" autocomplete="off" aria-label="Buscar videojuegos y tecnología">
+          <button class="microphone" type="button" id="voice" aria-label="Búsqueda por voz">Voz</button>
         </form>
-        <div class="quick-links" aria-label="Búsquedas sugeridas">
-          <button type="button" data-query="Videojuegos">Videojuegos</button>
-          <button type="button" data-query="Tecnología">Tecnología</button>
-          <button type="button" data-query="Noticias">Noticias</button>
-        </div>
+        <p class="description">Tu espacio para descubrir videojuegos, tecnología y mucho más.</p>
       </section>
     </main>
+    <footer>
+      <nav class="nav-lines" aria-label="Navegación principal">
+        <div class="nav-line"><button class="nav-link" data-home>Inicio</button><button class="nav-link" data-about>Acerca de Nuby</button><button class="nav-link" data-menu="Menú">Menú</button></div>
+        <div class="nav-line"><button class="nav-link" data-menu="Configuración">Configuración</button><button class="nav-link" data-menu="Herramientas">Herramientas</button></div>
+        <div class="nav-line"><button class="nav-link" data-menu="Historial">Historial</button><button class="nav-link" data-menu="Descargas">Descargas</button><button class="nav-link" data-menu="Ayuda">Ayuda</button></div>
+      </nav>
+    </footer>
   </div>
-
-  <nav class="bottom-nav" aria-label="Navegación principal">
-    <div class="nav-content">
-      <button class="nav-item active" type="button" data-section="Inicio" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Inicio</span></button>
-      <button class="nav-item" type="button" data-section="@wikipedia"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"/></svg><span>@wikipedia</span></button>
-      <button class="nav-item" type="button" data-section="Acerca de Nuby"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.2v.1" stroke-linecap="round"/></svg><span>Acerca de Nuby</span></button>
-      <button class="nav-item" type="button" data-section="Historial"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Historial</span></button>
-      <button class="nav-item" type="button" data-section="Descargas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v11M8 10l4 4 4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Descargas</span></button>
-      <button class="nav-item" type="button" data-section="Menú"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/></svg><span>Menú</span></button>
-    </div>
-  </nav>
-
+  <section class="menu-card" id="menu-card" aria-label="Submenú"><div class="menu-title" id="menu-title"></div><div id="menu-options"></div></section>
+  <section class="modal" id="about-modal" aria-modal="true" role="dialog" aria-labelledby="about-title"><div class="modal-card"><button class="close" data-close>Cerrar</button><h2 id="about-title">Nuby</h2><p>Versión 2.4.1</p><p>Desarrollado con ❤️ para navegadores modernos</p></div></section>
   <script>
     (() => {
-      const inputs = [...document.querySelectorAll('input[name="q"]')];
-      const setQuery = value => inputs.forEach(input => { input.value = value; });
-      document.querySelectorAll('form[role="search"]').forEach(form => form.addEventListener('submit', event => {
-        event.preventDefault();
-        const query = form.elements.q.value.trim();
-        if (query) window.location.href = 'https://www.google.com/search?q=' + encodeURIComponent(query);
-      }));
-      document.querySelectorAll('[data-query]').forEach(button => button.addEventListener('click', () => {
-        setQuery(button.dataset.query);
-        document.querySelector('#main-search input').focus();
-      }));
-      document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
-        document.querySelectorAll('.nav-item').forEach(item => { item.classList.remove('active'); item.removeAttribute('aria-current'); });
-        button.classList.add('active'); button.setAttribute('aria-current', 'page');
-        if (button.dataset.section === 'Inicio') document.querySelector('#inicio').scrollIntoView({ behavior: 'smooth' });
-      }));
+      const menus={"Configuración":["Tema: Claro / Oscuro / Automático","Idioma: Español / Inglés / Portugués","Privacidad: Limpiar datos / Cookies / Historial","Sincronización: Activar / Desactivar"],"Herramientas":["Inspeccionar elemento","Consola JavaScript","Red","Rendimiento"],"Historial":["Últimas 24 horas","Últimos 7 días","Últimas 4 semanas","Limpiar historial"],"Descargas":["Ver descargas","Carpeta de descargas","Limpiar lista"],"Ayuda":["Centro de ayuda","Reportar problema","Acerca de Nuby"],"Menú":["Nueva pestaña","Favoritos","Información de Nuby"]};
+      const card=document.querySelector('#menu-card'), title=document.querySelector('#menu-title'), options=document.querySelector('#menu-options'), modal=document.querySelector('#about-modal');
+      const closeMenu=()=>card.classList.remove('open');
+      document.querySelectorAll('[data-menu]').forEach(button=>button.addEventListener('click',event=>{event.stopPropagation();const name=button.dataset.menu;title.textContent=name;options.replaceChildren(...menus[name].map(item=>{const b=document.createElement('button');b.className='menu-item';b.type='button';b.textContent=item;b.onclick=()=>{closeMenu();if(item==='Acerca de Nuby')modal.classList.add('open');else alert(item);};return b;}));card.classList.add('open');}));
+      document.querySelector('[data-home]').onclick=()=>location.reload(); document.querySelector('[data-about]').onclick=()=>modal.classList.add('open'); document.querySelector('[data-close]').onclick=()=>modal.classList.remove('open'); modal.onclick=e=>{if(e.target===modal)modal.classList.remove('open');};
+      document.addEventListener('click',e=>{if(!e.target.closest('.menu-card'))closeMenu();}); document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeMenu();modal.classList.remove('open');}});
+      document.querySelector('#voice').onclick=()=>alert('Búsqueda por voz'); document.querySelector('#search-form').onsubmit=e=>{e.preventDefault();const q=document.querySelector('#query').value.trim();if(q)location.href='https://www.google.com/search?q='+encodeURIComponent(q);};
     })();
   </script>
 </body>
