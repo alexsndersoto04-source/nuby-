@@ -68,6 +68,10 @@ enum class Display {
     INLINE,
     INLINE_BLOCK,
     FLEX,
+    TABLE,
+    TABLE_ROW,
+    TABLE_CELL,
+    TABLE_CAPTION,
     NONE
 };
 
@@ -75,7 +79,8 @@ enum class Position {
     STATIC,
     RELATIVE,
     ABSOLUTE,
-    FIXED
+    FIXED,
+    STICKY
 };
 
 enum class FlexDirection {

@@ -45,6 +45,7 @@ struct ComputedStyle {
     core::Color border_color{core::Color::transparent()};
     BorderStyle border_style{BorderStyle::NONE};
     core::BorderRadius border_radius{0.0f};
+    BoxSizing box_sizing{BoxSizing::CONTENT_BOX};
 
     core::Color color{core::Color::black()};
     core::Color background_color{core::Color::transparent()};
@@ -269,11 +270,16 @@ private:
             else if (v == "inline") style.display = Display::INLINE;
             else if (v == "inline-block") style.display = Display::INLINE_BLOCK;
             else if (v == "flex") style.display = Display::FLEX;
+            else if (v == "table") style.display = Display::TABLE;
+            else if (v == "table-row") style.display = Display::TABLE_ROW;
+            else if (v == "table-cell") style.display = Display::TABLE_CELL;
+            else if (v == "table-caption") style.display = Display::TABLE_CAPTION;
             else style.display = Display::BLOCK;
         } else if (p == "position") {
             if (v == "relative") style.position = Position::RELATIVE;
             else if (v == "absolute") style.position = Position::ABSOLUTE;
             else if (v == "fixed") style.position = Position::FIXED;
+            else if (v == "sticky") style.position = Position::STICKY;
             else style.position = Position::STATIC;
         } else if (p == "width") {
             style.width = Length::parse(v);
@@ -393,6 +399,9 @@ private:
             else if (v == "flex-end") style.align_items = AlignItems::FLEX_END;
             else if (v == "baseline") style.align_items = AlignItems::BASELINE;
             else style.align_items = AlignItems::STRETCH;
+        } else if (p == "box-sizing") {
+            if (v == "border-box") style.box_sizing = BoxSizing::BORDER_BOX;
+            else style.box_sizing = BoxSizing::CONTENT_BOX;
         } else if (p == "gap") {
             style.gap = Length::parse(v).resolve(0, style.font_size, 16.0f);
         } else if (p == "flex-grow") {

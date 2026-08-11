@@ -37,6 +37,14 @@ private:
                 type = BoxType::INLINE_BOX;
             } else if (style.display == css::Display::INLINE_BLOCK) {
                 type = BoxType::INLINE_BLOCK_BOX;
+            } else if (style.display == css::Display::TABLE) {
+                type = BoxType::BLOCK_BOX; // tabla como bloque (filas apiladas)
+            } else if (style.display == css::Display::TABLE_ROW) {
+                type = BoxType::BLOCK_BOX; // fila como bloque
+            } else if (style.display == css::Display::TABLE_CELL) {
+                type = BoxType::INLINE_BLOCK_BOX; // celda como inline-block para estar lado a lado
+            } else if (style.display == css::Display::TABLE_CAPTION) {
+                type = BoxType::BLOCK_BOX;
             }
 
             auto box = std::make_shared<LayoutBox>(type);
@@ -450,12 +458,16 @@ private:
         // Standard CSS Margin Collapsing
         float collapsed_margin_top = std::max(dims.margin.top, prev_margin_bottom) - prev_margin_bottom;
 
-        // Resolve Width
+        // Resolve Width (con box-sizing real)
         if (style.width.is_auto()) {
             float available_w = containing_block.width - dims.margin.horizontal() - dims.padding.horizontal() - dims.border.horizontal();
             dims.content.width = std::max(0.0f, available_w);
         } else {
-            dims.content.width = style.width.resolve(containing_block.width);
+            float w = style.width.resolve(containing_block.width);
+            if (style.box_sizing == css::BoxSizing::BORDER_BOX) {
+                w = std::max(0.0f, w - dims.padding.horizontal() - dims.border.horizontal());
+            }
+            dims.content.width = w;
         }
 
         // Center with margin: auto
@@ -465,9 +477,13 @@ private:
             dims.margin.left = dims.margin.right = rem / 2.0f;
         }
 
-        // Resolve Height
+        // Resolve Height (con box-sizing)
         if (!style.height.is_auto()) {
-            dims.content.height = style.height.resolve(containing_block.height);
+            float h = style.height.resolve(containing_block.height);
+            if (style.box_sizing == css::BoxSizing::BORDER_BOX) {
+                h = std::max(0.0f, h - dims.padding.vertical() - dims.border.vertical());
+            }
+            dims.content.height = h;
         } else {
             dims.content.height = 0.0f;
         }
