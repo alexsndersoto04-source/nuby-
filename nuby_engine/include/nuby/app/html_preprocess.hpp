@@ -410,17 +410,9 @@ static PreparedPage prepare(const std::string& raw, const std::string& page_url)
             }
         }
 
-        // <select>…</select> → placeholder con primera opción
-        if (ieq_at(raw, i, "<select")) {
-            size_t open_end = raw.find('>', i);
-            if (open_end == std::string::npos) break;
-            size_t close = find_close(raw, open_end + 1, "select");
-            out += "<span data-nuby-ph=\"select\">[lista desplegable]</span>";
-            if (close == std::string::npos) { i = raw.size(); break; }
-            size_t close_end = raw.find('>', close);
-            i = (close_end == std::string::npos) ? raw.size() : close_end + 1;
-            continue;
-        }
+        // <select> REAL (2026-08-11): antes era placeholder [lista desplegable] — simulación.
+        // Ahora pasa REAL al DOM: el motor lo pinta, permite elegir opción y lo envía en forms.
+        // No se intercepta aquí, cae al flujo normal de etiquetas.
 
         // resto de etiquetas y texto: tal cual
         out += raw[i++];

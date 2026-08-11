@@ -99,6 +99,80 @@ static inline void render_form_control(const std::shared_ptr<layout::LayoutBox>&
         return;
     }
 
+    if (tag == "select") {
+        // SELECT REAL: muestra la opción seleccionada de verdad (no placeholder)
+        std::string display;
+        std::string sel_value;
+        // Buscar opción seleccionada real en el DOM
+        for (auto& ch : el->get_children()) {
+            if (!ch->is_element()) continue;
+            auto opt = std::static_pointer_cast<html::Element>(ch);
+            if (opt->get_tag_name() != "option") continue;
+            std::string opt_text = opt->get_text_content();
+            // trim para display limpio
+            std::string opt_val = opt->get_attribute("value");
+            if (opt_val.empty()) opt_val = core::StringUtils::trim(opt_text);
+            if (display.empty()) { display = core::StringUtils::trim(opt_text); sel_value = opt_val; }
+            if (opt->has_attribute("selected")) { display = core::StringUtils::trim(opt_text); sel_value = opt_val; break; }
+        }
+        if (display.empty()) {
+            // fallback: si no hay <option>, usar placeholder o value del select
+            display = el->get_attribute("placeholder");
+            if (display.empty()) display = "—";
+        }
+        // clip
+        {
+            paint::DrawCommand clip;
+            clip.type = paint::CommandType::PUSH_CLIP;
+            clip.rect = c;
+            dl.add_command(clip);
+        }
+        // texto de la opción seleccionada
+        {
+            paint::DrawCommand cmd;
+            cmd.type = paint::CommandType::DRAW_TEXT;
+            auto runs = layout::TextShaper::wrap_text(display, std::max(10.0f, c.width - 24.0f), fs, box->style.font_weight, box->style.color, lh);
+            float y0 = c.y + std::max(2.0f, (c.height - lh) / 2.0f);
+            if (!runs.empty()) {
+                auto& r = runs[0];
+                cmd.rect = { c.x + 4.0f, y0, std::min(r.rect.width, c.width - 24.0f), r.rect.height };
+                cmd.text = r.text;
+                cmd.font_size = r.font_size;
+                cmd.font_weight = r.font_weight;
+                cmd.color = r.color;
+                dl.add_command(cmd);
+            } else if (!display.empty()) {
+                cmd.rect = { c.x + 4.0f, y0, c.width - 24.0f, lh };
+                cmd.text = display;
+                cmd.font_size = fs;
+                cmd.font_weight = box->style.font_weight;
+                cmd.color = box->style.color;
+                dl.add_command(cmd);
+            }
+        }
+        // flecha dropdown (triángulo simple con dos rects)
+        {
+            float ax = c.x + c.width - 16.0f;
+            float ay = c.y + c.height/2.0f - 3.0f;
+            paint::DrawCommand arr;
+            arr.type = paint::CommandType::FILL_RECT;
+            arr.rect = { ax, ay, 8.0f, 2.0f };
+            arr.color = core::Color(95,99,104);
+            dl.add_command(arr);
+            paint::DrawCommand arr2;
+            arr2.type = paint::CommandType::FILL_RECT;
+            arr2.rect = { ax+2.0f, ay+2.0f, 4.0f, 2.0f };
+            arr2.color = core::Color(95,99,104);
+            dl.add_command(arr2);
+        }
+        {
+            paint::DrawCommand pop;
+            pop.type = paint::CommandType::POP_CLIP;
+            dl.add_command(pop);
+        }
+        return;
+    }
+
     if (!is_textish) return;
 
     {   // clip: el texto no se sale del campo (clip REAL del rasterizador)

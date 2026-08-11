@@ -762,9 +762,34 @@ private:
                 return true;
             }
             if (tag == "select") {
-                // select honesto: aún no interactivo (documentado)
-                status_ = "<select> no interactivo todavía — documentado";
-                rebuild_chrome();
+                // SELECT REAL: cicla a la siguiente opción (interacción real, no placeholder)
+                std::vector<std::shared_ptr<html::Element>> opts;
+                for (auto& ch : el->get_children()) {
+                    if (!ch->is_element()) continue;
+                    auto o = std::static_pointer_cast<html::Element>(ch);
+                    if (o->get_tag_name() == "option") opts.push_back(o);
+                }
+                if (!opts.empty()) {
+                    size_t cur = 0; bool found = false;
+                    for (size_t i=0;i<opts.size();++i) if (opts[i]->has_attribute("selected")) { cur=i; found=true; break; }
+                    if (!found) {
+                        // primera vez: primera opción es la seleccionada por defecto (spec HTML)
+                        opts[0]->set_attribute("selected", "");
+                        status_ = "Select: " + core::StringUtils::trim(opts[0]->get_text_content());
+                    } else {
+                        opts[cur]->remove_attribute("selected");
+                        size_t nxt = (cur+1) % opts.size();
+                        opts[nxt]->set_attribute("selected", "");
+                        std::string txt = core::StringUtils::trim(opts[nxt]->get_text_content());
+                        std::string val = opts[nxt]->get_attribute("value");
+                        if (val.empty()) val = txt;
+                        status_ = "Select: " + txt + " (" + std::to_string(nxt+1) + "/" + std::to_string(opts.size()) + ") → value='" + val + "'";
+                    }
+                    refresh_content();
+                } else {
+                    status_ = "<select> vacío — sin opciones";
+                    rebuild_chrome();
+                }
                 return true;
             }
         }
@@ -1173,7 +1198,34 @@ private:
                         } else if (type == "submit" || type == "button" || type == "reset" || tag == "button") {
                             include = (el == clicked);
                         } else if (tag == "select") {
-                            include = false; // select no interactivo todavía (honesto)
+                            // SELECT REAL: envía el value de la opción seleccionada (o texto si no hay value)
+                            std::string sel_val;
+                            std::string sel_text;
+                            for (auto& ch : el->get_children()) {
+                                if (!ch->is_element()) continue;
+                                auto o = std::static_pointer_cast<html::Element>(ch);
+                                if (o->get_tag_name() != "option") continue;
+                                if (o->has_attribute("selected")) {
+                                    sel_val = o->get_attribute("value");
+                                    sel_text = core::StringUtils::trim(o->get_text_content());
+                                    break;
+                                }
+                            }
+                            if (sel_val.empty() && sel_text.empty()) {
+                                // sin selección explícita: primera opción por defecto (spec HTML)
+                                for (auto& ch : el->get_children()) {
+                                    if (!ch->is_element()) continue;
+                                    auto o = std::static_pointer_cast<html::Element>(ch);
+                                    if (o->get_tag_name() != "option") continue;
+                                    sel_val = o->get_attribute("value");
+                                    sel_text = core::StringUtils::trim(o->get_text_content());
+                                    break;
+                                }
+                            }
+                            if (sel_val.empty()) sel_val = sel_text;
+                            // guarda el valor final en `val` para el encoding
+                            val = sel_val;
+                            include = true;
                         }
                         if (include) {
                             if (!qs.empty()) qs += '&';
@@ -1482,7 +1534,7 @@ private:
              "<p style=\"font-size: 13px; color: #222;\">"
              "· GIF animado / WebP: solo primer frame real; WebP aún no<br>"
              "· Media queries: max-width/min-width/orientation reales (responsive honesto)<br>"
-             "· &lt;select&gt; no es interactivo; PNG entrelazado Adam7 reporta error explicito<br>"
+             "· PNG entrelazado Adam7 reporta error explicito; <select> ahora es real (ciclo por click)<br>"
              "· gzip/br, tablas CSS, position:sticky, fuentes TTF (usa bitmap 8x12), JS moderno completo<br>"
              "· Webs gigantes con JS pesado no funcionaran; nadie construye un Chrome en una semana</p>"
              "<div style=\"margin-top: 22px;\"><a href=\"" << esc(back_to) << "\" style=\"color: #0b57d0; font-size: 14px;\">volver</a></div>"
@@ -1725,6 +1777,8 @@ private:
         input, textarea, select, button { display: inline-block; background-color: #ffffff; color: #1a1a1a; border: 1px solid #9aa0a6; border-radius: 4px; padding: 3px 6px; font-size: 15px; line-height: 20px; margin: 2px 0; }
         input { width: 220px; height: 26px; }
         textarea { width: 380px; height: 72px; }
+        select { width: 220px; height: 26px; }
+        option { display: none; }
         input[type="checkbox"], input[type="radio"] { width: 14px; height: 14px; padding: 2px; }
         input[type="radio"] { border-radius: 9px; }
         input[type="submit"], input[type="button"], input[type="reset"], button { width: 120px; height: 30px; background-color: #e8f0fe; color: #0b57d0; border: 1px solid #aec7ee; border-radius: 6px; }

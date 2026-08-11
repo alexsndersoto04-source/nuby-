@@ -553,10 +553,11 @@ private:
 
 public:
     explicit LayoutEngine(core::RectF viewport = {0, 0, 1000, 800})
-        : viewport_(viewport) {}
+        : viewport_(viewport) { css::Length::set_viewport(viewport.width, viewport.height); }
 
     void set_viewport(float w, float h) {
         viewport_ = core::RectF(0, 0, w, h);
+        css::Length::set_viewport(w, h);
     }
 
     void add_stylesheet(const css::StyleSheet& sheet) {

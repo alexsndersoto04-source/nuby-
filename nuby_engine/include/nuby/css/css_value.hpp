@@ -15,6 +15,7 @@ enum class Unit {
     PERCENT,
     VH,
     VW,
+    CALC,
     AUTO,
     NONE
 };
@@ -22,6 +23,7 @@ enum class Unit {
 struct Length {
     float value{0.0f};
     Unit unit{Unit::PX};
+    std::string calc_expr; // para CALC, expresión interior sin calc()
 
     Length() = default;
     Length(float val, Unit u) : value(val), unit(u) {}
@@ -37,14 +39,20 @@ struct Length {
     bool is_percent() const { return unit == Unit::PERCENT; }
     bool is_px() const { return unit == Unit::PX; }
 
+    // Viewport real para vw/vh (actualizado por LayoutEngine::set_viewport)
+    inline static float s_viewport_w = 1024.0f;
+    inline static float s_viewport_h = 768.0f;
+    static void set_viewport(float w, float h) { s_viewport_w = w; s_viewport_h = h; }
+
     float resolve(float container_size, float font_size = 16.0f, float root_font_size = 16.0f) const {
         switch (unit) {
             case Unit::PX: return value;
             case Unit::EM: return value * font_size;
             case Unit::REM: return value * root_font_size;
             case Unit::PERCENT: return (value / 100.0f) * container_size;
-            case Unit::VH: return (value / 100.0f) * 800.0f; // standard viewport height
-            case Unit::VW: return (value / 100.0f) * 1200.0f; // standard viewport width
+            case Unit::VH: return (value / 100.0f) * s_viewport_h;
+            case Unit::VW: return (value / 100.0f) * s_viewport_w;
+            case Unit::CALC: return parse_calc(calc_expr, container_size, font_size, root_font_size).value;
             case Unit::AUTO:
             case Unit::NONE:
             default: return 0.0f;
@@ -52,6 +60,7 @@ struct Length {
     }
 
     static Length parse(const std::string& str);
+    static Length parse_calc(const std::string& expr, float container_size, float font_size, float root_font_size);
 };
 
 enum class Display {
