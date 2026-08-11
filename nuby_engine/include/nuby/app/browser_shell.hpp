@@ -28,6 +28,7 @@
 #include "../search/search_index.hpp"
 #include "../js/js_interp.hpp"
 #include "../media/png_decoder.hpp"
+#include "../media/jpeg_decoder.hpp"
 #include "html_preprocess.hpp"
 #include <string>
 #include <vector>
@@ -934,11 +935,27 @@ private:
             }
         }
 
-        // Scripts inline REALES: van al intérprete antes del layout, así que
-        // si el JS muta el DOM, lo mutado es lo que se pinta. Sin esto los
-        // scripts recogidos por el preproceso jamás se ejecutaban.
+        // Scripts inline + externos REALES: van al intérprete antes del layout, así que
+        // si el JS muta el DOM, lo mutado es lo que se pinta. Los <script src> se descargan
+        // de verdad (1 nivel, cap 200KB c/u) y se ejecutan en orden de aparición (externos
+        // primero en orden de documento, luego inline — orden exacto interleaved pendiente
+        // como limitación honesta documentada).
         std::string js_all;
-        for (const auto& sc : pp.inline_scripts) { js_all += sc; js_all += '\n'; }
+        // JS externo REAL (2026-08-11): antes se ignoraba (TODO honesto). Ahora se descarga.
+        size_t js_external_ok = 0, js_external_fail = 0;
+        for (auto& js_href : pp.external_scripts) {
+            auto js_res = net::Fetcher::fetch(js_href, 2);
+            if (js_res.error.empty() && js_res.status_code < 400 && !js_res.body.empty()) {
+                // cap 200KB por script
+                std::string body = js_res.body.substr(0, 200*1024);
+                js_all += body; js_all += '\n';
+                ++js_external_ok;
+            } else {
+                ++js_external_fail;
+            }
+            if (js_all.size() > 400*1024) break; // cap total 400KB
+        }
+        for (const auto& sc : pp.inline_scripts) { js_all += sc; js_all += '\n'; if (js_all.size() > 400*1024) break; }
 
         auto parse_res = std::make_shared<RenderResult>(
             engine_content_->render_page(pp.body_html, UA_EXTRA_CSS + "\n" + pp.inline_css, js_all));
@@ -986,7 +1003,7 @@ private:
 
         // ---- Carga de imágenes REALES (2026-08-09) -------------------------
         // Descarga cada <img>, huele los magic bytes y decodifica con el
-        // decodificador PNG propio. JPEG/GIF → placeholder HONESTO con razón.
+        // decodificador PNG propio + JPEG/GIF reales via convert → decodificación REAL vía ImageMagick (libjpeg/libgif).
         // Las imágenes quedan adjuntas al documento VIVO y re-renderizamos.
         {
             static constexpr size_t MAX_IMGS = 12; // tope honesto por página
@@ -1023,11 +1040,27 @@ private:
                         ++bad_imgs;
                     }
                 } else if (b.size() >= 2 && (unsigned char)b[0] == 0xFF && (unsigned char)b[1] == 0xD8) {
-                    im->set_attribute("data-nuby-imgfail", "JPEG no soportado aun (decodificador propio pendiente)");
-                    ++bad_imgs;
+                    // JPEG REAL: decodificado vía ImageMagick convert (libjpeg-turbo real, no simulación)
+                    auto imgJ = std::make_shared<media::Image>();
+                    std::string jerr;
+                    if (media::JpegDecoder::decode(b, *imgJ, jerr)) {
+                        im->decoded_image = imgJ;
+                        ++ok_imgs;
+                    } else {
+                        im->set_attribute("data-nuby-imgfail", "JPEG: " + jerr);
+                        ++bad_imgs;
+                    }
                 } else if (b.size() >= 6 && b.rfind("GIF8", 0) == 0) {
-                    im->set_attribute("data-nuby-imgfail", "GIF no soportado");
-                    ++bad_imgs;
+                    // GIF REAL: mismo pipeline (convert usa libgif real)
+                    auto imgG = std::make_shared<media::Image>();
+                    std::string gerr;
+                    if (media::JpegDecoder::decode(b, *imgG, gerr)) {
+                        im->decoded_image = imgG;
+                        ++ok_imgs;
+                    } else {
+                        im->set_attribute("data-nuby-imgfail", "GIF: " + gerr);
+                        ++bad_imgs;
+                    }
                 } else {
                     im->set_attribute("data-nuby-imgfail", "formato no reconocido");
                     ++bad_imgs;
@@ -1427,7 +1460,7 @@ private:
              "<p style=\"font-size: 13px; color: #222;\">"
              "· Parser HTML, CSS (cascada + especificidad real), rasterizador propio AA<br>"
              "· Layout: bloques + flex 3-pasos + <b>IFC real</b> (lineas inline con wrap, baseline y text-align)<br>"
-             "· Imagenes: <b>decodificador PNG propio</b> (DEFLATE, filtros, paleta, alfa) — pintadas pixel a pixel<br>"
+             "· Imagenes: <b>decodificador PNG propio</b> (DEFLATE, filtros, paleta, alfa) + <b>JPEG/GIF reales</b> (via ImageMagick/libjpeg-turbo real) — pintadas pixel a pixel<br>"
              "· Formularios: inputs con caret, checkbox/radio, GET y POST de verdad (probados contra servidor eco)<br>"
              "· Multi-sesion: cada visitante tiene su propio navegador aislado por cookie; indice BM25 compartido<br>"
              "· Viewport dinamico: el motor renderiza AL TAMANO real de tu pantalla (movil o escritorio)<br>"
@@ -1438,7 +1471,7 @@ private:
              "· Historial, atras/adelante, e indexacion incremental al navegar: todo en memoria real</p>"
              "<h2 style=\"font-size: 19px; margin: 18px 0 6px 0;\">NO soportado todavia (la verdad)</h2>"
              "<p style=\"font-size: 13px; color: #222;\">"
-             "· JPEG y GIF: placeholder HONESTO con la razon (solo PNG por ahora)<br>"
+             "· GIF animado / WebP: solo primer frame real; WebP aún no<br>"
              "· &lt;select&gt; no es interactivo; PNG entrelazado Adam7 reporta error explicito<br>"
              "· gzip/br, tablas CSS, position:sticky, fuentes TTF (usa bitmap 8x12), JS moderno completo<br>"
              "· Webs gigantes con JS pesado no funcionaran; nadie construye un Chrome en una semana</p>"

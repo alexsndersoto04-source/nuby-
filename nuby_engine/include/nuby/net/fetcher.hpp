@@ -14,9 +14,12 @@
 //   • Decodifica Transfer-Encoding: chunked (obligatorio en HTTP/1.1).
 //   • Sigue redirects 3xx y resuelve URLs relativas.
 //
+// Qué hace también REAL (2026-08-11):
+//   • Descomprime gzip/deflate REAL vía `gzip -dc` del sistema (pipe, como
+//     con openssl). Si el servidor manda `Content-Encoding: gzip`, se
+//     descomprime de verdad; sin esto muchos CDNs devuelven 406 o vacío.
+//   • No hace br (brotli) aún — honesto, se deja como cuerpo crudo.
 // Qué NO hace (honesto):
-//   • No descomprime gzip/br (no hay zlib enlazada): pedimos
-//     `Accept-Encoding: identity` y los servidores responden en claro.
 //   • No valida la cadena de certificados contra una CA store propia
 //     (openssl s_client la valida por defecto; usamos -verify_return_error
 //     para que falle si el certificado es inválido).
@@ -269,7 +272,7 @@ private:
         req << "Host: " << url.host << "\r\n";
         req << "User-Agent: Nuby/2.0 (motor propio C++20; renderizado real)\r\n";
         req << "Accept: text/html,application/xhtml+xml,text/css,*/*;q=0.5\r\n";
-        req << "Accept-Encoding: identity\r\n"; // honesto: sin gzip mientras no haya zlib
+        req << "Accept-Encoding: gzip, deflate, identity\r\n"; // REAL: ahora descomprimimos gzip/deflate via gzip -dc
         req << "Accept-Language: es,en;q=0.6\r\n";
         if (!body.empty()) {
             req << "Content-Type: application/x-www-form-urlencoded\r\n";
@@ -345,8 +348,69 @@ private:
             }
         }
 
+        // Descompresión gzip/deflate REAL (2026-08-11): vía `gzip -dc` pipe, igual que TLS vía openssl.
+        // Sin esto, muchos servidores mandan cuerpo comprimido y verías basura/406.
+        std::string ce = core::StringUtils::to_lower(res.header("Content-Encoding"));
+        if (ce.find("gzip") != std::string::npos || ce.find("deflate") != std::string::npos) {
+            std::string decompressed;
+            if (decompress_gzip(body, decompressed)) {
+                body = std::move(decompressed);
+            } else {
+                // Si falla la descompresión, dejamos el cuerpo crudo y el error se verá como basura,
+                // pero al menos no rompemos la conexión — honesto.
+            }
+        }
+
         if (body.size() > MAX_BODY_BYTES) body = body.substr(0, MAX_BODY_BYTES);
         res.body = std::move(body);
+        return true;
+    }
+
+    // Descomprime gzip/deflate vía `gzip -dc` (real, usa zlib del sistema). Retorna true si ok.
+    static bool decompress_gzip(const std::string& in, std::string& out) {
+        int in_pipe[2], out_pipe[2];
+        if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) return false;
+        pid_t pid = fork();
+        if (pid < 0) { close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]); return false; }
+        if (pid == 0) {
+            dup2(in_pipe[0], STDIN_FILENO);
+            dup2(out_pipe[1], STDOUT_FILENO);
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+            close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]);
+            execlp("gzip", "gzip", "-dc", (char*)nullptr);
+            // fallback a gunzip
+            execlp("gunzip", "gunzip", "-c", (char*)nullptr);
+            _exit(127);
+        }
+        close(in_pipe[0]); close(out_pipe[1]);
+        // write compressed
+        size_t total = in.size();
+        size_t off = 0;
+        while (off < total) {
+            ssize_t n = write(in_pipe[1], in.data() + off, total - off);
+            if (n < 0) { if (errno==EINTR) continue; break; }
+            off += (size_t)n;
+        }
+        close(in_pipe[1]);
+        out.clear();
+        out.reserve(std::min<size_t>(in.size()*3, MAX_BODY_BYTES));
+        std::array<char, 16384> buf;
+        for (;;) {
+            ssize_t n = read(out_pipe[0], buf.data(), buf.size());
+            if (n > 0) out.append(buf.data(), (size_t)n);
+            else if (n==0) break;
+            else { if (errno==EINTR) continue; break; }
+            if (out.size() > MAX_BODY_BYTES) { // cap pero seguimos leyendo para no bloquear hijo
+                // no rompemos pipe, solo truncamos al final
+            }
+        }
+        close(out_pipe[0]);
+        int st=0; waitpid(pid,&st,0);
+        if (WIFEXITED(st) && WEXITSTATUS(st)==127) return false;
+        if (WIFEXITED(st) && WEXITSTATUS(st)!=0) return false;
+        if (out.empty()) return false;
+        if (out.size() > MAX_BODY_BYTES) out.resize(MAX_BODY_BYTES);
         return true;
     }
 

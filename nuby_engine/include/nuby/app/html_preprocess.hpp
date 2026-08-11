@@ -31,6 +31,7 @@ struct PreparedPage {
     std::string body_html;                 // HTML limpio para el parser
     std::string inline_css;                // CSS de los <style> de la página
     std::vector<std::string> inline_scripts;
+    std::vector<std::string> external_scripts; // URLs absolutas de <script src>
     std::vector<std::string> external_css; // URLs absolutas de <link rel=stylesheet>
     std::string base_href;                 // <base href> si existe
 };
@@ -218,8 +219,10 @@ static PreparedPage prepare(const std::string& raw, const std::string& page_url)
             if (src.empty()) {
                 std::string code = raw.substr(open_end + 1, content_end - open_end - 1);
                 if (!core::StringUtils::trim(code).empty()) pp.inline_scripts.push_back(code);
+            } else {
+                // Script externo REAL: lo descarga BrowserShell como con CSS
+                pp.external_scripts.push_back(net::Fetcher::resolve_url(page_url, src));
             }
-            // TODO honesto: scripts externos src= no se descargan todavía
             if (close == std::string::npos) { i = raw.size(); break; }
             size_t close_end = raw.find('>', close);
             i = (close_end == std::string::npos) ? raw.size() : close_end + 1;

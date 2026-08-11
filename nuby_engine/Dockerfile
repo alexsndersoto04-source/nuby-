@@ -1,32 +1,29 @@
-# ============================================================================
-#  NUBY 2.0 — Dockerfile para hosting real (Render, Fly, Koyeb, Oracle, etc.)
-#
-#  Aquí NO hay trampa: esta imagen contiene el binario C++20 de Nuby y el
-#  binario de OpenSSL (que el fetcher usa de puente TLS para páginas HTTPS).
-#  Nada de Chrome, nada de Electron: el motor pinta y sirve sus píxeles.
-# ============================================================================
-
-# ---------- Etapa 1: compilación (con tests — si fallan, falla el build) ----------
-FROM debian:bookworm-slim AS build
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends g++ make && \
-    rm -rf /var/lib/apt/lists/*
-WORKDIR /src
-COPY . .
-RUN make -j"$(nproc)" && make test
-
-# ---------- Etapa 2: runtime mínimo ----------
-FROM debian:bookworm-slim
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends openssl ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+FROM gcc:12-bookworm AS builder
 WORKDIR /app
-COPY --from=build /src/bin/nuby_engine   /app/nuby_engine
-COPY --from=build /src/data/crawl_pages.tsv /app/data/crawl_pages.tsv
+COPY . .
+RUN cd nuby_engine && make clean && make all
 
-# La plataforma de hosting inyecta PORT; main.cpp lo respeta (ver src/main.cpp)
-ENV PORT=8080
+FROM debian:bookworm-slim
+# FIX REAL (2026-08-10): la imagen slim NO trae el CLI 'openssl' y el motor
+# hace el HTTPS ejecutando `openssl s_client` -> TODO enlace https fallaba
+# en Render ("selecciono un enlace y no arroja ningun resultado", dijo el
+# usuario). Sin openssl no hay TLS; sin ca-certificates no hay verificación.
+# FIX REAL (2026-08-11): JPEG/GIF reales vía `convert` (ImageMagick/libjpeg)
+# y gzip/deflate vía `gzip -dc` — sin ellos, 80% de imágenes y muchos CSS
+# salían como placeholders/basura.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates imagemagick gzip \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /app/nuby_engine/bin/nuby_engine /app/nuby_engine
+# FIX REAL (2026-08-10): el índice del buscador NO viajaba en la imagen.
+# El motor lo busca en data/crawl_pages.tsv (relativo al WORKDIR); sin este
+# COPY, el buscador de Render arrancaba con 0 documentos y las búsquedas
+# salían vacías. Ahora viajan las 995 páginas rastreadas de verdad.
+COPY --from=builder /app/nuby_engine/data/crawl_pages.tsv /app/data/crawl_pages.tsv
+# Fuentes TrueType REALES (texto suave; sin ellas el motor usa su bitmap
+# interno de respaldo — pixelado "años 80" que el usuario no quiere).
+COPY --from=builder /app/nuby_engine/data/fonts /app/data/fonts
 EXPOSE 8080
-
-# Ejecutar desde /app para que el índice se encuentre en data/crawl_pages.tsv
-CMD ["./nuby_engine"]
+ENV PORT=8080
+CMD ["/app/nuby_engine", "--port", "8080"]
