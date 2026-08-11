@@ -60,6 +60,7 @@ struct ComputedStyle {
 
     // Flex properties
     FlexDirection flex_direction{FlexDirection::ROW};
+    FlexWrap flex_wrap{FlexWrap::NOWRAP};
     JustifyContent justify_content{JustifyContent::FLEX_START};
     AlignItems align_items{AlignItems::STRETCH};
     float flex_grow{0.0f};
@@ -375,6 +376,10 @@ private:
             else if (v == "row-reverse") style.flex_direction = FlexDirection::ROW_REVERSE;
             else if (v == "column-reverse") style.flex_direction = FlexDirection::COLUMN_REVERSE;
             else style.flex_direction = FlexDirection::ROW;
+        } else if (p == "flex-wrap") {
+            if (v == "wrap") style.flex_wrap = FlexWrap::WRAP;
+            else if (v == "wrap-reverse") style.flex_wrap = FlexWrap::WRAP_REVERSE;
+            else style.flex_wrap = FlexWrap::NOWRAP;
         } else if (p == "justify-content") {
             if (v == "center") style.justify_content = JustifyContent::CENTER;
             else if (v == "flex-end") style.justify_content = JustifyContent::FLEX_END;

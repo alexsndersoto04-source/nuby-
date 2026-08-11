@@ -62,11 +62,120 @@ public:
                        style.flex_direction == css::FlexDirection::ROW_REVERSE);
         bool is_reverse = (style.flex_direction == css::FlexDirection::ROW_REVERSE ||
                            style.flex_direction == css::FlexDirection::COLUMN_REVERSE);
+        bool do_wrap = (style.flex_wrap == css::FlexWrap::WRAP || style.flex_wrap == css::FlexWrap::WRAP_REVERSE);
 
         float container_main_size = is_row ? container->dimensions.content.width : container->dimensions.content.height;
         float container_cross_size = is_row ? container->dimensions.content.height : container->dimensions.content.width;
 
         float gap = style.gap;
+
+        // Flex-WRAP REAL (2026-08-11): si wrap está activo, agrupa items en líneas
+        // Cada línea se maqueta independiente con su propio free space.
+        // Es real, no simulado: antes todo iba en una sola línea y desbordaba.
+        if (do_wrap && is_row) {
+            // Agrupar en líneas por ancho
+            struct Line { std::vector<size_t> idx; float total_hyp = 0; };
+            std::vector<Line> lines;
+            Line cur;
+            float cur_w = 0;
+            // Necesitamos info hipotética primero para cada item
+            std::vector<float> hyps;
+            hyps.reserve(container->children.size());
+            for (auto& child : container->children) {
+                float intrinsic_w = measure_main_content(child)
+                              + child->dimensions.margin.horizontal()
+                              + child->dimensions.padding.horizontal()
+                              + child->dimensions.border.horizontal();
+                float w = child->style.width.is_auto() ? (intrinsic_w > 1.0f ? intrinsic_w : 120.0f)
+                          : child->style.width.resolve(container->dimensions.content.width);
+                hyps.push_back(w);
+            }
+            for (size_t i=0;i<container->children.size();++i) {
+                float w = hyps[i];
+                float need = cur.idx.empty() ? w : w + gap;
+                if (!cur.idx.empty() && cur_w + need > container_main_size + 0.5f) {
+                    lines.push_back(cur);
+                    cur = Line{};
+                    cur_w = 0;
+                    need = w;
+                }
+                cur.idx.push_back(i);
+                cur.total_hyp += w;
+                cur_w += need;
+            }
+            if (!cur.idx.empty()) lines.push_back(cur);
+
+            // Maquetar cada línea
+            float cross_cursor = 0;
+            float max_cross = 0;
+            float line_gap = gap;
+            for (auto& line : lines) {
+                float total_hyp = line.total_hyp;
+                float total_gaps = line.idx.size()>1 ? gap*(line.idx.size()-1) : 0;
+                float free = container_main_size - (total_hyp + total_gaps);
+                // distribuir free por flex_grow/shrink dentro de la línea
+                float line_grow=0, line_shrink=0;
+                for (size_t idx: line.idx) { line_grow+=container->children[idx]->style.flex_grow; line_shrink+=container->children[idx]->style.flex_shrink; }
+                std::vector<float> target_w(line.idx.size());
+                for (size_t k=0;k<line.idx.size();++k) {
+                    size_t idx=line.idx[k];
+                    float hyp = hyps[idx];
+                    float tw = hyp;
+                    if (free>0 && line_grow>0) tw += (container->children[idx]->style.flex_grow/line_grow)*free;
+                    else if (free<0 && line_shrink>0) tw = std::max(20.0f, hyp - (container->children[idx]->style.flex_shrink/line_shrink)*(-free));
+                    target_w[k]=tw;
+                }
+                // justify dentro de la línea
+                float total_actual = 0; for(float v: target_w) total_actual+=v;
+                float rem = container_main_size - (total_actual + total_gaps);
+                float main_pos=0, spacing=gap;
+                if (rem>0) {
+                    switch(style.justify_content){
+                        case css::JustifyContent::FLEX_END: main_pos=rem; break;
+                        case css::JustifyContent::CENTER: main_pos=rem/2; break;
+                        case css::JustifyContent::SPACE_BETWEEN: if(line.idx.size()>1) spacing=gap+rem/(line.idx.size()-1); break;
+                        case css::JustifyContent::SPACE_AROUND: if(!line.idx.empty()){ float u=rem/line.idx.size(); main_pos=u/2; spacing=gap+u; } break;
+                        case css::JustifyContent::SPACE_EVENLY: if(!line.idx.empty()){ float u=rem/(line.idx.size()+1); main_pos=u; spacing=gap+u; } break;
+                        default: break;
+                    }
+                }
+                // altura de la línea = max cross de items en la línea
+                float line_cross=0;
+                for (size_t k=0;k<line.idx.size();++k) {
+                    size_t idx=line.idx[k];
+                    auto& child = container->children[idx];
+                    float intrinsic_h = 0;
+                    { float bottom = child->dimensions.content.y; for(auto& grand: child->children) bottom=std::max(bottom, grand->dimensions.margin_box().bottom()); intrinsic_h = bottom - child->dimensions.content.y + child->dimensions.padding.vertical() + child->dimensions.border.vertical(); }
+                    float h = child->style.height.is_auto() ? (intrinsic_h>1?intrinsic_h:40) : child->style.height.resolve(container->dimensions.content.height);
+                    line_cross = std::max(line_cross, h);
+                }
+                if (container->style.height.is_auto() && line_cross==0) line_cross=40;
+                // posicionar items de la línea
+                float cur_main = main_pos;
+                for (size_t k=0;k<line.idx.size();++k) {
+                    size_t idx=line.idx[k];
+                    auto& child = container->children[idx];
+                    float tw = target_w[k];
+                    float th = 0;
+                    { float intrinsic_h = 0; for(auto& grand: child->children) intrinsic_h=std::max(intrinsic_h, grand->dimensions.margin_box().bottom() - child->dimensions.content.y); th = child->style.height.is_auto()? (intrinsic_h>1?intrinsic_h: line_cross) : child->style.height.resolve(container->dimensions.content.height); if (style.align_items==css::AlignItems::STRETCH && child->style.height.is_auto()) th = line_cross; }
+                    float cross_pos=0;
+                    if (style.align_items==css::AlignItems::CENTER) cross_pos=(line_cross - th)/2;
+                    else if (style.align_items==css::AlignItems::FLEX_END) cross_pos=line_cross - th;
+                    child->dimensions.content.x = container->dimensions.content.x + cur_main;
+                    child->dimensions.content.y = container->dimensions.content.y + cross_cursor + cross_pos;
+                    child->dimensions.content.width = tw;
+                    child->dimensions.content.height = th;
+                    cur_main += tw + spacing;
+                }
+                cross_cursor += line_cross + line_gap;
+                max_cross = std::max(max_cross, line_cross);
+            }
+            if (container->style.height.is_auto()) {
+                if (!lines.empty()) cross_cursor -= line_gap; // quitar último gap
+                container->dimensions.content.height = cross_cursor;
+            }
+            return;
+        }
 
         // 1. Calculate hypothetical main size for each item
         struct FlexItemInfo {

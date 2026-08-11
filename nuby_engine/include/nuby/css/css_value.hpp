@@ -85,6 +85,12 @@ enum class FlexDirection {
     COLUMN_REVERSE
 };
 
+enum class FlexWrap {
+    NOWRAP,
+    WRAP,
+    WRAP_REVERSE
+};
+
 enum class JustifyContent {
     FLEX_START,
     FLEX_END,
