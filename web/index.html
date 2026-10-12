@@ -56,11 +56,11 @@
     <div class="card">
       <h2>Qué es real en esta página</h2>
       <ul>
-        <li>El motor C++ completo compilado a WebAssembly (<code>web/nuby.wasm</code>).</li>
+        <li>El motor C++ completo compilado a WebAssembly (<code>nuby.wasm</code>).</li>
         <li>La interfaz del navegador la pinta el motor con su propio rasterizador.</li>
         <li>El buscador es BM25 sobre 995 documentos del rastreo real
-            (<code>nuby_engine/data/crawl_pages.tsv</code>).</li>
-        <li>Las fuentes son los mismos ficheros TrueType que usa la versión nativa.</li>
+            (<code>data/crawl_pages.tsv</code>).</li>
+        <li>Las fuentes son los mismos ficheros TrueType que usa la versión nativa (<code>data/fonts</code>).</li>
       </ul>
     </div>
     <div class="card">
@@ -93,6 +93,7 @@
 <footer>
   Repositorio: <a href="https://github.com/alexsndersoto04-source/nuby-">alexsndersoto04-source/nuby-</a>
   · El motor se puede compilar y ejecutar de forma nativa (<code>cd nuby_engine &amp;&amp; make &amp;&amp; ./bin/nuby_engine</code>).
+  · <a href="about.html">Qué es real y qué no</a>
 </footer>
 
 <script src="nuby-wasi.js"></script>

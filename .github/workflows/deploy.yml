@@ -51,7 +51,19 @@ jobs:
           python3 -m http.server 8099 --directory web &
           sleep 2
           curl -sf -o /dev/null http://127.0.0.1:8099/index.html
+      - name: Comprobar que hay un navegador real disponible
+        run: |
+          set -e
+          for c in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$c" >/dev/null 2>&1; then
+              echo "navegador: $($c --version)"
+              exit 0
+            fi
+          done
+          echo "No hay navegador instalado en el runner"; exit 1
       - name: Prueba en un navegador real (Chrome) con capturas
+        env:
+          CHROME_REQUIRED: "1"
         run: |
           npm i --no-save puppeteer-core
           node nuby_engine/wasm/browser_check.mjs http://127.0.0.1:8099/index.html "$PWD/capturas"
