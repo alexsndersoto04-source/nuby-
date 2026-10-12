@@ -27,10 +27,12 @@ const CANDIDATES = [
 
 const executablePath = CANDIDATES.find((p) => fs.existsSync(p));
 if (!executablePath) {
-  console.log("No hay Chrome/Chromium en esta máquina: se omite la comprobación de navegador.");
-  process.exit(0);
+  const required = process.env.CHROME_REQUIRED === "1";
+  console.log("No hay Chrome/Chromium en esta máquina: " +
+              (required ? "la comprobación era obligatoria." : "se omite la comprobación."));
+  process.exit(required ? 1 : 0);
 }
-console.log("Chrome:", executablePath);
+console.log("Chrome encontrado:", executablePath);
 
 const browser = await puppeteer.launch({
   executablePath,
@@ -90,6 +92,8 @@ try {
     [statDemo.includes("HTTP 200") || statDemo.includes("KB"), "el motor descargó y pintó la página de ejemplo"],
     [statExternal.length > 0, "la navegación externa se reportó (no se ocultó el fallo)"],
   ];
+  const version = await browser.version();
+  console.log("versión del navegador:", version);
   for (const [ok, what] of checks) {
     console.log((ok ? "OK   " : "FALLA ") + what);
     if (!ok) failed = true;

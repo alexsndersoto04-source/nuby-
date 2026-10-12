@@ -10,8 +10,11 @@ invertido + BM25, red HTTP/HTTPS real e intérprete JavaScript propio.
 ## Pruébalo sin instalar nada (WebAssembly)
 
 El motor completo, compilado a WebAssembly, se ejecuta dentro de tu navegador:
-**[alexsndersoto04-source.github.io/nuby-/web/](https://alexsndersoto04-source.github.io/nuby-/web/)**
-(se publica automáticamente en cada push a `main`, después de pasar las pruebas).
+**<https://alexsndersoto04-source.github.io/nuby-/>**
+y la explicación de qué es real y qué no: **<https://alexsndersoto04-source.github.io/nuby-/about.html>**
+
+Se publica automáticamente en cada push a `main`, y solo después de que pasen las
+pruebas del motor nativo (20/20), las comprobaciones en Node y la prueba en Chrome real.
 
 Además hay una build **nativa** con servidor propio:
 
