@@ -1,20 +1,56 @@
-# Despliegue 24/7 de Nuby en Servidor Gratuito (Render / Cloud)
+# Despliegue de Nuby
 
-## 1. Despliegue Automático en Render.com (Gratuito de por vida)
+Este documento describe solo lo que está comprobado. Nada de promesas de
+servicio permanente ni de repositorios que no son este.
 
-El repositorio de **Nuby** ya cuenta con el `Dockerfile` y `render.yaml` preconfigurados para compilar en C++20 y mantenerse activo 24/7 en la nube sin costo.
+## 1. Lo que ya está publicado (automático)
 
-### Pasos para Activar tu Servidor Nuby en Render:
-1. Ve a [Render.com](https://render.com) y crea una cuenta gratuita con tu GitHub.
-2. Haz clic en **"New +"** -> **"Web Service"**.
-3. Selecciona tu repositorio de GitHub: `juego-fabrica` (rama `arena/019fda5b-juego-fabrica` o `main`).
-4. En **Runtime**, selecciona **Docker** (Render detectará automáticamente el `Dockerfile`).
-5. En **Instance Type**, selecciona **Free ($0/month)**.
-6. Haz clic en **"Create Web Service"**.
+**<https://alexsndersoto04-source.github.io/nuby-/>** — el motor Nuby compilado a
+WebAssembly ejecutándose en el navegador del visitante, sin servidor.
 
----
+- Se publica desde `.github/workflows/deploy.yml` en cada push a `main`.
+- Antes de publicar, el workflow **debe** pasar:
+  1. `native`: compila el motor C++ y ejecuta `make test` (20/20 suites).
+  2. `browser-build`: compila a wasm, ejecuta `nuby_engine/wasm/node_check.mjs`
+     y `nuby_engine/wasm/browser_check.mjs` en un Chrome real (con capturas
+     guardadas como artefacto). Si no hay navegador disponible, el job falla.
+  3. `deploy`: sube el directorio `web/` a GitHub Pages.
+- Si cualquiera de esos pasos falla, **no** se publica nada nuevo: la versión
+  anterior sigue en línea.
 
-## 2. Lo que Obtendrás
-* Tu propio dominio público con certificado SSL gratuito (ejemplo: `https://nuby-browser.onrender.com`).
-* El servidor C++20 de **Nuby** ejecutándose de por vida en la nube con consumo menor a 20 MB de RAM.
-* Indexación persistente por lotes y acceso global desde cualquier teléfono o computadora del mundo.
+Límites conocidos de esa versión (CORS, sin JS de páginas, sin escritura en
+disco): ver `about.html` en el propio sitio.
+
+## 2. Servidor propio (opcional, no verificado por el proyecto)
+
+El repositorio incluye `Dockerfile` y `render.yaml` para quien quiera levantar
+el servidor nativo (motor + red + JavaScript reales) en un servicio que ejecute
+Docker. Pasos generales:
+
+1. Crea una cuenta en el proveedor y conecta este repositorio.
+2. Crea un **Web Service** con runtime **Docker** apuntando a `Dockerfile`.
+3. El motor escucha en el puerto que indique la variable `PORT` (por defecto 8080).
+
+Advertencias honestas:
+
+- **No hay ningún despliegue de este tipo hecho ni verificado por el proyecto**;
+  la URL de ejemplo que aparecía antes en este documento no existe como servicio
+  de Nuby.
+- Muchos planes gratuitos **suspenden** el servicio cuando no recibe tráfico y lo
+  despiertan con lentitud la primera vez. No es un servicio "24/7 de por vida":
+  eso depende del proveedor que elijas, no de este repositorio.
+- El servidor nativo guarda el historial y las páginas indexadas en la memoria
+  del proceso; en un plan pequeño conviene limitar las sesiones (ya hay un tope
+  de 24 sesiones simultáneas y 90 minutos de inactividad por sesión).
+
+## 3. Ejecutarlo en tu propia máquina
+
+```bash
+cd nuby_engine
+make
+make test
+./bin/nuby_engine --port 8080   # abre http://localhost:8080
+```
+
+Esta es la única forma que el proyecto puede comprobar de verdad sin depender de
+un tercero, y es la que se usa en las pruebas del repositorio.
