@@ -296,7 +296,7 @@ private:
             if (v == "bold") style.font_weight = 700;
             else if (v == "normal") style.font_weight = 400;
             else {
-                try { style.font_weight = std::stoi(v); } catch (...) { style.font_weight = 400; }
+                style.font_weight = core::StringUtils::to_int(v, 400);
             }
         } else if (p == "line-height") {
             style.line_height = Length::parse(v).resolve(100.0f, style.font_size, 16.0f);
@@ -391,13 +391,13 @@ private:
         } else if (p == "gap") {
             style.gap = Length::parse(v).resolve(0, style.font_size, 16.0f);
         } else if (p == "flex-grow") {
-            try { style.flex_grow = std::stof(v); } catch (...) {}
+            style.flex_grow = core::StringUtils::to_float(v, 0.0f);
         } else if (p == "flex-shrink") {
-            try { style.flex_shrink = std::stof(v); } catch (...) {}
+            style.flex_shrink = core::StringUtils::to_float(v, 0.0f);
         } else if (p == "opacity") {
-            try { style.opacity = std::stof(v); } catch (...) {}
+            style.opacity = core::StringUtils::to_float(v, 1.0f);
         } else if (p == "z-index") {
-            try { style.z_index = std::stoi(v); } catch (...) {}
+            style.z_index = core::StringUtils::to_int(v, 0);
         }
     }
 

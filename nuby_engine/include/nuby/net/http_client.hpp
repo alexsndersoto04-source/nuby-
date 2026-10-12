@@ -1,5 +1,15 @@
 #pragma once
 
+#if defined(__wasi__)
+// ---------------------------------------------------------------------------
+// HTTPClient es el cliente HTTP del motor NATIVO (sockets POSIX + openssl).
+// En la build de navegador (WebAssembly) no existe: la ruta de red real es
+// net/fetcher.hpp, que delega en el anfitrion. Este archivo se neutraliza
+// para no arrastrar cabeceras POSIX inexistentes en WASI.
+// ---------------------------------------------------------------------------
+namespace nuby::net { class HTTPClient; }
+#else
+
 #include "url.hpp"
 #include "../core/string_utils.hpp"
 #include <string>
@@ -160,3 +170,5 @@ public:
 };
 
 } // namespace nuby::net
+
+#endif // __wasi__

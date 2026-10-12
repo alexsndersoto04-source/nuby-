@@ -85,16 +85,17 @@ static std::string decode_entities(const std::string& in) {
         std::string ent = in.substr(i + 1, semi - i - 1);
         if (ent.empty()) { out += in[i]; continue; }
         if (ent[0] == '#') {
-            try {
-                uint32_t cp;
-                if (ent.size() > 1 && (ent[1] == 'x' || ent[1] == 'X'))
-                    cp = (uint32_t)std::stoul(ent.substr(2), nullptr, 16);
-                else
-                    cp = (uint32_t)std::stoul(ent.substr(1), nullptr, 10);
-                push_utf8(out, cp);
+            unsigned long cp = 0;
+            if (ent.size() > 1 && (ent[1] == 'x' || ent[1] == 'X'))
+                cp = core::StringUtils::to_ulong_base(ent.substr(2), 16, 0);
+            else
+                cp = core::StringUtils::to_ulong_base(ent.substr(1), 10, 0);
+            if (cp > 0) {
+                push_utf8(out, (uint32_t)cp);
                 i = semi;
                 continue;
-            } catch (...) { out += in[i]; continue; }
+            }
+            out += in[i]; continue;   // referencia numerica invalida: literal
         }
         bool found = false;
         for (auto& [name, val] : named) {

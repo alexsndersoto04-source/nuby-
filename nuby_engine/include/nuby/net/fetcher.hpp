@@ -32,13 +32,38 @@
 #include <cstdio>
 #include <memory>
 #include <array>
+
+#if !defined(__wasi__)
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#endif
 
 namespace nuby::net {
+
+#if defined(__wasi__)
+// ---------------------------------------------------------------------------
+// RED EN WEBASSEMBLY (build de navegador)
+//
+// Dentro de un navegador el motor NO puede abrir sockets: el navegador no se
+// lo permite a JavaScript ni a WebAssembly. La red la tiene el ANFITRIÓN (la
+// página que hospeda el motor), así que el motor le pide la respuesta HTTP y
+// la sigue procesando él mismo con su propio parser (parse_raw_response).
+//
+// El anfitrión devuelve la respuesta HTTP cruda (cabeceras + cuerpo) o un
+// código distinto de 0 si la petición falló (por ejemplo, CORS: el navegador
+// solo permite leer respuestas del mismo origen o de servidores que lo
+// autoricen explícitamente).
+// Es una IMPORTACION de WebAssembly: la define la pagina anfitriona (JS) y
+// el motor la ve como una funcion normal. Nombre en el import: nuby.http_fetch.
+extern "C" int nuby_host_http_fetch(const char* url, int url_len,
+                                    const char* method, int method_len,
+                                    const char* body, int body_len,
+                                    const unsigned char** out_data, int* out_len)
+    __attribute__((import_module("nuby"), import_name("http_fetch")));
+#endif
 
 struct FetchResult {
     int status_code{0};
@@ -82,6 +107,23 @@ public:
             }
 
             std::string raw;
+#if defined(__wasi__)
+            {
+                const unsigned char* out = nullptr;
+                int out_len = 0;
+                int rc = nuby_host_http_fetch(current.c_str(), (int)current.size(),
+                                              cur_method.c_str(), (int)cur_method.size(),
+                                              cur_body.c_str(), (int)cur_body.size(),
+                                              &out, &out_len);
+                if (rc != 0 || out == nullptr || out_len <= 0) {
+                    res.error = "El navegador bloqueo la lectura de " + current +
+                                " (red del anfitrion / CORS)";
+                    res.elapsed_ms = now_ms() - t0;
+                    return res;
+                }
+                raw.assign((const char*)out, (size_t)out_len);
+            }
+#else
             if (url.scheme == "https") {
                 raw = fetch_via_openssl(url, cur_method, cur_body, res.error);
             } else if (url.scheme == "http" || url.scheme.empty()) {
@@ -91,6 +133,7 @@ public:
                 res.elapsed_ms = now_ms() - t0;
                 return res;
             }
+#endif
 
             if (!res.error.empty()) {
                 res.elapsed_ms = now_ms() - t0;
@@ -168,6 +211,7 @@ private:
     }
 
     // ---- http:// : socket POSIX propio ------------------------------------
+#if !defined(__wasi__)
     static std::string fetch_via_socket(const URL& url, const std::string& method,
                                         const std::string& body, std::string& err) {
         struct addrinfo hints{}, *res_info = nullptr;
@@ -262,6 +306,8 @@ private:
         return raw;
     }
 
+#endif // !__wasi__
+
     static std::string build_request(const URL& url, const std::string& method,
                                      const std::string& body) {
         std::ostringstream req;
@@ -281,6 +327,7 @@ private:
     }
 
     // Lectura binario-segura hasta EOF (la conexión es Connection: close).
+#if !defined(__wasi__)
     static std::string read_all_fd(int fd) {
         std::string data;
         std::array<char, 16384> buf;
@@ -298,6 +345,8 @@ private:
     }
 
     // ---- Parseo de respuesta: status line + headers + dechunk --------------
+#endif // !__wasi__
+
     static bool parse_raw_response(const std::string& raw, FetchResult& res) {
         size_t header_end = raw.find("\r\n\r\n");
         size_t delim_len = 4;
@@ -314,7 +363,8 @@ private:
         if (!std::getline(hs, status_line)) return false;
         auto parts = core::StringUtils::split_whitespace(status_line);
         if (parts.size() < 2) return false;
-        try { res.status_code = std::stoi(parts[1]); } catch (...) { return false; }
+        res.status_code = core::StringUtils::to_int(parts[1], 0);
+        if (res.status_code <= 0) return false;
         for (size_t i = 2; i < parts.size(); ++i) {
             if (!res.status_message.empty()) res.status_message += " ";
             res.status_message += parts[i];
@@ -338,10 +388,8 @@ private:
             // Content-Length fiable si existe
             std::string cl = res.header("Content-Length");
             if (!cl.empty()) {
-                try {
-                    size_t n = (size_t)std::stoul(cl);
-                    if (n < body.size()) body = body.substr(0, n);
-                } catch (...) {}
+                unsigned long n = core::StringUtils::to_ulong_base(cl, 10, 0);
+                if (n > 0 && (size_t)n < body.size()) body = body.substr(0, (size_t)n);
             }
         }
 
@@ -360,8 +408,8 @@ private:
             size_t semi = size_str.find(';'); // chunk-extensions
             if (semi != std::string::npos) size_str = size_str.substr(0, semi);
             unsigned long chunk_size = 0;
-            try { chunk_size = std::stoul(core::StringUtils::trim(size_str), nullptr, 16); }
-            catch (...) { break; }
+            chunk_size = core::StringUtils::to_ulong_base(core::StringUtils::trim(size_str), 16, 0);
+            if (chunk_size == 0 && core::StringUtils::trim(size_str) != "0") break;
             pos = eol + 2;
             if (chunk_size == 0) break; // último chunk
             if (pos + chunk_size > chunked.size()) { // cuerpo truncado

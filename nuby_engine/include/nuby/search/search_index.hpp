@@ -25,6 +25,7 @@
 #include <sstream>
 #include <fstream>
 #include <mutex>
+#include "../core/platform.hpp"
 
 namespace nuby::search {
 
@@ -48,7 +49,7 @@ public:
     // ---------------- Indexación ----------------
     size_t add_document(const std::string& url, const std::string& title,
                         const std::string& text) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         Document doc;
         doc.id = docs_.size();
         doc.url = url;
@@ -76,12 +77,12 @@ public:
         return docs_.back().id;
     }
 
-    size_t document_count() const { std::lock_guard<std::mutex> lock(mutex_); return docs_.size(); }
-    size_t term_count() const { std::lock_guard<std::mutex> lock(mutex_); return index_.size(); }
+    size_t document_count() const { core::LockGuard<core::Mutex> lock(mutex_); return docs_.size(); }
+    size_t term_count() const { core::LockGuard<core::Mutex> lock(mutex_); return index_.size(); }
 
     // ---------------- Búsqueda BM25 pura ----------------
     std::vector<SearchHit> query(const std::string& q, size_t max_results = 20) const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         std::vector<SearchHit> hits;
         auto terms = tokenize(q);
         if (terms.empty() || docs_.empty()) return hits;
@@ -121,18 +122,18 @@ public:
 
     // ---------------- Persistencia (formato propio TSV) ----------------
     bool save(const std::string& path) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::ofstream f(path, std::ios::binary | std::ios::trunc);
-        if (!f) return false;
+        core::LockGuard<core::Mutex> lock(mutex_);
+        std::ostringstream out;
         for (const auto& d : docs_) {
-            f << esc(d.url) << '\t' << esc(d.title) << '\t' << esc(d.text) << '\n';
+            out << esc(d.url) << '\t' << esc(d.title) << '\t' << esc(d.text) << '\n';
         }
-        return true;
+        return core::write_file_binary(path, out.str());
     }
 
     size_t load(const std::string& path) {
-        std::ifstream f(path, std::ios::binary);
-        if (!f) return 0;
+        std::string content = core::read_file_binary(path);
+        if (content.empty()) return 0;
+        std::istringstream f(content);
         size_t added = 0;
         std::string line;
         while (std::getline(f, line)) {
@@ -235,7 +236,7 @@ private:
     std::unordered_map<std::string, std::vector<Posting>> index_;
     size_t total_doc_len_{0};
     double avg_doc_len_{0.0};
-    mutable std::mutex mutex_;
+    mutable core::Mutex mutex_;
 };
 
 } // namespace nuby::search

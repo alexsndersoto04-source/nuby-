@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
+#include "../core/platform.hpp"
 
 namespace nuby::paint {
 
@@ -180,12 +181,12 @@ private:
     // cada (codepoint, tamaño efectivo, negrita) se rasteriza UNA vez.
     static TrueTypeFont::RasterResult cached_raster(TrueTypeFont& f, uint32_t cp,
                                                     float size_eff, bool bold) {
-        static std::mutex mx;
+        static core::Mutex mx;
         static std::unordered_map<uint64_t, TrueTypeFont::RasterResult> cache;
         uint64_t key = ((uint64_t)cp << 33) |
                        ((uint64_t)(uint32_t)std::lround(size_eff * 4) << 1) |
                        (bold ? 1u : 0u);
-        std::lock_guard<std::mutex> lk(mx);
+        core::LockGuard<core::Mutex> lk(mx);
         auto it = cache.find(key);
         if (it != cache.end()) return it->second;
         if (cache.size() > 4000) cache.clear();

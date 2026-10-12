@@ -37,9 +37,7 @@ struct URL {
         size_t colon_pos = host_port.find(':');
         if (colon_pos != std::string::npos) {
             url.host = host_port.substr(0, colon_pos);
-            try {
-                url.port = std::stoi(host_port.substr(colon_pos + 1));
-            } catch (...) {}
+            url.port = core::StringUtils::to_int(host_port.substr(colon_pos + 1), url.port);
         } else {
             url.host = host_port;
         }

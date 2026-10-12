@@ -10,7 +10,11 @@
 // La API se conserva para no romper consumidores antiguos.
 // ============================================================================
 
+#if defined(__wasi__)
+#include "js_stub.hpp"   // build de navegador: sin excepciones C++ (ver js_stub.hpp)
+#else
 #include "js_interp.hpp"
+#endif
 #include "../html/document.hpp"
 #include <string>
 #include <memory>

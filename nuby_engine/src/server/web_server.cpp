@@ -18,6 +18,7 @@
 #include "../../include/nuby/server/web_server.hpp"
 #include "../../include/nuby/app/native_home.hpp"
 #include "../../include/nuby/core/string_utils.hpp"
+#include "../../include/nuby/server/rle_codec.hpp"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -42,68 +43,6 @@ static std::string get_monitor_html() {
     // capturas ni una UI dibujada en canvas: HTML/CSS/SVG se compone de forma
     // vectorial por el navegador del visitante.
     return nuby::app::native_home_html();
-}
-
-// ---------------------------------------------------------------------------
-// RLE propio de Nuby (PackBits a nivel de píxel). Graba RGB (sin alfa).
-// Header: [u32 w][u32 h][u32 len_datos]
-// ---------------------------------------------------------------------------
-static void put_u32(std::vector<unsigned char>& out, uint32_t v) {
-    out.push_back((unsigned char)(v & 0xFF));
-    out.push_back((unsigned char)((v >> 8) & 0xFF));
-    out.push_back((unsigned char)((v >> 16) & 0xFF));
-    out.push_back((unsigned char)((v >> 24) & 0xFF));
-}
-
-static std::vector<unsigned char> encode_rle(const std::vector<uint32_t>& px, int w, int h) {
-    std::vector<unsigned char> out;
-    put_u32(out, (uint32_t)w);
-    put_u32(out, (uint32_t)h);
-    put_u32(out, 0); // parche len luego
-
-    size_t total = px.size();
-    size_t i = 0;
-    while (i < total) {
-        // ¿cuántos píxeles iguales siguen?
-        size_t run = 1;
-        while (i + run < total && px[i + run] == px[i] && run < 128) ++run;
-        if (run >= 3) {
-            out.push_back((unsigned char)(257 - run)); // 129..254 → 3..128 reps
-            out.push_back((unsigned char)(px[i] & 0xFF));          // B? no: guardamos R,G,B
-            // nuestro framebuffer es 0xAARRGGBB → mandamos R,G,B
-            // (corrijo orden: extraemos cada canal explícitamente)
-            out.resize(out.size() - 1);
-            out.push_back((unsigned char)((px[i] >> 16) & 0xFF)); // R
-            out.push_back((unsigned char)((px[i] >> 8) & 0xFF));  // G
-            out.push_back((unsigned char)(px[i] & 0xFF));         // B
-            i += run;
-            continue;
-        }
-        // literal: agrupa hasta 128 píxeles no-repetidos
-        size_t lit_start = i;
-        size_t lit_count = 0;
-        while (i < total && lit_count < 128) {
-            size_t r2 = 1;
-            while (i + r2 < total && px[i + r2] == px[i] && r2 < 128) ++r2;
-            if (r2 >= 3) break;
-            i += r2;
-            lit_count += r2;
-        }
-        out.push_back((unsigned char)(lit_count - 1));
-        for (size_t k = 0; k < lit_count; ++k) {
-            uint32_t p = px[lit_start + k];
-            out.push_back((unsigned char)((p >> 16) & 0xFF));
-            out.push_back((unsigned char)((p >> 8) & 0xFF));
-            out.push_back((unsigned char)(p & 0xFF));
-        }
-    }
-
-    uint32_t len = (uint32_t)(out.size() - 12);
-    out[8]  = (unsigned char)(len & 0xFF);
-    out[9]  = (unsigned char)((len >> 8) & 0xFF);
-    out[10] = (unsigned char)((len >> 16) & 0xFF);
-    out[11] = (unsigned char)((len >> 24) & 0xFF);
-    return out;
 }
 
 // --- HTTP utilidades --------------------------------------------------------

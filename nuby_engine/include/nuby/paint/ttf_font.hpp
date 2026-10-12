@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../core/platform.hpp"
+
 // ============================================================================
 // NUBY TRUE TYPE RASTERIZER — texto suave de verdad, sin librerías.
 //
@@ -47,10 +49,9 @@ public:
     };
 
     bool load(const std::string& path) {
-        std::ifstream f(path, std::ios::binary);
-        if (!f) return false;
-        data_.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-        if (data_.size() < 12) return false;
+        std::string bytes = core::read_file_binary(path);
+        if (bytes.size() < 12) return false;
+        data_.assign(bytes.begin(), bytes.end());
 
         uint32_t tag = rd32(0);
         if (tag != 0x00010000 && tag != 0x74727565 /*'true'*/) return false;

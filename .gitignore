@@ -29,3 +29,6 @@ build/
 
 # Workflows
 .github/workflows/build-apk.yml
+
+# Copias de datos que genera nuby_engine/wasm/build_wasm.sh para servir la web
+web/data/

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdlib>
 #include <vector>
 #include <algorithm>
 #include <cctype>
@@ -10,6 +11,29 @@ namespace nuby::core {
 
 class StringUtils {
 public:
+    // ---------------- Conversiones SIN excepciones ----------------
+    // El motor usa estas en lugar de std::stoi/std::stof: en la build de
+    // navegador (WebAssembly) C++ no tiene excepciones, y aquí un valor
+    // mal formado simplemente devuelve el valor por defecto.
+    static int to_int(const std::string& s, int def = 0) {
+        const char* c = s.c_str();
+        char* end = nullptr;
+        long v = std::strtol(c, &end, 10);
+        return (end == c) ? def : (int)v;
+    }
+    static float to_float(const std::string& s, float def = 0.0f) {
+        const char* c = s.c_str();
+        char* end = nullptr;
+        float v = std::strtof(c, &end);
+        return (end == c) ? def : v;
+    }
+    static unsigned long to_ulong_base(const std::string& s, int base, unsigned long def = 0) {
+        const char* c = s.c_str();
+        char* end = nullptr;
+        unsigned long v = std::strtoul(c, &end, base);
+        return (end == c) ? def : v;
+    }
+
     static std::string trim(const std::string& str) {
         size_t first = str.find_first_not_of(" \t\n\r\f\v");
         if (first == std::string::npos) return "";

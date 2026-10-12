@@ -279,6 +279,12 @@ public:
     }
 
     bool save_ppm(const std::string& filename) const {
+#if defined(__wasi__)
+        // En WebAssembly el navegador no deja escribir en disco: estas
+        // funciones son herramientas de depuracion del motor nativo.
+        (void)filename;
+        return false;
+#else
         std::ofstream file(filename, std::ios::binary);
         if (!file.is_open()) return false;
 
@@ -292,9 +298,16 @@ public:
         }
         file.write(reinterpret_cast<const char*>(rgb_data.data()), rgb_data.size());
         return true;
+#endif
     }
 
     bool save_bmp(const std::string& filename) const {
+#if defined(__wasi__)
+        // En WebAssembly el navegador no deja escribir en disco: estas
+        // funciones son herramientas de depuracion del motor nativo.
+        (void)filename;
+        return false;
+#else
         std::ofstream file(filename, std::ios::binary);
         if (!file.is_open()) return false;
 
@@ -330,6 +343,7 @@ public:
             file.write(reinterpret_cast<const char*>(row_buffer.data()), row_size);
         }
         return true;
+#endif
     }
 
     const std::vector<uint32_t>& get_pixels() const { return framebuffer_; }
