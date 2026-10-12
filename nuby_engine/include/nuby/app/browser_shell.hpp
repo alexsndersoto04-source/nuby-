@@ -26,7 +26,11 @@
 #include "../nuby_engine.hpp"
 #include "../net/fetcher.hpp"
 #include "../search/search_index.hpp"
+#if defined(__wasi__)
+#include "../js/js_stub.hpp"      // build de navegador (sin excepciones C++)
+#else
 #include "../js/js_interp.hpp"
+#endif
 #include "../media/png_decoder.hpp"
 #include "html_preprocess.hpp"
 #include <string>
@@ -35,6 +39,7 @@
 #include <memory>
 #include <mutex>
 #include <chrono>
+#include "../core/platform.hpp"
 #include <sstream>
 
 namespace nuby::app {
@@ -126,7 +131,7 @@ public:
     // ---------------- Entrada de usuario ----------------
 
     bool handle_click(int x, int y) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         const int ch = chrome_h();
         if (y < ch) {
             return click_chrome(x, y);
@@ -135,7 +140,7 @@ public:
     }
 
     bool handle_wheel(int dy) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         int max_scroll = std::max(0, content_height_ - visible_h());
         int old = scroll_y_;
         scroll_y_ = std::max(0, std::min(max_scroll, scroll_y_ + dy));
@@ -144,7 +149,7 @@ public:
     }
 
     bool handle_char(uint32_t codepoint) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         if (focus_ == Focus::NONE) return false;
         // Campo de formulario REAL de la página web: el texto vive en el
         // atributo `value` del propio elemento del DOM (como en los navegadores)
@@ -170,7 +175,7 @@ public:
     }
 
     bool handle_key(const std::string& key) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         if (key == "Backspace") {
             if (focus_ == Focus::NONE) return false;
             if (focus_ == Focus::WEBFIELD) {
@@ -258,7 +263,7 @@ public:
     // Re-render por parpadeo del caret cuando hay foco (lo llama el server
     // solo si pasaron ~500ms; devuelve true si cambió el frame)
     bool tick_blink() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         if (focus_ == Focus::NONE) return false;
         if (!setting_blink_) {
             // opción REAL: parpadeo desactivado → cursor FIJO, cero re-renders
@@ -274,7 +279,7 @@ public:
 
     // Repinta la home tras cargar el índice (la primera salió a 0 docs)
     void reload_home() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         if (mode_ == Mode::HOME) { go_home(); }
     }
 
@@ -314,19 +319,19 @@ public:
 
     // Navegación pública (para /api/goto): misma vía real que teclear la URL
     void go(const std::string& url) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        core::LockGuard<core::Mutex> lock(mutex_);
         navigate(url);
         dirty_ = true;
     }
-    std::string current_url() { std::lock_guard<std::mutex> lock(mutex_); return current_url_; }
-    std::string status() { std::lock_guard<std::mutex> lock(mutex_); return status_; }
+    std::string current_url() { core::LockGuard<core::Mutex> lock(mutex_); return current_url_; }
+    std::string status() { core::LockGuard<core::Mutex> lock(mutex_); return status_; }
 
 private:
     enum class Focus { NONE, URL, SEARCH, WEBFIELD }; // WEBFIELD: <input>/<textarea> REALES de la página
     enum class Mode { HOME, WEB, RESULTS, ERROR_PAGE, ABOUT, HISTORY, MENU, DOWNLOADS, SETTINGS };
 
     // ---------------- Estado ----------------
-    std::mutex mutex_;
+    core::Mutex mutex_;
     std::unique_ptr<NubyBrowserEngine> engine_chrome_;
     std::unique_ptr<NubyBrowserEngine> engine_content_;
 
@@ -436,11 +441,20 @@ private:
         std::string r;
         for (size_t i = 0; i < s.size(); ++i) {
             if (s[i] == '%' && i + 2 < s.size()) {
-                try {
-                    r += (char)std::stoi(s.substr(i + 1, 2), nullptr, 16);
+                int hi = core::StringUtils::to_int(std::string(1, s[i + 1]), -1);
+                if (hi >= 0 && hi <= 9) hi = hi;
+                else if (s[i+1] >= 'a' && s[i+1] <= 'f') hi = s[i+1] - 'a' + 10;
+                else if (s[i+1] >= 'A' && s[i+1] <= 'F') hi = s[i+1] - 'A' + 10;
+                else hi = -1;
+                int lo = -1;
+                if (s[i+2] >= '0' && s[i+2] <= '9') lo = s[i+2] - '0';
+                else if (s[i+2] >= 'a' && s[i+2] <= 'f') lo = s[i+2] - 'a' + 10;
+                else if (s[i+2] >= 'A' && s[i+2] <= 'F') lo = s[i+2] - 'A' + 10;
+                if (hi >= 0 && lo >= 0) {
+                    r += (char)((hi << 4) | lo);
                     i += 2;
                     continue;
-                } catch (...) {}
+                }
             }
             if (s[i] == '+') { r += ' '; continue; }
             r += s[i];
@@ -560,6 +574,9 @@ private:
         js_ = std::make_shared<js::Interpreter>(res->document);
         bool mutated = false;
         for (auto& code : scripts) {
+#if defined(__wasi__)
+            js_->run(code);   // el stub de la build de navegador no lanza
+#else
             try {
                 js_->run(code);
             } catch (const std::exception& e) {
@@ -567,6 +584,7 @@ private:
                 status_ = std::string("JS detenido: ") + e.what();
                 break;
             }
+#endif
             if (js_->dom_mutated()) { mutated = true; js_->clear_mutation(); }
         }
         if (mutated) {
@@ -793,6 +811,13 @@ private:
 
         // onclick: JavaScript real primero
         if (js_ && el->has_attribute("id")) {
+#if defined(__wasi__)
+            if (js_->dispatch_click(el->get_attribute("id"))) {
+                status_ = "Script ejecutado";
+                render_after_js();
+                return true;
+            }
+#else
             try {
                 if (js_->dispatch_click(el->get_attribute("id"))) {
                     status_ = "Script ejecutado";
@@ -804,6 +829,7 @@ private:
                 rebuild_chrome();
                 return true;
             }
+#endif
         }
 
         // Enlaces reales
@@ -811,8 +837,13 @@ private:
             std::string href = el->get_attribute("href");
             if (href.rfind("javascript:", 0) == 0) {
                 if (js_) {
+#if defined(__wasi__)
+                    js_->run(href.substr(11));
+                    render_after_js();
+#else
                     try { js_->run(href.substr(11)); render_after_js(); }
                     catch (const std::exception& e) { status_ = std::string("JS: ") + e.what(); rebuild_chrome(); }
+#endif
                     return true;
                 }
                 return false;

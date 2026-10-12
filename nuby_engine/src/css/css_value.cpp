@@ -1,6 +1,7 @@
 #include "../../include/nuby/css/css_value.hpp"
 #include "../../include/nuby/core/string_utils.hpp"
 #include <sstream>
+#include <cstdlib>
 
 namespace nuby::css {
 
@@ -30,10 +31,11 @@ Length Length::parse(const std::string& str) {
         return Length(val, Unit::VW);
     }
 
-    try {
-        float val = std::stof(s);
-        return Length::px(val);
-    } catch (...) {
+    {
+        // Sin excepciones: un valor no numérico no es una longitud válida
+        char* end = nullptr;
+        float val = std::strtof(s.c_str(), &end);
+        if (end != s.c_str()) return Length::px(val);
         return Length::auto_val();
     }
 }
@@ -91,9 +93,12 @@ LinearGradient LinearGradient::parse(const std::string& str) {
         std::string first = core::StringUtils::trim(parts[0]);
 
         if (core::StringUtils::ends_with(first, "deg")) {
-            try {
-                grad.angle_deg = std::stof(first.substr(0, first.length() - 3));
-            } catch (...) {}
+            {
+                std::string a = first.substr(0, first.length() - 3);
+                char* end = nullptr;
+                float v = std::strtof(a.c_str(), &end);
+                if (end != a.c_str()) grad.angle_deg = v;
+            }
             stop_start = 1;
         } else if (first == "to bottom") {
             grad.angle_deg = 180.0f;
@@ -111,9 +116,12 @@ LinearGradient LinearGradient::parse(const std::string& str) {
                 core::Color c = core::Color::parse(stop_tokens[0]);
                 float offset = (count > 1) ? static_cast<float>(i - stop_start) / (count - 1) : 0.0f;
                 if (stop_tokens.size() > 1 && core::StringUtils::ends_with(stop_tokens[1], "%")) {
-                    try {
-                        offset = std::stof(stop_tokens[1].substr(0, stop_tokens[1].length() - 1)) / 100.0f;
-                    } catch (...) {}
+                    {
+                        std::string pc = stop_tokens[1].substr(0, stop_tokens[1].length() - 1);
+                        char* end = nullptr;
+                        float v = std::strtof(pc.c_str(), &end);
+                        if (end != pc.c_str()) offset = v / 100.0f;
+                    }
                 }
                 grad.stops.push_back({offset, c});
             }

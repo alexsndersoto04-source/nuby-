@@ -1,8 +1,9 @@
-name: Publicar en GitHub Pages
+name: Motor Nuby — pruebas y publicación de la build de navegador
 
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -10,17 +11,72 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # 1) El motor NATIVO: se compila y se le pasan sus pruebas reales (20 suites).
+  # ---------------------------------------------------------------------------
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar el motor y ejecutar las pruebas
+        working-directory: nuby_engine
+        run: |
+          make
+          make test
+
+  # ---------------------------------------------------------------------------
+  # 2) La build de NAVEGADOR: se compila a wasm, se ejecuta en Node (prueba de
+  #    motor+lógica) y en un Chrome real (prueba de navegador con capturas).
+  # ---------------------------------------------------------------------------
+  browser-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Instalar la cadena de herramientas (Zig trae libc++ para WASI)
+        run: pip install ziglang
+      - name: Compilar el motor a WebAssembly
+        run: bash nuby_engine/wasm/build_wasm.sh
+      - name: Prueba del motor en Node (frames, BM25, navegación)
+        run: node nuby_engine/wasm/node_check.mjs
+      - name: Servir la página del motor
+        run: |
+          python3 -m http.server 8099 --directory web &
+          sleep 2
+          curl -sf -o /dev/null http://127.0.0.1:8099/index.html
+      - name: Prueba en un navegador real (Chrome) con capturas
+        run: |
+          npm i --no-save puppeteer-core
+          node nuby_engine/wasm/browser_check.mjs http://127.0.0.1:8099/index.html "$PWD/capturas"
+      - name: Guardar las capturas de la prueba de navegador
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-navegador
+          path: capturas/
+          if-no-files-found: warn
+      - name: Empaquetar el sitio del motor
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  # ---------------------------------------------------------------------------
+  # 3) Publicación en GitHub Pages (solo desde main y con las pruebas OK)
+  # ---------------------------------------------------------------------------
   deploy:
+    needs: [native, browser-build]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
       - id: deploy
         uses: actions/deploy-pages@v4

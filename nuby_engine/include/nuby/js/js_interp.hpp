@@ -81,7 +81,7 @@ public:
             }
             out.push_back(punct());
         }
-        out.push_back({TokKind::END, "", line_});
+        out.push_back({TokKind::END, "", (int)line_});
         return out;
     }
 
@@ -91,7 +91,7 @@ private:
     Token number() {
         size_t start = pos_;
         while (pos_ < src_.size() && (std::isdigit((unsigned char)src_[pos_]) || src_[pos_] == '.')) ++pos_;
-        return {TokKind::NUM, src_.substr(start, pos_ - start), line_};
+        return {TokKind::NUM, src_.substr(start, pos_ - start), (int)line_};
     }
     Token string_tok(char quote) {
         size_t start_line = line_;
@@ -120,18 +120,18 @@ private:
             "var","let","const","function","return","if","else","while","for",
             "true","false","undefined","null","break","continue"
         };
-        for (auto& k : kws) if (w == k) return {TokKind::KEYWORD, w, line_};
-        return {TokKind::IDENT, w, line_};
+        for (auto& k : kws) if (w == k) return {TokKind::KEYWORD, w, (int)line_};
+        return {TokKind::IDENT, w, (int)line_};
     }
     Token punct() {
         static const std::vector<std::string> two = {"==","!=","<=",">=","&&","||","+=","-=","++","--"};
         for (auto& t : two) {
             if (pos_ + 1 < src_.size() && src_.substr(pos_, 2) == t) {
-                pos_ += 2; return {TokKind::PUNCT, t, line_};
+                pos_ += 2; return {TokKind::PUNCT, t, (int)line_};
             }
         }
         char c = src_[pos_++];
-        return {TokKind::PUNCT, std::string(1, c), line_};
+        return {TokKind::PUNCT, std::string(1, c), (int)line_};
     }
 
     const std::string& src_;

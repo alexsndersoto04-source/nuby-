@@ -22,17 +22,17 @@ Color Color::parse(const std::string& str) {
             std::string content = s.substr(start + 1, end - start - 1);
             auto parts = StringUtils::split(content, ',');
             if (parts.size() >= 3) {
-                try {
-                    uint8_t r = static_cast<uint8_t>(std::clamp(std::stoi(StringUtils::trim(parts[0])), 0, 255));
-                    uint8_t g = static_cast<uint8_t>(std::clamp(std::stoi(StringUtils::trim(parts[1])), 0, 255));
-                    uint8_t b = static_cast<uint8_t>(std::clamp(std::stoi(StringUtils::trim(parts[2])), 0, 255));
+                {
+                    uint8_t r = static_cast<uint8_t>(std::clamp(StringUtils::to_int(StringUtils::trim(parts[0])), 0, 255));
+                    uint8_t g = static_cast<uint8_t>(std::clamp(StringUtils::to_int(StringUtils::trim(parts[1])), 0, 255));
+                    uint8_t b = static_cast<uint8_t>(std::clamp(StringUtils::to_int(StringUtils::trim(parts[2])), 0, 255));
                     uint8_t a = 255;
                     if (parts.size() >= 4) {
-                        float af = std::stof(StringUtils::trim(parts[3]));
+                        float af = StringUtils::to_float(StringUtils::trim(parts[3]), 1.0f);
                         a = static_cast<uint8_t>(std::clamp(af * 255.0f, 0.0f, 255.0f));
                     }
                     return Color(r, g, b, a);
-                } catch (...) {}
+                }
             }
         }
     }

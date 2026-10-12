@@ -342,11 +342,16 @@ public:
         current_js_engine_ = std::make_shared<js::JSEngine>(current_document_);
         if (!js_code.empty()) {
             core::ScopedTimer timer(result.profiler, "JS_Execution", "Real interpreter: lexer + AST + eval");
+#if defined(__wasi__)
+            // Build de navegador: no hay excepciones C++ (ver js/js_stub.hpp)
+            current_js_engine_->eval(js_code);
+#else
             try {
                 current_js_engine_->eval(js_code);
             } catch (const std::exception& e) {
                 result.js_logs.push_back(std::string("[Nuby JS error] ") + e.what());
             }
+#endif
             // ANTES: `result.js_logs = get_console_logs();` BORRABA el error recién
             // anotado y nadie se enteraba del fallo. Ahora se conserva todo.
             auto logs = current_js_engine_->get_console_logs();
