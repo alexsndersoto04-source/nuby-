@@ -32,3 +32,8 @@ build/
 
 # Copias de datos que genera nuby_engine/wasm/build_wasm.sh para servir la web
 web/data/
+
+# Python
+__pycache__/
+*.pyc
+crawler/data/index_stats.json.tmp
