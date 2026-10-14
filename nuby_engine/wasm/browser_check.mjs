@@ -100,20 +100,29 @@ try {
         `el búfer sale a densidad real: ${m.bufW} px para ${Math.round(m.cssW)} CSS × ${m.dpr} (esperado ${esperado})`);
   check(m.logicalW >= 1000, `el motor usa la ventana lógica completa (${m.logicalW} px)`);
 
-  // 1) escribir en la caja de búsqueda del motor y pulsar Enter
+  // 1) escribir en la caja de búsqueda del motor y pulsar Enter.
+  //    El alto del lienzo ya es el real de la pantalla, así que la caja está a
+  //    otra altura que antes: se barre un rango y se comprueba el resultado (lo
+  //    que importa es que se pueda buscar, no una coordenada exacta).
   const box = await page.evaluate(() => {
     const c = document.getElementById("nuby-screen").getBoundingClientRect();
     return { x: c.x, y: c.y, w: c.width, h: c.height };
   });
-  await page.mouse.click(box.x + box.w * 0.5, box.y + box.h * (261 / 640));
-  await page.keyboard.type("ciencia");
-  await page.keyboard.press("Enter");
-  await wait(1200);
-  const statSearch = await page.evaluate(() => document.getElementById("nuby-stat").textContent);
+  let statSearch = "";
+  for (const frac of [0.31, 0.35, 0.27, 0.39, 0.23, 0.43]) {
+    await page.mouse.click(box.x + box.w * 0.5, box.y + box.h * frac);
+    await page.keyboard.type("ciencia");
+    await page.keyboard.press("Enter");
+    await wait(1000);
+    statSearch = await page.evaluate(() => document.getElementById("nuby-stat").textContent);
+    if (statSearch.includes("resultados")) break;
+    await page.evaluate(() => window.NubyApp.goto("nuby://home"));
+    await wait(500);
+  }
   console.log("estado tras buscar:", statSearch);
   await page.screenshot({ path: `${OUT}/2-resultados.png` });
-  check(statSearch.includes("resultados") || statSearch.includes("search"),
-        "la búsqueda respondió a lo que se tecleó");
+  check(statSearch.includes("resultados"),
+        `la búsqueda respondió a lo que se tecleó ("${statSearch}")`);
 
   // 2) abrir una página del propio repositorio (misma-origen real). Se usa la
   //    MISMA puerta que el usuario: escribir la dirección y pulsar Enter.
@@ -160,18 +169,29 @@ try {
   check(activo === "nuby-keys",
         `el toque en el lienzo pide el teclado del móvil (foco en "${activo}")`);
 
-  // Escribir con el teclado del móvil: se inyecta la pulsación real en el campo
-  await movil.evaluate(() => {
-    const k = document.getElementById("nuby-keys");
-    k.value = "ciencia";
-    k.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await wait(900);
+  // Escribir con el teclado del móvil. El campo oculto reenvía el texto al
+  // motor: se toca la caja, se escribe (como el autocorrector) y se pulsa
+  // Enter. Si el motor responde con resultados, la cadena completa funciona.
+  let statTecleo = "";
+  for (const frac of [0.31, 0.35, 0.27, 0.39]) {
+    await movil.touchscreen.tap(195, Math.round(844 * frac));
+    await wait(400);
+    await movil.evaluate(() => {
+      const k = document.getElementById("nuby-keys");
+      k.value = "ciencia";
+      k.dispatchEvent(new Event("input", { bubbles: true }));
+      k.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await wait(1000);
+    statTecleo = await movil.evaluate(() => document.getElementById("nuby-stat").textContent);
+    if (statTecleo.includes("resultados")) break;
+    await movil.evaluate(() => window.NubyApp.goto("nuby://home"));
+    await wait(500);
+  }
   await movil.screenshot({ path: `${OUT}/6-movil-teclado.png` });
-  const estadoMovil = await movil.evaluate(() => JSON.stringify(window.NubyApp.state));
-  check(estadoMovil.includes("ciencia") || true, "el texto tecleado llegó al motor");
-  const statTrasTeclear = await movil.evaluate(() => document.getElementById("nuby-stat").textContent);
-  console.log("estado móvil tras teclear:", statTrasTeclear);
+  console.log("estado móvil tras teclear:", statTecleo);
+  check(statTecleo.includes("resultados"),
+        `en el móvil se puede escribir y buscar (${"\"" + statTecleo + "\""})`);
 
   const version = await browser.version();
   console.log("versión del navegador:", version);
