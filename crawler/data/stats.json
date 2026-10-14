@@ -1,85 +1,194 @@
 {
-  "run_utc": "2026-10-14T03:09:18Z",
-  "elapsed_s": 122.6,
-  "pages_indexed": 504,
-  "domains": 253,
-  "pages_per_domain": 2.0,
-  "wikipedia_share_pct": 0.6,
-  "fetch_failed": 17,
-  "robots_blocked": 32,
-  "skipped_non_html": 13,
-  "duplicate_content": 37,
-  "bytes_fetched": 178766414,
-  "avg_page_bytes": 354695,
-  "frontier_pending": 8137,
+  "run_utc": "2026-10-14T03:21:36Z",
+  "elapsed_s": 630.8,
+  "pages_indexed": 2008,
+  "domains": 784,
+  "pages_per_domain": 2.6,
+  "wikipedia_share_pct": 7.8,
+  "fetch_failed": 53,
+  "robots_blocked": 168,
+  "skipped_non_html": 33,
+  "duplicate_content": 141,
+  "bytes_fetched": 413391465,
+  "avg_page_bytes": 205872,
+  "frontier_pending": 33252,
   "top_domains": [
     [
-      "bbc.com",
-      21
-    ],
-    [
-      "elmundo.es",
-      21
-    ],
-    [
-      "abc.es",
+      "docs.python.org",
       20
     ],
     [
-      "france24.com",
+      "abc.net.au",
       20
     ],
     [
-      "lanacion.com.ar",
+      "developer.mozilla.org",
       20
     ],
     [
-      "infobae.com",
+      "eldiario.es",
+      20
+    ],
+    [
+      "go.dev",
+      20
+    ],
+    [
+      "nginx.org",
+      20
+    ],
+    [
+      "paulgraham.com",
+      20
+    ],
+    [
+      "cloudflare.com",
+      20
+    ],
+    [
+      "brendangregg.com",
+      20
+    ],
+    [
+      "nullprogram.com",
+      20
+    ],
+    [
+      "danluu.com",
+      20
+    ],
+    [
+      "es.euronews.com",
       19
     ],
     [
-      "clarin.com",
-      18
+      "redis.io",
+      19
     ],
     [
-      "elpais.com",
-      16
+      "theguardian.com",
+      19
     ],
     [
-      "publico.es",
-      14
-    ],
-    [
-      "f24.my",
-      9
-    ],
-    [
-      "emagister.com",
-      8
-    ],
-    [
-      "foodit.lanacion.com.ar",
-      8
-    ],
-    [
-      "finanzas.abc.es",
-      7
-    ],
-    [
-      "cincodias.elpais.com",
-      5
-    ],
-    [
-      "descuentos.elpais.com",
-      5
+      "14ymedio.com",
+      19
     ]
   ],
   "languages": {
-    "es": 381,
-    "en": 80,
-    "ar": 2,
-    "fr": 5,
-    "ca": 1
+    "en": 1129,
+    "es": 395,
+    "pt": 4,
+    "fr": 12,
+    "pl": 6,
+    "ar": 8,
+    "ru": 5,
+    "bs": 2,
+    "tr": 1,
+    "el": 2,
+    "ro": 3,
+    "sr": 1,
+    "de": 7,
+    "it": 4,
+    "fa": 3,
+    "hu": 2,
+    "ka": 3,
+    "zh": 6,
+    "bg": 4,
+    "yo": 2,
+    "hi": 3,
+    "nl": 2,
+    "ko": 3,
+    "et": 2,
+    "cs": 1,
+    "nb": 2,
+    "he": 1,
+    "uz": 2,
+    "my": 1,
+    "gs": 1,
+    "ja": 6,
+    "lv": 1,
+    "sl": 2,
+    "an": 1,
+    "az": 2,
+    "be": 1,
+    "sg": 1,
+    "av": 1,
+    "bm": 1,
+    "bp": 1,
+    "ce": 1,
+    "ch": 1,
+    "cr": 1,
+    "da": 3,
+    "di": 1,
+    "dv": 1,
+    "eu": 3,
+    "ff": 1,
+    "gl": 1,
+    "gc": 1,
+    "go": 1,
+    "ha": 2,
+    "ht": 2,
+    "ig": 1,
+    "in": 1,
+    "kb": 1,
+    "ki": 1,
+    "kn": 2,
+    "ku": 1,
+    "mi": 2,
+    "ma": 2,
+    "la": 2,
+    "li": 1,
+    "lo": 1,
+    "mr": 2,
+    "mn": 1,
+    "na": 5,
+    "nq": 1,
+    "pa": 1,
+    "ne": 1,
+    "or": 1,
+    "nr": 1,
+    "pm": 1,
+    "rk": 1,
+    "ps": 1,
+    "sc": 1,
+    "sm": 1,
+    "sa": 1,
+    "sk": 1,
+    "st": 1,
+    "sq": 3,
+    "ta": 1,
+    "te": 1,
+    "to": 1,
+    "tt": 2,
+    "tp": 1,
+    "ur": 1,
+    "ve": 2,
+    "wa": 1,
+    "lz": 1,
+    "za": 1,
+    "ze": 1,
+    "zu": 1,
+    "oc": 1,
+    "qu": 1,
+    "as": 1,
+    "bn": 2,
+    "hy": 2,
+    "kk": 1,
+    "ky": 1,
+    "id": 5,
+    "lt": 1,
+    "sh": 1,
+    "sw": 1,
+    "ca": 3,
+    "th": 1,
+    "br": 1,
+    "eo": 3,
+    "tl": 1,
+    "uk": 3,
+    "fi": 1,
+    "sv": 1,
+    "vi": 1,
+    "ms": 1
   },
-  "pages_per_second": 4.11
+  "pages_per_second": 3.18
 }

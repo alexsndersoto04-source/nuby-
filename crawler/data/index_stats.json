@@ -1,26 +1,74 @@
 {
-  "pages": 1492,
-  "pages_previous": 995,
-  "pages_new": 497,
-  "domains": 565,
-  "wikipedia_share_pct": 64.8,
-  "tsv_bytes": 813451,
-  "tsv_gzip_bytes": 269633,
-  "bytes_per_page": 545.2,
-  "bytes_per_page_gzip": 180.7,
-  "terms_total_estimate": 93419,
-  "terms_unique_estimate": 18180,
+  "pages": 3478,
+  "pages_previous": 1492,
+  "pages_new": 1986,
+  "domains": 1122,
+  "wikipedia_share_pct": 32.2,
+  "tsv_bytes": 2806876,
+  "tsv_gzip_bytes": 966552,
+  "bytes_per_page": 807.0,
+  "bytes_per_page_gzip": 277.9,
+  "terms_total_estimate": 360264,
+  "terms_unique_estimate": 41475,
   "top_domains": [
     [
       "es.wikipedia.org",
-      473
+      475
+    ],
+    [
+      "en.wikipedia.org",
+      24
     ],
     [
       "bbc.com",
       23
     ],
     [
+      "eldiario.es",
+      22
+    ],
+    [
+      "brendangregg.com",
+      22
+    ],
+    [
+      "wikimediafoundation.org",
+      21
+    ],
+    [
       "elmundo.es",
+      21
+    ],
+    [
+      "docs.python.org",
+      21
+    ],
+    [
+      "developer.mozilla.org",
+      21
+    ],
+    [
+      "ubuntu.com",
+      21
+    ],
+    [
+      "nginx.org",
+      21
+    ],
+    [
+      "danluu.com",
+      21
+    ],
+    [
+      "paulgraham.com",
+      21
+    ],
+    [
+      "nullprogram.com",
+      21
+    ],
+    [
+      "cloudflare.com",
       21
     ],
     [
@@ -36,78 +84,30 @@
       20
     ],
     [
-      "infobae.com",
-      19
+      "es.euronews.com",
+      20
     ],
     [
-      "clarin.com",
-      18
-    ],
-    [
-      "elpais.com",
-      16
-    ],
-    [
-      "publico.es",
-      14
-    ],
-    [
-      "en.wikipedia.org",
-      10
-    ],
-    [
-      "emagister.com",
-      8
-    ],
-    [
-      "foodit.lanacion.com.ar",
-      8
-    ],
-    [
-      "finanzas.abc.es",
-      7
-    ],
-    [
-      "foundation.wikimedia.org",
-      6
-    ],
-    [
-      "wikidata.org",
-      5
-    ],
-    [
-      "cincodias.elpais.com",
-      5
-    ],
-    [
-      "descuentos.elpais.com",
-      5
-    ],
-    [
-      "elle.clarin.com",
-      5
-    ],
-    [
-      "mundoamerica.com",
-      5
+      "14ymedio.com",
+      20
     ]
   ],
   "projections": {
     "10000_pages": {
-      "tsv_mb": 5.5,
-      "gzip_mb": 1.8
+      "tsv_mb": 8.1,
+      "gzip_mb": 2.8
     },
     "100000_pages": {
-      "tsv_mb": 54.5,
-      "gzip_mb": 18.1
+      "tsv_mb": 80.7,
+      "gzip_mb": 27.8
     },
     "500000_pages": {
-      "tsv_mb": 272.6,
-      "gzip_mb": 90.4
+      "tsv_mb": 403.5,
+      "gzip_mb": 139.0
     },
     "1000000_pages": {
-      "tsv_mb": 545.2,
-      "gzip_mb": 180.7
+      "tsv_mb": 807.0,
+      "gzip_mb": 277.9
     }
   },
   "github_pages_limit_mb": 1000
