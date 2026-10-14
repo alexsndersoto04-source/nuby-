@@ -1,0 +1,157 @@
+# ============================================================================
+#  SEMILLAS del rastreador Nuby — variadas a propósito.
+#  Regla: ningún bloque puede superar ~15% del índice (medido en stats.json).
+#  Los enlaces descubiertos amplían esto solo: si una semilla cae, no pasa nada.
+# ============================================================================
+
+# ---- Noticias (es) ----
+https://www.bbc.com/mundo
+https://elpais.com/
+https://www.elmundo.es/
+https://www.abc.es/
+https://cnnespanol.cnn.com/
+https://www.dw.com/es/
+https://www.france24.com/es/
+https://www.infobae.com/
+https://www.clarin.com/
+https://www.lanacion.com.ar/
+https://www.publico.es/
+https://www.eldiario.es/
+https://www.rtve.es/
+https://efe.com/
+https://www.14ymedio.com/
+https://es.euronews.com/
+https://www.20minutos.es/
+https://www.lavanguardia.com/
+https://www.elconfidencial.com/
+https://www.ventanainformatica.com/
+
+# ---- Noticias (en) ----
+https://www.bbc.com/news
+https://www.theguardian.com/international
+https://www.reuters.com/
+https://apnews.com/
+https://www.aljazeera.com/
+https://www.npr.org/
+https://www.cbc.ca/news
+https://www.abc.net.au/news
+https://www.irishtimes.com/
+https://www.scmp.com/
+
+# ---- Tecnología, documentación y software libre ----
+https://docs.python.org/3/
+https://developer.mozilla.org/es/docs/Web
+https://www.gnu.org/
+https://www.kernel.org/
+https://www.debian.org/
+https://ubuntu.com/
+https://archlinux.org/
+https://git-scm.com/doc
+https://www.postgresql.org/docs/
+https://redis.io/docs/latest/
+https://nodejs.org/docs/latest/api/
+https://www.php.net/manual/es/
+https://doc.rust-lang.org/book/
+https://go.dev/doc/
+https://docs.docker.com/
+https://kubernetes.io/es/docs/home/
+https://www.w3.org/standards/webdesign/
+https://curl.se/docs/
+https://nginx.org/en/docs/
+https://www.sqlite.org/docs.html
+https://docs.rs/
+https://pypi.org/
+https://arxiv.org/
+https://www.openstreetmap.org/about
+https://wikimediafoundation.org/
+
+# ---- Blogs técnicos (voz individual, no corporativa) ----
+https://danluu.com/
+https://lemire.me/blog/
+https://www.joelonsoftware.com/
+https://paulgraham.com/articles.html
+https://rachelbythebay.com/w/
+https://simonwillison.net/
+https://jvns.ca/
+https://martinfowler.com/
+https://www.brendangregg.com/
+https://blog.cloudflare.com/
+https://www.hillelwayne.com/post/
+https://blog.acolyer.org/
+https://www.jefftk.com/
+https://nullprogram.com/
+https://www.andrew.cmu.edu/user/danupam/
+https://eli.thegreenplace.net/
+https://blog.regehr.org/
+https://wingolog.org/
+https://matthewgreen.io/
+https://blog.ncase.me/
+
+# ---- Foros y agregadores ----
+https://news.ycombinator.com/
+https://lobste.rs/
+https://www.meneame.net/
+https://www.reddit.com/r/programming/
+https://es.stackoverflow.com/questions
+
+# ---- Wikis y conocimiento libre (variado, no solo Wikipedia) ----
+https://es.wikipedia.org/wiki/Wikipedia:Portada
+https://en.wikipedia.org/wiki/Main_Page
+https://es.wikisource.org/wiki/Wikisource:Portada
+https://es.wikibooks.org/wiki/Portada
+https://es.wikinews.org/wiki/Portada
+https://es.wikivoyage.org/wiki/Portada
+https://www.gutenberg.org/
+https://www.wikidata.org/wiki/Wikidata:Main_Page
+
+# ---- Universidades ----
+https://www.mit.edu/
+https://www.stanford.edu/
+https://www.harvard.edu/
+https://www.ox.ac.uk/
+https://www.cam.ac.uk/
+https://www.ucm.es/
+https://www.unam.mx/
+https://www.uba.ar/
+https://www.uchile.cl/
+https://www.upv.es/
+https://www.us.es/
+https://www.utn.edu.ar/
+https://web.mit.edu/ocw/
+https://www.open.edu/openlearn/
+
+# ---- Instituciones y organismos públicos ----
+https://europa.eu/
+https://www.un.org/es/
+https://www.who.int/es
+https://www.unesco.org/es
+https://www.gob.es/
+https://www.argentina.gob.ar/
+https://www.gob.mx/
+https://www.gob.cl/
+https://www.ine.es/
+https://www.boe.es/
+https://www.aemet.es/
+https://www.cia.gov/the-world-factbook/
+https://www.nationalarchives.gov.uk/
+https://www.loc.gov/
+
+# ---- Medios especializados y divulgación ----
+https://www.xataka.com/
+https://www.genbeta.com/
+https://hipertextual.com/
+https://www.muylinux.com/
+https://www.softzone.es/
+https://blog.desdelinux.net/
+https://www.quo.es/
+https://www.nationalgeographic.com/
+https://www.scientificamerican.com/
+https://www.sciencenews.org/
+https://www.quantamagazine.org/
+https://phys.org/
+https://www.space.com/
+https://www.esa.int/
+https://www.nasa.gov/
+https://www.nature.com/
+https://www.science.org/
+https://es.mongabay.com/
