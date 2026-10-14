@@ -1,0 +1,85 @@
+{
+  "run_utc": "2026-10-14T03:09:18Z",
+  "elapsed_s": 122.6,
+  "pages_indexed": 504,
+  "domains": 253,
+  "pages_per_domain": 2.0,
+  "wikipedia_share_pct": 0.6,
+  "fetch_failed": 17,
+  "robots_blocked": 32,
+  "skipped_non_html": 13,
+  "duplicate_content": 37,
+  "bytes_fetched": 178766414,
+  "avg_page_bytes": 354695,
+  "frontier_pending": 8137,
+  "top_domains": [
+    [
+      "bbc.com",
+      21
+    ],
+    [
+      "elmundo.es",
+      21
+    ],
+    [
+      "abc.es",
+      20
+    ],
+    [
+      "france24.com",
+      20
+    ],
+    [
+      "lanacion.com.ar",
+      20
+    ],
+    [
+      "infobae.com",
+      19
+    ],
+    [
+      "clarin.com",
+      18
+    ],
+    [
+      "elpais.com",
+      16
+    ],
+    [
+      "publico.es",
+      14
+    ],
+    [
+      "f24.my",
+      9
+    ],
+    [
+      "emagister.com",
+      8
+    ],
+    [
+      "foodit.lanacion.com.ar",
+      8
+    ],
+    [
+      "finanzas.abc.es",
+      7
+    ],
+    [
+      "cincodias.elpais.com",
+      5
+    ],
+    [
+      "descuentos.elpais.com",
+      5
+    ]
+  ],
+  "languages": {
+    "es": 381,
+    "en": 80,
+    "ar": 2,
+    "fr": 5,
+    "ca": 1
+  },
+  "pages_per_second": 4.11
+}

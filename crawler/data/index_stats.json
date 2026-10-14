@@ -1,0 +1,114 @@
+{
+  "pages": 1492,
+  "pages_previous": 995,
+  "pages_new": 497,
+  "domains": 565,
+  "wikipedia_share_pct": 64.8,
+  "tsv_bytes": 813451,
+  "tsv_gzip_bytes": 269633,
+  "bytes_per_page": 545.2,
+  "bytes_per_page_gzip": 180.7,
+  "terms_total_estimate": 93419,
+  "terms_unique_estimate": 18180,
+  "top_domains": [
+    [
+      "es.wikipedia.org",
+      473
+    ],
+    [
+      "bbc.com",
+      23
+    ],
+    [
+      "elmundo.es",
+      21
+    ],
+    [
+      "abc.es",
+      20
+    ],
+    [
+      "france24.com",
+      20
+    ],
+    [
+      "lanacion.com.ar",
+      20
+    ],
+    [
+      "infobae.com",
+      19
+    ],
+    [
+      "clarin.com",
+      18
+    ],
+    [
+      "elpais.com",
+      16
+    ],
+    [
+      "publico.es",
+      14
+    ],
+    [
+      "en.wikipedia.org",
+      10
+    ],
+    [
+      "emagister.com",
+      8
+    ],
+    [
+      "foodit.lanacion.com.ar",
+      8
+    ],
+    [
+      "finanzas.abc.es",
+      7
+    ],
+    [
+      "foundation.wikimedia.org",
+      6
+    ],
+    [
+      "wikidata.org",
+      5
+    ],
+    [
+      "cincodias.elpais.com",
+      5
+    ],
+    [
+      "descuentos.elpais.com",
+      5
+    ],
+    [
+      "elle.clarin.com",
+      5
+    ],
+    [
+      "mundoamerica.com",
+      5
+    ]
+  ],
+  "projections": {
+    "10000_pages": {
+      "tsv_mb": 5.5,
+      "gzip_mb": 1.8
+    },
+    "100000_pages": {
+      "tsv_mb": 54.5,
+      "gzip_mb": 18.1
+    },
+    "500000_pages": {
+      "tsv_mb": 272.6,
+      "gzip_mb": 90.4
+    },
+    "1000000_pages": {
+      "tsv_mb": 545.2,
+      "gzip_mb": 180.7
+    }
+  },
+  "github_pages_limit_mb": 1000
+}
