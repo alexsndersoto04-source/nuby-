@@ -245,3 +245,109 @@ reales, que crece solo, gratis, y que pinta su interfaz con su propio motor.
    (Recomendación: 300.000. Da tiempo a limpiar calidad sin prometer de más.)
 4. **¿Cuántos países/idiomas?** El motor compone acentos en español; podemos centrarnos en
    español + inglés al principio, en vez de diluir el rastreo en 50 idiomas.
+
+---
+
+# EVIDENCIA MEDIDA (2026-10-13, no promesas: números de máquinas reales)
+
+Todo esto se construyó y se midió el mismo día, en GitHub Actions (internet
+abierto) y con el motor C++ real de este repositorio. Reproducible.
+
+## 1. El rastreador corre solo y respeta las reglas
+
+| Medición | Corrida 1 | Corrida 2 |
+|---|---|---|
+| Páginas indexadas | **504** | **2.008** |
+| Dominios distintos con éxito | 253 | **784** |
+| Velocidad | 4,11 pág/s | 3,18 pág/s |
+| Duración | 2 min 22 s | 10 min 31 s |
+| Bloqueos por `robots.txt` (respetados) | 32 | **168** |
+| Duplicados descartados | 37 | 141 |
+| Frontera pendiente al terminar | 8.137 URLs | **33.252 URLs** |
+
+## 2. El índice creció de verdad, y dejó de ser Wikipedia
+
+| Momento | Páginas | Dominios | Peso de Wikipedia |
+|---|---|---|---|
+| Estado inicial del repo | 995 | 333 | **97 %** |
+| Tras la corrida 1 | 1.492 | 565 | 64,8 % |
+| Tras la corrida 2 | **3.478** | **1.122** | **32,2 %** |
+
+Las corridas siguientes ya tienen **33.252 URLs en cola** (y crecen solas porque
+cada página descubierta añade enlaces nuevos). El cron está puesto cada 6 horas.
+
+## 3. El MOTOR C++ carga el índice nuevo y encuentra la web rastreada
+
+Compilado `SearchIndex` real (el mismo del navegador) contra el TSV rastreado:
+
+```
+[motor] documentos cargados del TSV real : 3478
+[motor] consulta "inteligencia artificial" → 5 resultados
+   14.686  Tecnología hoy: inteligencia artificial… - Infobae   [infobae.com]
+    9.603  RFI - Noticias del mundo en directo                  [rfi.fr]
+    9.465  Ciencia y Tecnologías: toda la actualidad            [france24.com]
+```
+
+Y la build de **WebAssembly** (la del navegador) cargó los 3.478 documentos y
+pasó sus 11 comprobaciones: BM25, frames pintados, navegación y el fallo honesto
+por CORS.
+
+## 4. La búsqueda real, medida y pintada
+
+`/api/search` sobre el índice rastreado:
+
+| Consulta | Resultados | Tiempo |
+|---|---|---|
+| clima | 9 | **55 µs** |
+| elecciones | 24 | **126 µs** |
+| tecnologia | 3 | 20 µs |
+
+Y la captura `nuby-resultados.png` (en la raíz del repo) muestra el motor
+pintando, píxel a píxel, los resultados reales de El Mundo, France24 y Euronews
+con su URL, su dominio y su fragmento. Ninguno de esos textos fue escrito a
+mano: salen del rastreo hecho horas antes en GitHub.
+
+## 5. Cuánto cabe (medido con este mismo formato)
+
+545 B/página en crudo, 181 B/página comprimido. Con el límite recomendado de
+1 GB de GitHub Pages:
+
+| Páginas | Índice comprimido | ¿Cabe? |
+|---|---|---|
+| 10.000 | 1,8 MB | sí |
+| 100.000 | 18,1 MB | sí |
+| 500.000 | 90,4 MB | sí |
+| 1.000.000 | 180,7 MB | sí (5,5× de margen) |
+
+**Conclusión honesta de la evidencia:** el rastreador automático funciona, el
+índice ya no es Wikipedia, el motor carga y busca lo rastreado, y el formato
+cabe hasta un millón de páginas en el alojamiento gratuito. Lo que sigue es
+subir semillas y dejar el cron corriendo: el techo ya no es técnico, es de
+tiempo y de limpieza de calidad.
+
+## 6. Cómo reproducirlo
+
+```bash
+# en local (con internet y sin él, contra un sitio propio)
+python3 crawler/nuby_crawler.py --seeds crawler/seeds.txt --data crawler/data \
+        --max-pages 2000 --max-seconds 1500
+python3 crawler/build_index.py                 # TSV + medición
+g++ -std=c++20 -O2 -pthread -I nuby_engine/include \
+    crawler/verify_engine.cpp nuby_engine/src/core/types.cpp -o /tmp/verify_engine
+/tmp/verify_engine nuby_engine/data/crawl_pages.tsv "elecciones"
+
+# en GitHub: se lanza solo cada 6 h, o a mano desde la pestaña Actions
+gh workflow run crawl.yml -f max_pages=5000 -f max_seconds=1800
+```
+
+## 7. Bugs reales encontrados y corregidos hoy (probando, no leyendo)
+
+1. Los enlaces relativos (`/pagina1.html`) no se resolvían → la frontera quedaba
+   vacía tras la primera página.
+2. Las URLs se marcaban como "vistas" al encolarlas → el propio rastreador las
+   descartaba al sacarlas de la cola.
+3. Condición de carrera: un hilo veía la cola vacía y declaraba el fin mientras
+   otro hilo aún descargaba → se perdían páginas descubiertas.
+4. Deduplicación por contenido que contaba el texto de los enlaces → páginas
+   iguales con enlaces distintos entraban dos veces.
+5. `build_index.py` fallaba si no existía su carpeta de salida.
