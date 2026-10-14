@@ -16,10 +16,34 @@ namespace nuby::paint {
 
 class SoftwareRasterizer {
 private:
-    int width_{1000};
-    int height_{800};
+    // ESCALA DE RENDER (2026-10-14): el layout trabaja en píxeles lógicos
+    // (CSS) como siempre, y aquí se multiplica TODO al rasterizar: rectángulos,
+    // radios, sombras, bordes, glifos e imágenes. El framebuffer resultante es
+    // (w*escala) x (h*escala), de modo que un píxel del motor = un píxel físico
+    // de la pantalla del visitante. Sin esto, en un móvil de densidad 3 el
+    // canvas de 390 px se estiraba a 1170 px reales y la interfaz se veía
+    // borrosa/pixelada. El layout NO cambia: sigue midiendo en píxeles lógicos,
+    // así que las decisiones responsive (anchos de columna, cortes) son las de
+    // siempre.
+    int width_{1000};   // ancho del framebuffer (píxeles de dispositivo)
+    int height_{800};   // alto del framebuffer (píxeles de dispositivo)
+    float scale_{1.0f}; // px lógicos -> px de dispositivo
+    // ORIGEN de la ventana (px lógicos). Permite pintar SOLO la parte del
+    // documento que el usuario está viendo: el búfer no crece con lo largo de
+    // la página (antes había que reservar la página entera y una Wikipedia a
+    // densidad 3 pedía más de 100 MB). El layout no se toca: solo se desplaza
+    // el punto de dibujo.
+    float origin_x_{0.0f};
+    float origin_y_{0.0f};
     std::vector<uint32_t> framebuffer_; // ARGB 32-bit: 0xAARRGGBB
     std::vector<core::RectF> clip_stack_;
+
+    // Escalado de primitivas (una sola vez, en la entrada de cada función).
+    core::RectF S(const core::RectF& r) const {
+        return core::RectF((r.x - origin_x_) * scale_, (r.y - origin_y_) * scale_,
+                           r.width * scale_, r.height * scale_);
+    }
+    float S(float v) const { return v * scale_; }
 
     bool is_clipped(int px, int py) const {
         if (clip_stack_.empty()) return false;
@@ -44,8 +68,16 @@ private:
     }
 
 public:
-    SoftwareRasterizer(int w, int h, core::Color clear_color = core::Color::white())
-        : width_(w), height_(h), framebuffer_(w * h, (0xFF << 24) | (clear_color.r << 16) | (clear_color.g << 8) | clear_color.b) {}
+    SoftwareRasterizer(int w, int h, core::Color clear_color = core::Color::white(),
+                       float scale = 1.0f)
+        : width_(static_cast<int>(std::lround(w * (scale > 0.01f ? scale : 1.0f)))),
+          height_(static_cast<int>(std::lround(h * (scale > 0.01f ? scale : 1.0f)))),
+          scale_(scale > 0.01f ? scale : 1.0f),
+          framebuffer_(static_cast<size_t>(width_) * static_cast<size_t>(height_),
+                       (0xFF << 24) | (clear_color.r << 16) | (clear_color.g << 8) | clear_color.b) {}
+
+    float render_scale() const { return scale_; }
+    void set_origin(float x, float y) { origin_x_ = x; origin_y_ = y; }
 
     void clear(const core::Color& color = core::Color::white()) {
         uint32_t c = (0xFF << 24) | (color.r << 16) | (color.g << 8) | color.b;
@@ -53,7 +85,8 @@ public:
         clip_stack_.clear();
     }
 
-    void fill_rect(const core::RectF& rect, const core::Color& color) {
+    void fill_rect(const core::RectF& rect_in, const core::Color& color) {
+        const core::RectF rect = S(rect_in);
         int x0 = std::max(0, static_cast<int>(std::floor(rect.x)));
         int y0 = std::max(0, static_cast<int>(std::floor(rect.y)));
         int x1 = std::min(width_, static_cast<int>(std::ceil(rect.right())));
@@ -68,7 +101,11 @@ public:
         }
     }
 
-    void fill_rounded_rect(const core::RectF& rect, const core::BorderRadius& radius, const core::Color& color) {
+    void fill_rounded_rect(const core::RectF& rect_in, const core::BorderRadius& radius_in, const core::Color& color) {
+        const core::RectF rect = S(rect_in);
+        const core::BorderRadius radius = core::BorderRadius(
+            S(radius_in.top_left), S(radius_in.top_right),
+            S(radius_in.bottom_right), S(radius_in.bottom_left));
         float r = radius.top_left;
         if (r <= 0.0f) {
             fill_rect(rect, color);
@@ -114,7 +151,10 @@ public:
         }
     }
 
-    void draw_box_shadow(const core::RectF& rect, const core::PointF& offset, float blur, const core::Color& color) {
+    void draw_box_shadow(const core::RectF& rect_in, const core::PointF& offset_in, float blur_in, const core::Color& color) {
+        const core::RectF rect = S(rect_in);
+        const core::PointF offset(offset_in.x * scale_, offset_in.y * scale_);
+        const float blur = S(blur_in);
         if (blur <= 0.0f) {
             core::RectF shadow_r(rect.x + offset.x, rect.y + offset.y, rect.width, rect.height);
             fill_rect(shadow_r, color);
@@ -153,7 +193,8 @@ public:
         }
     }
 
-    void draw_linear_gradient(const core::RectF& rect, float angle_deg, const std::vector<std::pair<float, core::Color>>& stops) {
+    void draw_linear_gradient(const core::RectF& rect_in, float angle_deg, const std::vector<std::pair<float, core::Color>>& stops) {
+        const core::RectF rect = S(rect_in);
         if (stops.empty()) return;
         if (stops.size() == 1) {
             fill_rect(rect, stops[0].second);
@@ -206,6 +247,8 @@ public:
     }
 
     void draw_text(const std::string& text, float x, float y, float font_size, int font_weight, const core::Color& color) {
+        // El glifo se rasteriza a tamaño*escala: TTF real a resolución de pantalla.
+        x = S(x - origin_x_); y = S(y - origin_y_); font_size = S(font_size);
         float cx = x;
         // Decodificación UTF-8 real: itera por codepoints, no por bytes
         for (size_t i = 0; i < text.size();) {
@@ -227,7 +270,8 @@ public:
 
     // Imagen decodificada REAL escalada por vecino más cercano y mezclada
     // source-over píxel a píxel (respeta el clip activo y el alfa por píxel).
-    void draw_image(const std::shared_ptr<media::Image>& img, const core::RectF& dst) {
+    void draw_image(const std::shared_ptr<media::Image>& img, const core::RectF& dst_in) {
+        const core::RectF dst = S(dst_in);
         if (!img || !img->valid() || dst.width <= 0 || dst.height <= 0) return;
         for (int y = (int)dst.y; y < (int)(dst.y + dst.height); ++y) {
             if (y < 0 || y >= height_) continue;
@@ -269,7 +313,7 @@ public:
                     draw_image(cmd.image, cmd.rect);
                     break;
                 case CommandType::PUSH_CLIP:
-                    clip_stack_.push_back(cmd.rect);
+                    clip_stack_.push_back(S(cmd.rect));
                     break;
                 case CommandType::POP_CLIP:
                     if (!clip_stack_.empty()) clip_stack_.pop_back();

@@ -12,6 +12,7 @@
 #include "paint/rasterizer.hpp"
 #include "net/http_client.hpp"
 #include "js/js_engine.hpp"
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,11 +33,22 @@ inline static const std::string ENGINE_UA_CSS = R"CSS(
     object, embed, meter, progress { display: inline-block; }
 )CSS";
 
+// Resultado de un re-pintado por ventana (sin re-layout ni scripts).
+struct RasterWindow {
+    std::vector<uint32_t> pixels;  // ancho = viewport*escala, alto = filas*escala
+    int width{0};                  // px de dispositivo
+    int height{0};
+    int top_logical{0};            // primera fila LÓGICA del búfer
+    int rows_logical{0};           // filas LÓGICAS que cubre el búfer
+};
+
 struct RenderResult {
     std::shared_ptr<html::Document> document;
     std::shared_ptr<layout::LayoutBox> layout_tree;
     paint::DisplayList display_list;
     std::vector<uint32_t> pixels;
+    int raster_top_logical{0};   // fila lógica donde empieza el búfer
+    int raster_rows_logical{0};  // filas lógicas que cubre (0 → todo el viewport)
     int width{1000};
     int height{800};
     core::Profiler profiler;
@@ -176,10 +188,33 @@ class NubyBrowserEngine {
 private:
     int viewport_width_{1000};
     int viewport_height_{800};
+    // ESCALA DE RENDER (2026-10-14): 1.0 = píxel lógico. En pantallas de alta
+    // densidad (móviles, retina) el shell pide 2 o 3: el LAYOUT sigue
+    // midiendo en px lógicos (todo el CSS y las decisiones responsive no
+    // cambian) y el rasterizador pinta a esa resolución real. Es lo que
+    // separa una interfaz nítida de una pixelada.
+    float render_scale_{1.0f};
     layout::LayoutEngine layout_engine_;
     std::shared_ptr<html::Document> current_document_;
 
     std::shared_ptr<layout::LayoutBox> current_layout_tree_;
+    // Alto REAL (px de dispositivo) que se rasterizó del último documento.
+    // El shell lo lee para saber cuánto contenido tiene de verdad.
+    int last_raster_height_{0};
+    // ---- VENTANA de rasterizado ----
+    // Se pinta solo la franja pedida (px lógicos). El layout NO se toca.
+    int raster_top_{0};
+    int raster_window_rows_{0};   // 0 → el viewport completo (render normal)
+    int last_raster_top_{0};
+    int last_raster_rows_{0};
+    // RECORTE AL DOCUMENTO (2026-10-14): el búfer de una página no se reserva
+    // al tope de 8000 filas, sino al alto REAL que midió el layout (+ margen).
+    // En un móvil con densidad 3 eso es la diferencia entre reservar 112 MB
+    // siempre y reservar ~15 MB en una página normal. El presupuesto de
+    // píxeles es el techo honesto: si un documento es más alto que eso, se
+    // rasteriza hasta ahí (límite documentado, no un fallo silencioso).
+    bool trim_to_document_{false};
+    size_t content_pixel_budget_{24u * 1000u * 1000u};
     std::shared_ptr<js::JSEngine> current_js_engine_;
 
     void generate_display_list(const std::shared_ptr<layout::LayoutBox>& box, paint::DisplayList& dl) {
@@ -305,6 +340,77 @@ public:
         layout_engine_.set_viewport(static_cast<float>(w), static_cast<float>(h));
     }
 
+    // Cambia la densidad de render (px de dispositivo por px lógico).
+    // Debe ir seguido de un re-render (el shell lo hace en set_render_scale).
+    void set_render_scale(float s) {
+        if (s <= 0.01f) s = 1.0f;
+        if (std::abs(s - render_scale_) < 0.001f) return;
+        render_scale_ = s;
+    }
+    float render_scale() const { return render_scale_; }
+    int pixel_width() const { return static_cast<int>(std::lround(viewport_width_ * render_scale_)); }
+    int pixel_height() const { return static_cast<int>(std::lround(viewport_height_ * render_scale_)); }
+
+    void set_trim_to_document(bool v) { trim_to_document_ = v; }
+    // Pinta solo la franja [top, top+rows) en px lógicos. rows<=0 → viewport.
+    void set_raster_window(int top, int rows) {
+        raster_top_ = top < 0 ? 0 : top;
+        raster_window_rows_ = rows <= 0 ? 0 : rows;
+    }
+    int last_raster_top() const { return last_raster_top_; }
+    int last_raster_rows() const { return last_raster_rows_; }
+
+    // Re-pinta el documento ACTUAL sin re-layout ni scripts (scroll por
+    // ventana): el DOM, el layout y el intérprete quedan intactos.
+    RasterWindow rasterize_window(int top_logical, int rows_logical) {
+        set_raster_window(top_logical, rows_logical);
+        RasterWindow out;
+        if (!current_layout_tree_) return out;
+        paint::DisplayList dl;
+        generate_display_list(current_layout_tree_, dl);
+        render_window_to(out, dl);
+        return out;
+    }
+
+    void render_window_to(RasterWindow& out, const paint::DisplayList& dl) {
+        last_raster_height_ = raster_rows_for(current_layout_tree_);
+        last_raster_top_ = raster_top_;
+        paint::SoftwareRasterizer rasterizer(viewport_width_, last_raster_height_,
+                                             core::Color::white(), render_scale_);
+        rasterizer.set_origin(0.0f, (float)raster_top_);
+        rasterizer.execute_display_list(dl);
+        out.pixels = rasterizer.get_pixels();
+        out.width = rasterizer.get_width();
+        out.height = rasterizer.get_height();
+        out.top_logical = last_raster_top_;
+        out.rows_logical = last_raster_height_;
+    }
+    void set_content_pixel_budget(size_t px) { content_pixel_budget_ = px; }
+    int last_raster_height() const { return last_raster_height_; }
+
+    static void walk_bottom_px(const std::shared_ptr<layout::LayoutBox>& box, float& bottom) {
+        if (!box) return;
+        bottom = std::max(bottom, box->dimensions.border_box().bottom());
+        for (const auto& c : box->children) walk_bottom_px(c, bottom);
+    }
+
+    // Filas (px de dispositivo) que ocupará el rasterizado de este documento.
+    int raster_rows_for(const std::shared_ptr<layout::LayoutBox>& tree) {
+        int rows = raster_window_rows_ > 0 ? raster_window_rows_ : viewport_height_;
+        if (trim_to_document_) {
+            float bottom = 0.0f;
+            walk_bottom_px(tree, bottom);
+            const int doc_rows = (int)std::ceil(bottom) + 12;
+            rows = std::min(rows, std::max(1, doc_rows - raster_top_));
+        }
+        // Techo de memoria: filas máximas que caben en el presupuesto.
+        const int pw = std::max(1, (int)std::lround(viewport_width_ * render_scale_));
+        const int max_rows = std::max(1, (int)(content_pixel_budget_ / (size_t)pw));
+        if (rows > max_rows) rows = max_rows;
+        last_raster_rows_ = rows;
+        return rows;
+    }
+
     RenderResult render_page(const std::string& html_code, const std::string& custom_css = "", const std::string& js_code = "") {
         RenderResult result;
         result.width = viewport_width_;
@@ -374,9 +480,13 @@ public:
         // Stage 6: 2D Software Rasterizer (Pixel Framebuffer Compositing)
         {
             core::ScopedTimer timer(result.profiler, "Rasterization", "Subpixel anti-aliasing & Porter-Duff blend");
-            paint::SoftwareRasterizer rasterizer(viewport_width_, viewport_height_, core::Color::white());
-            rasterizer.execute_display_list(result.display_list);
-            result.pixels = rasterizer.get_pixels();
+            RasterWindow win;
+            render_window_to(win, result.display_list);
+            result.pixels = std::move(win.pixels);
+            result.width = win.width;     // px de dispositivo
+            result.height = win.height;
+            result.raster_top_logical = win.top_logical;
+            result.raster_rows_logical = win.rows_logical;
         }
 
         return result;
@@ -439,9 +549,13 @@ public:
         // Stage 6: Raster
         {
             core::ScopedTimer timer(result.profiler, "Rasterization", "Software rasterizer");
-            paint::SoftwareRasterizer rasterizer(viewport_width_, viewport_height_, core::Color::white());
-            rasterizer.execute_display_list(result.display_list);
-            result.pixels = rasterizer.get_pixels();
+            RasterWindow win;
+            render_window_to(win, result.display_list);
+            result.pixels = std::move(win.pixels);
+            result.width = win.width;     // px de dispositivo
+            result.height = win.height;
+            result.raster_top_logical = win.top_logical;
+            result.raster_rows_logical = win.rows_logical;
         }
 
         return result;

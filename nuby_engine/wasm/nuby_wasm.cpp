@@ -124,6 +124,12 @@ int nuby_key(const char* key) {
     return b.shell->handle_key(key) ? 1 : 0;
 }
 
+// Densidad de pantalla real del visitante (devicePixelRatio). El layout se
+// queda en px lógicos; solo cambia la resolución de rasterizado.
+void nuby_set_scale(float scale) {
+    if (browser().alive && browser().shell) browser().shell->set_render_scale(scale);
+}
+
 void nuby_resize(int w, int h) {
     WasmBrowser& b = browser();
     if (b.alive && w > 0 && h > 0) b.shell->set_viewport(w, h);
@@ -156,7 +162,10 @@ const unsigned char* nuby_frame_rle(int* out_len) {
     if (!b.alive) return nullptr;
     const auto& fb = b.shell->frame();
     if (fb.empty()) return nullptr;
-    b.rle = nuby::server::encode_rle(fb, b.shell->width(), b.shell->height());
+    // El frame viaja en píxeles de DISPOSITIVO (W*escala): el canvas del
+    // visitante lo muestra a su tamaño CSS y cada píxel del motor cae en un
+    // píxel físico de su pantalla (antes se estiraba y se veía borroso).
+    b.rle = nuby::server::encode_rle(fb, b.shell->pW(), b.shell->pH());
     if (out_len) *out_len = (int)b.rle.size();
     return b.rle.data();
 }

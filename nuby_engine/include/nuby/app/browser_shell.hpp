@@ -77,6 +77,95 @@ public:
     int chrome_h() const { return mode_ == Mode::HOME ? 0 : CHROME_H; }
     int visible_h() const { return H - chrome_h(); }
 
+    // ---- Densidad de render (2026-10-14) ----
+    // El layout (W, H, todo el CSS y las decisiones responsive) sigue en px
+    // lógicos; el rasterizador pinta a px de dispositivo. Un móvil con
+    // densidad 3 pide scale=3 y el frame sale 1170 px de ancho para una
+    // ventana de 390: texto y bordes nítidos de verdad, no estirados.
+    float render_scale_{1.0f};
+    int pW() const { return static_cast<int>(std::lround(W * render_scale_)); }
+    int pH() const { return static_cast<int>(std::lround(H * render_scale_)); }
+    int pChromeH() const { return static_cast<int>(std::lround(chrome_h() * render_scale_)); }
+    float render_scale() const { return render_scale_; }
+
+    // Densidad efectiva: la pedida, recortada por el presupuesto de memoria.
+    float effective_scale(float requested) const {
+        if (requested <= 0.01f) requested = 1.0f;
+        if (requested > 4.0f) requested = 4.0f;    // ningún móvil real pasa de 4
+        // Tope por memoria del lienzo visible: en un monitor enorme la
+        // densidad se recorta sola en vez de agotar la memoria del equipo.
+        const double wanted = (double)W * (double)H * requested * requested;
+        if (wanted <= FRAME_PIXEL_BUDGET) return requested;
+        const float capped = (float)std::sqrt(FRAME_PIXEL_BUDGET / ((double)W * (double)H));
+        return capped < 1.0f ? 1.0f : capped;
+    }
+
+    // Cambia la densidad y RE-RENDERIZA todo (los búferes cambian de tamaño).
+    void set_render_scale(float requested) {
+        const float sc = effective_scale(requested);
+        if (std::abs(sc - render_scale_) < 0.001f) return;
+        render_scale_ = sc;
+        apply_scale();
+        render_current_mode();
+        rebuild_chrome();
+    }
+
+    // ---- Estado visible del documento (para el estado que se muestra y las
+    // pruebas reales: alto del documento, posición del scroll y salto) ----
+    int content_height() const { return content_height_; }
+    int scroll_position() const { return scroll_y_; }
+    int raster_top() const { return content_top_; }
+    int raster_rows() const { return content_rows_; }
+    // Rueda del ratón / dedo en el lienzo: baja el documento de verdad.
+    bool scroll_by(int dy) { return handle_wheel(dy); }
+
+    // Punto de entrada para las pruebas de pintado: carga un documento real por
+    // el MISMO camino que una página descargada (parseo → CSS → layout →
+    // rasterizado). Solo para pruebas; el navegador usa la red.
+    void load_html_for_test(const std::string& html) {
+        core::LockGuard<core::Mutex> lock(mutex_);
+        mode_ = Mode::WEB;
+        scroll_y_ = 0;
+        content_top_ = 0;
+        current_url_ = "about:test";
+        current_title_ = "Documento de prueba";
+        render_content_doc(html, "", {});
+        rebuild_chrome();
+    }
+
+    // CSS propio de las vistas INTERNAS del navegador (inicio, resultados,
+    // menú, historial, ajustes, descargas, acerca de). El margen de 8 px del
+    // UA es correcto en las páginas web, pero en la interfaz del navegador
+    // dejaba un marco blanco alrededor y la barra no llegaba al borde.
+    static constexpr const char* UI_CSS = "body { margin: 0; }";
+
+    // ---- Lupa dibujada con primitivas ----
+    // El tipo de letra del motor NO trae U+2315 (⌕): el símbolo salía en
+    // blanco y dejaba un hueco raro en la caja de búsqueda. Se dibuja con
+    // primitivas del propio rasterizador: aro redondo (border-radius) + mango.
+    static std::string lupa_html(int size_px, const char* color) {
+        const int r = size_px / 2;
+        const int hueco = size_px - 4;          // aro de 2 px
+        const int rh = hueco / 2;
+        std::ostringstream o;
+        o << "<div style=\"display: flex; flex-direction: row; align-items: flex-end;\">"
+             // aro: círculo relleno con otro círculo del color del fondo encima
+             "<div style=\"width: " << size_px << "px; height: " << size_px
+          << "px; background-color: " << color << "; border-radius: " << r << "px;\">"
+             "<div style=\"width: " << hueco << "px; height: " << hueco
+          << "px; background-color: #ffffff; border-radius: " << rh << "px; margin: 2px;\"></div></div>"
+             // mango
+             "<div style=\"width: " << std::max(3, size_px / 3) << "px; height: 3px; background-color: "
+          << color << "; border-radius: 2px; margin-left: -2px;\"></div>"
+             "</div>";
+        return o.str();
+    }
+
+    void apply_scale() {
+        engine_chrome_->set_render_scale(render_scale_);
+        engine_content_->set_render_scale(render_scale_);
+    }
+
     // Re-renderiza TODO a un nuevo tamaño de ventana (móvil ↔ escritorio).
     void set_viewport(int w, int h) {
         // caps honestos: ni micro-frames ni monstruos que revienten la RAM
@@ -84,6 +173,9 @@ public:
         h = std::max(320, std::min(2160, h));
         if (w == W && h == H) return;
         W = w; H = h;
+        render_scale_ = effective_scale(render_scale_); // el tope depende del ancho
+        engine_chrome_->set_render_scale(render_scale_);
+        engine_content_->set_render_scale(render_scale_);
         engine_chrome_->set_viewport(W, CHROME_H);
         engine_content_->set_viewport(W, CONTENT_CAP);
         scroll_y_ = 0; // el alto visible cambió; el scroll viejo no aplica
@@ -113,6 +205,19 @@ public:
         }
     }
     static constexpr int CONTENT_CAP = 8000; // tope de alto de página (seguridad)
+    // Presupuestos de memoria (px de dispositivo).
+    //  - FRAME: el lienzo que se ve (chrome + pantalla) y se envía cada frame.
+    //  - CONTENIDO: la franja pintada de la página. Ya NO se pinta la página
+    //    entera: se pinta una VENTANA alrededor de lo visible (como hacen los
+    //    navegadores reales), así el búfer no crece con lo largo del
+    //    documento. Antes, una Wikipedia a densidad 3 pedía más de 100 MB.
+    static constexpr double FRAME_PIXEL_BUDGET = 9.0e6;
+    static constexpr double CONTENT_PIXEL_BUDGET = 12.0e6;
+    // Ventana de contenido: media pantalla por encima y una y media por debajo
+    // (2 pantallas y media en total). Al salir de ella se re-pinta solo esa
+    // franja, sin re-hacer el layout.
+    int window_back() const { return visible_h() / 2; }
+    int window_rows() const { return std::max(1, visible_h() * 5 / 2); }
 
     // Multi-sesión REAL: varias sesiones comparten UN índice de búsqueda
     // (como un crawler colectivo), pero cada una tiene su propio navegador:
@@ -122,6 +227,9 @@ public:
         if (!index_sp_) index_sp_ = std::make_shared<search::SearchIndex>();
         engine_chrome_ = std::make_unique<NubyBrowserEngine>(W, CHROME_H);
         engine_content_ = std::make_unique<NubyBrowserEngine>(W, CONTENT_CAP);
+        engine_content_->set_trim_to_document(true);
+        engine_content_->set_content_pixel_budget((size_t)CONTENT_PIXEL_BUDGET);
+        apply_scale();
         go_home();
     }
 
@@ -144,7 +252,11 @@ public:
         int max_scroll = std::max(0, content_height_ - visible_h());
         int old = scroll_y_;
         scroll_y_ = std::max(0, std::min(max_scroll, scroll_y_ + dy));
-        if (scroll_y_ != old) { compose(); return true; }
+        if (scroll_y_ != old) {
+            ensure_content_window();   // si se sale de la franja pintada, se re-pinta
+            compose();
+            return true;
+        }
         return false;
     }
 
@@ -348,11 +460,15 @@ private:
     bool select_all_{false};
 
     int scroll_y_{0};
+    // Cobertura REAL del búfer de contenido (px lógicos): de content_top_ a
+    // content_top_ + content_rows_. Fuera de esa franja hay que re-pintar.
+    int content_top_{0};
+    int content_rows_{0};
     int content_height_{H - CHROME_H};
     bool caret_on_{true};
 
     std::vector<uint32_t> frame_;       // W*H compuesto
-    std::vector<uint32_t> content_fb_;  // W*CONTENT_CAP render de la página
+    std::vector<uint32_t> content_fb_;  // búfer de contenido en px de DISPOSITIVO (recortado al documento)
     bool dirty_{true};
 
     std::vector<std::string> back_stack_;
@@ -468,8 +584,11 @@ private:
     std::string chrome_html() const {
         bool url_focused = (focus_ == Focus::URL);
         std::string shown = url_focused ? input_url_ : current_url_;
-        // scroll horizontal honesto: se ven los últimos caracteres
-        size_t max_vis = (size_t)std::max(24, W / 9); // ~9px/char a 15px
+        // Se ven los últimos caracteres, con el ancho REAL que deja la barra:
+        // en un móvil quedan ~160 px para la caja, así que el texto se recorta
+        // DENTRO de la caja (antes se salía del marco y se veía cortado).
+        const int ancho_botones = 175 + (W >= 640 ? 60 : 0);
+        size_t max_vis = (size_t)std::max(10, (W - ancho_botones) / 8);
         if (shown.size() > max_vis) shown = "…" + shown.substr(shown.size() - max_vis);
 
         std::string caret;
@@ -477,10 +596,12 @@ private:
             caret = "<div style=\"width: 2px; height: 20px; background-color: #1a73e8; margin-left: 1px;\"></div>";
 
         std::string lock;
+        if (W >= 520) {   // en móvil ese hueco se lo queda la propia dirección
         if (current_url_.rfind("https://", 0) == 0)
             lock = "<span style=\"color: #188038; font-size: 12px; font-weight: 700;\">TLS </span>";
         else if (current_url_.rfind("http://", 0) == 0)
             lock = "<span style=\"color: #b45309; font-size: 12px; font-weight: 700;\">http </span>";
+        }
 
         std::string ring = url_focused ? "#1a73e8" : "#dadce0";
 
@@ -525,27 +646,87 @@ private:
 
     // ---------------- Composición: chrome + contenido → frame ----------------
     void compose() {
-        if (frame_.size() != (size_t)(W * H)) frame_.assign((size_t)W * H, 0xFFFFFFFF);
-        const int ch = chrome_h();
+        // Composición en píxeles de DISPOSITIVO: el chrome y el contenido ya
+        // vienen rasterizados a densidad (W*escala de ancho). El scroll sigue
+        // pensado en filas lógicas, y aquí se traduce a filas de dispositivo.
+        const int pw = pW();
+        const int ph = pH();
+        const int ch = pChromeH();
+        if (frame_.size() != (size_t)pw * ph) frame_.assign((size_t)pw * ph, 0xFFFFFFFF);
         if (ch > 0) {
-            if (chrome_fb_.size() != (size_t)(W * ch)) rebuild_chrome_only();
+            if (chrome_fb_.size() != (size_t)pw * ch) rebuild_chrome_only();
             // 1) chrome (solo cuando la vista actual lo muestra; la home no)
-            std::copy(chrome_fb_.begin(), chrome_fb_.end(), frame_.begin());
+            const size_t n = std::min(chrome_fb_.size(), frame_.size());
+            std::copy(chrome_fb_.begin(), chrome_fb_.begin() + n, frame_.begin());
         }
-        // 2) contenido (slice con scroll)
-        int visible = visible_h();
-        for (int row = 0; row < visible; ++row) {
-            int src_row = row + scroll_y_;
-            auto dst = frame_.begin() + (size_t)(ch + row) * W;
-            if (src_row >= 0 && src_row < content_height_ &&
-                (size_t)((src_row + 1) * W) <= content_fb_.size()) {
-                auto src = content_fb_.begin() + (size_t)src_row * W;
-                std::copy(src, src + W, dst);
+        // 2) contenido (slice con scroll). scroll_y_ está en filas LÓGICAS y el
+        // búfer en filas de DISPOSITIVO: una fila lógica son `sc` filas del
+        // búfer. Se saltan las filas que no existen (nunca se lee de más).
+        const float sc = render_scale_ > 0.01f ? render_scale_ : 1.0f;
+        const size_t buf_rows = content_fb_.size() / (size_t)pw;   // filas reales del búfer
+        const int content_rows = ph - ch;
+        for (int drow = 0; drow < content_rows; ++drow) {
+            const int logical_row = (int)((float)drow / sc);
+            const int page_row = scroll_y_ + logical_row;       // fila del DOCUMENTO
+            const int in_buf = page_row - content_top_;         // fila dentro del búfer
+            const size_t src_row = (size_t)((float)in_buf * sc);
+            auto dst = frame_.begin() + (size_t)(ch + drow) * pw;
+            if (in_buf >= 0 && src_row < buf_rows) {
+                std::copy(content_fb_.begin() + src_row * pw,
+                          content_fb_.begin() + src_row * pw + pw, dst);
             } else {
-                std::fill(dst, dst + W, 0xFFFFFFFF);
+                std::fill(dst, dst + pw, 0xFFFFFFFF);
             }
         }
         dirty_ = true;
+    }
+
+    // ---------------- Adopción del búfer de contenido ----------------
+    // El motor ya recortó el búfer al alto REAL del documento (densidad
+    // incluida). Aquí se adopta tal cual y el alto usable se deriva de las
+    // filas que EXISTEN de verdad en el búfer: el scroll nunca puede pedir
+    // una fila que no esté pintada (antes se leía de más o se quedaba en
+    // blanco según el caso).
+    void adopt_content(const std::shared_ptr<RenderResult>& res) {
+        if (!res) return;
+        content_fb_ = res->pixels;
+        content_top_ = res->raster_top_logical;
+        content_rows_ = res->raster_rows_logical;   // filas lógicas que cubre el búfer
+        // Alto del DOCUMENTO (para el scroll): se mide del layout, no del búfer
+        // (el búfer es solo una franja).
+        int doc_rows = visible_h();
+        if (res->layout_tree) {
+            float max_bottom = 0;
+            walk_bottom(res->layout_tree, max_bottom);
+            doc_rows = (int)max_bottom + 12;
+        }
+        content_height_ = std::max(visible_h(), std::min(doc_rows, CONTENT_CAP));
+    }
+
+    // ---------------- Scroll por ventana ----------------
+    // Si lo visible ya no cabe en la franja pintada, se re-pinta SOLO esa
+    // franja (sin re-layout ni scripts: el DOM no se toca).
+    void ensure_content_window() {
+        if (!content_result_ || !content_result_->document) return;
+        const int vis = visible_h();
+        if (content_rows_ > 0 && scroll_y_ >= content_top_ &&
+            scroll_y_ + vis <= content_top_ + content_rows_) {
+            return;   // la franja actual ya cubre lo que se ve
+        }
+        const int top = std::max(0, std::min(scroll_y_ - window_back(),
+                                             std::max(0, CONTENT_CAP - vis)));
+        const int rows = std::min(window_rows(), std::max(vis, CONTENT_CAP - top));
+        auto win = engine_content_->rasterize_window(top, rows);
+        if (win.pixels.empty()) return;
+        content_fb_ = std::move(win.pixels);
+        content_top_ = win.top_logical;
+        content_rows_ = win.rows_logical;
+        if (content_result_) {
+            // El búfer del RenderResult queda como el que de verdad se usa
+            content_result_->pixels = content_fb_;
+            content_result_->raster_top_logical = content_top_;
+            content_result_->raster_rows_logical = content_rows_;
+        }
     }
     void rebuild_chrome_only() {
         auto res = engine_chrome_->render_page(chrome_html());
@@ -553,22 +734,25 @@ private:
         chrome_fb_ = chrome_result_->pixels;
     }
 
+    // Pinta la página DESDE ARRIBA con una ventana de 2,5 pantallas: el búfer
+    // no crece con lo largo del documento (al bajar se re-pinta la franja).
+    RenderResult paint_page_top(const std::string& html, const std::string& css) {
+        engine_content_->set_raster_window(0, window_rows());
+        return engine_content_->render_page(html, css);
+    }
+    RenderResult paint_doc_top(const std::shared_ptr<html::Document>& doc, const std::string& css) {
+        engine_content_->set_raster_window(0, window_rows());
+        return engine_content_->render_document(doc, css);
+    }
+
     // ---------------- Render del documento de contenido ----------------
     void render_content_doc(const std::string& html_clean, const std::string& css,
                             const std::vector<std::string>& scripts) {
         page_css_ = UA_EXTRA_CSS + "\n" + css;
         auto res = std::make_shared<RenderResult>(
-            engine_content_->render_page(html_clean, page_css_));
+            paint_page_top(html_clean, page_css_));
         content_result_ = res;
-        content_fb_ = res->pixels;
-
-        // Altura real del contenido: camina el layout tree
-        content_height_ = visible_h();
-        if (res->layout_tree) {
-            float max_bottom = 0;
-            walk_bottom(res->layout_tree, max_bottom);
-            content_height_ = std::max(visible_h(), std::min((int)max_bottom + 12, CONTENT_CAP));
-        }
+        adopt_content(res);   // búfer + alto real rasterizado (documento, no 8000 filas)
 
         // Ejecuta los scripts inline con el intérprete REAL
         js_ = std::make_shared<js::Interpreter>(res->document);
@@ -590,14 +774,9 @@ private:
         if (mutated) {
             // El DOM cambió de verdad → repinta con el DOM mutado
             res = std::make_shared<RenderResult>(
-                engine_content_->render_page(serialize_body(res->document), UA_EXTRA_CSS + "\n" + css));
+                paint_page_top(serialize_body(res->document), UA_EXTRA_CSS + "\n" + css));
             content_result_ = res;
-            content_fb_ = res->pixels;
-            if (res->layout_tree) {
-                float max_bottom = 0;
-                walk_bottom(res->layout_tree, max_bottom);
-                content_height_ = std::max(visible_h(), std::min((int)max_bottom + 12, CONTENT_CAP));
-            }
+            adopt_content(res);
             // Re-bind del intérprete al documento nuevo (el anterior quedó muerto)
             {
                 auto eng = engine_content_->get_js_engine();
@@ -861,20 +1040,15 @@ private:
             // Documento VIVO (no serializar+re-parsear): el intérprete y su
             // estado JS (funciones, variables, handlers) SOBREVIVEN al repintado.
             auto res = std::make_shared<RenderResult>(
-                engine_content_->render_document(content_result_->document,
-                                                 page_css_.empty() ? UA_EXTRA_CSS : page_css_));
+                paint_doc_top(content_result_->document,
+                              page_css_.empty() ? UA_EXTRA_CSS : page_css_));
             content_result_ = res;
-            content_fb_ = res->pixels;
+            adopt_content(res);
             // re-bind (mismo documento → mismo intérprete conservado)
             {
                 auto eng = engine_content_->get_js_engine();
                 js_ = eng ? eng->interpreter() : nullptr;
                 if (js_) js_->clear_mutation();
-            }
-            if (res->layout_tree) {
-                float max_bottom = 0;
-                walk_bottom(res->layout_tree, max_bottom);
-                content_height_ = std::max(visible_h(), std::min((int)max_bottom + 12, CONTENT_CAP));
             }
         }
         compose();
@@ -994,12 +1168,7 @@ private:
 
         // Render + scripts (render_content_doc también mide altura real)
         content_result_ = parse_res;
-        content_fb_ = parse_res->pixels;
-        content_height_ = visible_h();
-        if (parse_res->layout_tree) {
-            float mb = 0; walk_bottom(parse_res->layout_tree, mb);
-            content_height_ = std::max(visible_h(), std::min((int)mb + 12, CONTENT_CAP));
-        }
+        adopt_content(parse_res);
 
         // UN SOLO intérprete por página. ANTES los scripts corrían DOS veces
         // (una dentro de render_page y otra aquí) con estados separados: doble
@@ -1068,13 +1237,9 @@ private:
                 status_ += " · imgs " + std::to_string(ok_imgs) + "/" +
                            std::to_string(ok_imgs + bad_imgs);
                 parse_res = std::make_shared<RenderResult>(
-                    engine_content_->render_document(parse_res->document, page_css_));
+                    paint_doc_top(parse_res->document, page_css_));
                 content_result_ = parse_res;
-                content_fb_ = parse_res->pixels;
-                if (parse_res->layout_tree) {
-                    float mb2 = 0; walk_bottom(parse_res->layout_tree, mb2);
-                    content_height_ = std::max(visible_h(), std::min((int)mb2 + 12, CONTENT_CAP));
-                }
+                adopt_content(parse_res);
             }
         }
 
@@ -1239,14 +1404,10 @@ private:
     void refresh_content() {
         if (!content_result_ || !content_result_->document) { compose(); rebuild_chrome(); return; }
         auto res = std::make_shared<RenderResult>(
-            engine_content_->render_document(content_result_->document,
-                                             page_css_.empty() ? UA_EXTRA_CSS : page_css_));
+            paint_doc_top(content_result_->document,
+                          page_css_.empty() ? UA_EXTRA_CSS : page_css_));
         content_result_ = res;
-        content_fb_ = res->pixels;
-        if (res->layout_tree) {
-            float mb = 0; walk_bottom(res->layout_tree, mb);
-            content_height_ = std::max(visible_h(), std::min((int)mb + 12, CONTENT_CAP));
-        }
+        adopt_content(res);
         // el intérprete ligado a ESTE documento se conserva (render_document)
         auto eng = engine_content_->get_js_engine();
         js_ = eng ? eng->interpreter() : nullptr;
@@ -1288,11 +1449,16 @@ private:
         const int side = W >= 680 ? (W - 580) / 2 : 18;
         const int top_gap = H >= 700 ? 112 : (H >= 520 ? 70 : 38);
         const char* ring = (focus_ == Focus::SEARCH) ? "#1a73e8" : "#dadce0";
-        const char* placeholder = W < 390 ? "Buscar en Nuby..." : "Buscar videojuegos, tecnología";
-        const int nav_gap = W < 390 ? 7 : 14;
+        // Textos que CABEN en el ancho real: en un móvil la píldora mide ~354 px
+        // y una frase larga se partía en dos renglones y empujaba el botón de
+        // buscar fuera de la caja (defecto visto en la revisión de móvil).
+        const char* placeholder = W < 520 ? "Buscar en Nuby..."
+                                          : "Buscar videojuegos, tecnología";
+        const bool estrecho = W < 680;
+        const int nav_gap = W < 390 ? 6 : (estrecho ? 10 : 14);
 
         std::ostringstream h;
-        h << "<div style=\"background-color: #f8f9fa; padding: 18px " << side
+        h << "<div style=\"background-color: #f8f9fa; height: " << H << "px; padding: 18px " << side
           << "px 14px " << side << "px;\">"
           // Encabezado nativo, con marca y perfil.
           << "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
@@ -1306,8 +1472,8 @@ private:
           << "<div style=\"margin-top: 28px; background-color: " << ring << "; border-radius: 30px; padding: 1px;\">"
           << "<div data-nuby-input=\"search\" style=\"background-color: #ffffff; border-radius: 29px; padding: 10px 10px 10px 18px;\">"
           << "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
-          // Lupa vectorial aproximada con primitivas nativas, no imagen.
-          << "<span style=\"color: #5f6368; font-size: 18px;\">⌕</span>"
+          // Lupa dibujada con primitivas del motor (aro + mango), no un emoji.
+          << lupa_html(13, "#5f6368")
           << "<span style=\"color: " << (input_search_.empty() && focus_ != Focus::SEARCH ? "#5f6368" : "#202124")
           << "; font-size: 15px; margin-left: 12px;\">"
           << esc(focus_ == Focus::SEARCH ? input_search_ : (input_search_.empty() ? placeholder : input_search_)) << "</span>";
@@ -1315,26 +1481,31 @@ private:
             h << "<div style=\"width: 2px; height: 19px; background-color: #1a73e8; margin-left: 2px;\"></div>";
         h << "<div style=\"flex-grow: 1;\"></div>"
           << "<div data-action=\"do-search\" style=\"width: 36px; height: 36px; border-radius: 18px; background-color: #e8f0fe;\">"
-          << "<div style=\"text-align: center; margin-top: 7px;\"><span style=\"color: #1a73e8; font-size: 18px;\">⌕</span></div></div>"
+          << "<div style=\"margin-top: 9px; margin-left: 9px;\">" << lupa_html(12, "#1a73e8") << "</div></div>"
           << "</div></div></div>"
           << "<div style=\"margin-top: 17px;\"><span style=\"color: #5f6368; font-size: 12px;\">Busca rápidamente en la web con Nuby</span></div></div>"
           // Navegación principal pintada por el motor. Los enlaces usan la
           // navegación interna real y por tanto no son botones decorativos.
-          << "<div style=\"margin-top: " << (H >= 600 ? 108 : 56) << "px; background-color: #ffffff; padding: 12px 6px;\">"
+          << "<div style=\"margin-top: " << (H >= 700 ? 108 : (H >= 520 ? 64 : 36))
+          << "px; background-color: #ffffff; padding: 12px 6px;\">"
           << "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
-          << "<a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 12px;\">⌂ Inicio</a>"
+          << "<a href=\"nuby://home\" style=\"color: #1a73e8; font-size: " << (estrecho ? 12 : 12)
+          << "px;\">" << (estrecho ? "" : "⌂ ") << "Inicio</a>"
           << "<div style=\"width: " << nav_gap << "px;\"></div>"
-          << "<div data-nuby-input=\"search\" style=\"padding: 2px;\"><span style=\"color: #5f6368; font-size: 12px;\">⌕ Buscar</span></div>"
+          << "<div data-nuby-input=\"search\" style=\"padding: 2px;\"><span style=\"color: #5f6368; font-size: 12px;\">"
+          << "Buscar</span></div>"
           << "<div style=\"width: " << nav_gap << "px;\"></div>"
-          << "<a href=\"nuby://history\" style=\"color: #5f6368; font-size: 12px;\">★ Favoritos</a>"
+          << "<a href=\"nuby://history\" style=\"color: #5f6368; font-size: 12px;\">"
+          << (estrecho ? "" : "★ ") << "Historial</a>"
           << "<div style=\"width: " << nav_gap << "px;\"></div>"
-          << "<a href=\"nuby://settings\" style=\"color: #5f6368; font-size: 12px;\">⚙ Config.</a>"
+          << "<a href=\"nuby://settings\" style=\"color: #5f6368; font-size: 12px;\">"
+          << (estrecho ? "" : "⚙ ") << "Config.</a>"
           << "<div style=\"width: " << nav_gap << "px;\"></div>"
-          << "<a href=\"nuby://menu\" style=\"color: #5f6368; font-size: 12px;\">☰ Menú</a>"
+          << "<a href=\"nuby://menu\" style=\"color: #5f6368; font-size: 12px;\">"
+          << (estrecho ? "" : "☰ ") << "Menú</a>"
           << "</div></div>"
-          << "<div style=\"text-align: center; margin-top: 16px;\"><span style=\"color: #5f6368; font-size: 12px;\">Nuby v2.4.1 — Hecho con ♥ para navegadores modernos.</span></div>"
           << "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
     }
 
     void show_search_results(const std::string& q) {
@@ -1363,9 +1534,13 @@ private:
         const int pad = (W >= 720) ? 60 : 18;
         std::ostringstream h;
         h << "<div style=\"padding: 18px " << pad << "px 40px " << pad << "px;\">"
-          // fila superior: mini-logo + caja con la query (como todo buscador)
-             "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 14px; margin-bottom: 10px;\">"
-               "<div style=\"line-height: 30px;\"><a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 20px; font-weight: 800;\">Nuby</a></div>"
+          // fila superior: mini-logo + caja con la query (como todo buscador).
+          // En móvil el logo se omite: la caja ya ocupa todo el ancho útil y el
+          // logo se montaba encima del texto (defecto visto en la revisión).
+             "<div style=\"display: flex; flex-direction: row; align-items: center; gap: 14px; margin-bottom: 10px;\">";
+        if (W >= 640)
+            h <<   "<div style=\"line-height: 30px;\"><a href=\"nuby://home\" style=\"color: #1a73e8; font-size: 20px; font-weight: 800;\">Nuby</a></div>";
+        h << ""
                "<div data-nuby-input=\"search\" style=\"flex-grow: 1; max-width: 560px; border: 1px solid #dfe1e5; border-radius: 20px; padding: 8px 14px;\">"
                  "<div style=\"display: flex; flex-direction: row; align-items: center;\">"
                  "<span style=\"color: #202124; font-size: 15px;\">"
@@ -1397,7 +1572,7 @@ private:
               "</div>";
         }
         h << "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 
@@ -1436,7 +1611,7 @@ private:
              "Si estas en el sandbox de Arena, recuerda: no hay salida a internet; en tu PC/Termux la misma peticion es real.</p>"
              "<div style=\"margin-top: 20px;\"><a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 14px;\">volver al inicio</a></div>"
           "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 
@@ -1475,7 +1650,7 @@ private:
              "· Webs gigantes con JS pesado no funcionaran; nadie construye un Chrome en una semana</p>"
              "<div style=\"margin-top: 22px;\"><a href=\"" << esc(back_to) << "\" style=\"color: #0b57d0; font-size: 14px;\">volver</a></div>"
           "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 
@@ -1505,7 +1680,7 @@ private:
              "<span style=\"color: #999;\"> · </span>"
              "<a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 13px;\">inicio</a></div>"
           "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 
@@ -1553,7 +1728,7 @@ private:
         h <<   "</div>"
              "<div style=\"width: 1px; background-color: #e0e0e0;\"></div>"
              "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 
@@ -1596,7 +1771,7 @@ private:
              "<span style=\"color: #999;\"> · </span>"
              "<a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 13px;\">inicio</a></div>"
           "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 
@@ -1687,7 +1862,7 @@ private:
              "<span style=\"color: #999;\"> · </span>"
              "<a href=\"nuby://home\" style=\"color: #0b57d0; font-size: 13px;\">inicio</a></div>"
           "</div>";
-        render_content_doc(h.str(), "", {});
+        render_content_doc(h.str(), UI_CSS, {});
         rebuild_chrome();
     }
 

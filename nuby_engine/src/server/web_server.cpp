@@ -126,7 +126,7 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
             return http_response(200, "OK", "application/octet-stream", "");
         }
         // el tamaño es el de ESTA sesión (viewport dinámico real)
-        auto rle = encode_rle(fb, ses.shell->width(), ses.shell->height());
+        auto rle = encode_rle(fb, ses.shell->pW(), ses.shell->pH());
         is_binary = true;
         return http_response_bin(200, "OK", "application/x-nuby-rle", rle);
     }
@@ -138,6 +138,15 @@ std::string WebServer::handle_request(const std::string& method, const std::stri
             int x = std::atoi(qs_get(query, "x").c_str());
             int y = std::atoi(qs_get(query, "y").c_str());
             changed = ses.shell->handle_click(x, y);
+        } else if (k == "scale") {
+            // Densidad de la pantalla del visitante (devicePixelRatio): el
+            // layout no cambia, el pintado sí → texto nítido en su monitor.
+            float sc = (float)std::atof(qs_get(query, "v").c_str());
+            if (sc > 0.0f) {
+                int old_w = ses.shell->pW(), old_h = ses.shell->pH();
+                ses.shell->set_render_scale(sc);
+                changed = (ses.shell->pW() != old_w || ses.shell->pH() != old_h);
+            }
         } else if (k == "resize") {
             // el monitor reporta el tamaño real de su pantalla
             int w = std::atoi(qs_get(query, "w").c_str());

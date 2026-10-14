@@ -697,6 +697,90 @@ void test_antialiasing_texto() {
     std::cout << "  [✔] antialiasing real OK\n";
 }
 
+
+// ---------------------------------------------------------------------------
+// DENSIDAD DE PANTALLA (2026-10-14). Reproduce el fallo REAL que vio el
+// usuario en su móvil: la ventana era de 390 px lógicos pero la pantalla tiene
+// densidad 3, así que el navegador estiraba el frame a 1170 px físicos y la
+// interfaz se veía pixelada. La escala de render pinta a px de dispositivo y
+// el layout SIGUE en px lógicos.
+// ---------------------------------------------------------------------------
+void test_escala_de_render() {
+    std::cout << "[Test] Densidad de pantalla: frame nítido sin romper el layout...\n";
+    auto index = std::make_shared<search::SearchIndex>();
+    app::BrowserShell shell(index);
+    shell.set_viewport(390, 700);          // un móvil típico, en px lógicos
+
+    const int w_logico = shell.width();
+    const int h_logico = shell.height();
+    shell.set_render_scale(3.0f);          // devicePixelRatio de un móvil real
+
+    CHECK(shell.width() == w_logico && shell.height() == h_logico,
+          "la ventana lógica NO cambia con la densidad (el layout es el mismo)");
+    CHECK(std::abs(shell.render_scale() - 3.0f) < 0.01f,
+          "el motor acepta densidad 3 (pantalla de móvil) sin recortarla");
+    CHECK(shell.pW() == w_logico * 3 && shell.pH() == h_logico * 3,
+          "el frame sale a 3x (cada píxel del motor = un píxel físico)");
+    CHECK(shell.frame().size() == (size_t)shell.pW() * shell.pH(),
+          "el búfer compuesto mide exactamente el ancho y alto de dispositivo");
+
+    int tinta = 0;
+    for (uint32_t px : shell.frame()) if ((px & 0xFFFFFF) != 0xFFFFFF) ++tinta;
+    CHECK(tinta > 1000, "el frame escalado trae contenido real pintado");
+
+    // Memoria acotada: en un monitor grande la densidad se recorta sola en vez
+    // de pedir un búfer imposible.
+    shell.set_viewport(1920, 1080);
+    shell.set_render_scale(3.0f);
+    CHECK((double)shell.pW() * shell.pH() <= 9.5e6,
+          "con 1920 px de ancho la densidad se recorta por presupuesto de memoria");
+    CHECK(shell.render_scale() < 3.0f, "y el recorte se ve en la densidad efectiva");
+
+    shell.set_viewport(390, 700);
+    shell.set_render_scale(1.0f);
+    CHECK(shell.pW() == 390 && shell.pH() == 700, "densidad 1 vuelve al tamaño lógico exacto");
+    std::cout << "  [✔] escala de render a densidad real OK\n";
+}
+
+void test_scroll_por_ventana() {
+    std::cout << "[Test] Página larga: ventana de pintado + scroll real...\n";
+    auto index = std::make_shared<search::SearchIndex>();
+    app::BrowserShell shell(index);
+    shell.set_viewport(390, 700);
+    shell.set_render_scale(3.0f);
+
+    // Documento LARGO y con marca al final: si el búfer se recortara mal, la
+    // parte de abajo saldría en blanco (el fallo que hay que evitar).
+    std::string html = "<html><body><h1>Arriba</h1>";
+    for (int i = 0; i < 120; ++i)
+        html += "<p>Renglón " + std::to_string(i) + " con texto suficiente para ocupar ancho.</p>";
+    html += "<h2 id=fin>FINAL DEL DOCUMENTO</h2></body></html>";
+    // Carga el documento por el MISMO camino que una página real (red interna
+    // del navegador): nuby:// con el HTML incrustado no existe, así que se usa
+    // el punto de entrada de pruebas del propio shell.
+    shell.load_html_for_test(html);
+
+    const int vis = shell.height();
+    CHECK(shell.content_height() > vis * 3,
+          "el documento es varias veces más alto que la pantalla");
+
+    // Baja hasta el final: en cada paso la vista debe traer contenido pintado.
+    int pasos = 0, blancos = 0;
+    while (shell.scroll_by(200)) {
+        ++pasos;
+        int tinta = 0;
+        const auto& fb = shell.frame();
+        for (size_t i = 0; i < fb.size(); i += 7)
+            if ((fb[i] & 0xFFFFFF) != 0xFFFFFF) ++tinta;
+        if (tinta < 50) ++blancos;
+        if (pasos > 200) break;
+    }
+    CHECK(pasos > 3, "se recorrió la página hacia abajo de verdad");
+    CHECK(blancos == 0, "NINGÚN tramo quedó en blanco (la ventana se re-pinta al bajar)");
+    CHECK(shell.scroll_position() > vis * 2, "el scroll llegó lejos dentro del documento");
+    std::cout << "  [✔] ventana de pintado y scroll OK\n";
+}
+
 int main() {
     std::cout << "========================================\n"
               << "  NUBY ENGINE 2.0 — TEST SUITE REAL\n"
@@ -721,9 +805,11 @@ int main() {
     test_configuracion_real();
     test_foco_texto_teclado();
     test_antialiasing_texto();
+    test_escala_de_render();
+    test_scroll_por_ventana();
     std::cout << "========================================\n";
     if (failures == 0) {
-        std::cout << "\033[1;32mTODO PASA — 20/20 suites reales (100%)\033[0m\n";
+        std::cout << "\033[1;32mTODO PASA — 22/22 suites reales (100%)\033[0m\n";
         return 0;
     }
     std::cout << "\033[1;31m" << failures << " comprobaciones fallaron\033[0m\n";

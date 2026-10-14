@@ -30,7 +30,7 @@ fi
 
 EXPORTS=(
     nuby_alloc nuby_boot nuby_documents nuby_terms nuby_width nuby_height
-    nuby_click nuby_wheel nuby_char nuby_key nuby_resize nuby_goto nuby_tick
+    nuby_click nuby_wheel nuby_char nuby_key nuby_resize nuby_set_scale nuby_goto nuby_tick
     nuby_frame_rle nuby_state nuby_search nuby_history
 )
 LDFLAGS=(--no-entry --strip-all -z stack-size=4194304)
