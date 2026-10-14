@@ -143,5 +143,29 @@ const ext = JSON.parse(cstr(ex.nuby_state()));
 check(ext.status.toLowerCase().includes("fallo") || ext.status.includes("bloqueo"),
       `la web externa falla de forma honesta (CORS): "${ext.status}"`);
 
+// ---- Densidad de pantalla (devicePixelRatio) y scroll por ventana ----------
+// Reproduce lo que hace el navegador del visitante en un móvil: pide densidad
+// 3 y comprueba que el frame sale a esa resolución real (antes se estiraba y
+// se veía pixelado).
+ex.nuby_resize(390, 700);
+ex.nuby_set_scale(3.0);
+const hi = frame();
+check(hi && hi.w === 1170 && hi.h === 2100,
+      `con densidad 3 el frame sale a resolución de pantalla (${hi ? hi.w + "x" + hi.h : "sin frame"})`);
+check(hi && hi.colors > 10, "el frame a densidad 3 trae contenido pintado");
+
+// Página LARGA: al bajar con la rueda el motor re-pinta la franja visible.
+withCString("http://local/corpus/larga.html", (p) => ex.nuby_goto(p));
+let blank = 0, steps = 0;
+for (let i = 0; i < 60; i++) {
+  const moved = ex.nuby_wheel(300);
+  if (!moved) break;
+  steps++;
+  const f = frame();
+  if (!f || f.colors <= 4) blank++;   // solo blanco = franja sin pintar
+}
+check(steps > 2, `la página larga se desplazó de verdad (${steps} pasos de rueda)`);
+check(blank === 0, "ningún tramo del scroll quedó en blanco (ventana re-pintada)");
+
 console.log(failures === 0 ? "\nTODO PASA en la build de navegador" : `\n${failures} comprobaciones fallaron`);
 process.exit(failures === 0 ? 0 : 1);

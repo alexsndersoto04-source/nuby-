@@ -19,9 +19,12 @@
     exports: null,
     canvas: null,
     ctx: null,
+    keys: null,       // campo oculto que da vida al teclado del móvil
     ready: false,
-    w: 0,
+    w: 0,             // tamaño del búfer en px físicos
     h: 0,
+    logicalW: 0,      // tamaño en px lógicos (los que usa el motor para el layout)
+    logicalH: 0,
     lastSeq: -1,
   };
 
@@ -39,9 +42,10 @@
     if (!w || !h) return;
 
     if (STATE.w !== w || STATE.h !== h) {
+      // El búfer va a la resolución física (w,h) y el CSS lo muestra al tamaño
+      // lógico: así un píxel del motor cae en un píxel real de la pantalla.
       STATE.canvas.width = w;
       STATE.canvas.height = h;
-      STATE.canvas.style.aspectRatio = w + " / " + h;
       STATE.w = w; STATE.h = h;
     }
     const img = STATE.ctx.createImageData(w, h);
@@ -126,32 +130,79 @@
   }
 
   // -------------------------------------------------------------- entrada ---
+  // El motor trabaja en píxeles LÓGICOS (los mismos que el CSS de la página);
+  // el canvas tiene la resolución física (x densidad). Por eso la conversión
+  // usa el tamaño CSS, no el tamaño del búfer.
   function canvasCoords(ev) {
     const r = STATE.canvas.getBoundingClientRect();
-    const x = Math.round((ev.clientX - r.left) * (STATE.canvas.width / r.width));
-    const y = Math.round((ev.clientY - r.top) * (STATE.canvas.height / r.height));
-    return [Math.max(0, Math.min(STATE.canvas.width - 1, x)),
-            Math.max(0, Math.min(STATE.canvas.height - 1, y))];
+    const x = Math.round((ev.clientX - r.left) * (STATE.logicalW / r.width));
+    const y = Math.round((ev.clientY - r.top) * (STATE.logicalH / r.height));
+    return [Math.max(0, Math.min(STATE.logicalW - 1, x)),
+            Math.max(0, Math.min(STATE.logicalH - 1, y))];
+  }
+
+  // Enseña el teclado del teléfono: los navegadores solo abren el teclado
+  // virtual si el foco va a un campo de texto REAL dentro de un gesto del
+  // usuario (un tap). Sin esto, en un móvil no se puede escribir NADA.
+  function focusKeyCatcher() {
+    const el = STATE.keys;
+    if (!el) return;
+    try {
+      el.focus({ preventScroll: true });
+    } catch (e) {
+      try { el.focus(); } catch (_) { /* sin teclado disponible: no se rompe */ }
+    }
   }
 
   function bindInput() {
     const ex = () => STATE.exports;
-    STATE.canvas.addEventListener("mousedown", (ev) => {
-      ev.preventDefault();
+    const canvas = STATE.canvas;
+
+    const clickAt = (ev) => {
       const [x, y] = canvasCoords(ev);
       ex().nuby_click(x, y);
       paint(); refreshState();
-      STATE.canvas.focus();
-    });
-    STATE.canvas.addEventListener("wheel", (ev) => {
+      focusKeyCatcher();          // móvil: abre el teclado del sistema
+    };
+
+    canvas.addEventListener("mousedown", (ev) => { ev.preventDefault(); clickAt(ev); });
+
+    // ---- Táctil: tap = clic, arrastre vertical = scroll del motor ----
+    let touchY = null, moved = 0;
+    canvas.addEventListener("touchstart", (ev) => {
+      if (ev.touches.length !== 1) return;
+      ev.preventDefault();
+      touchY = ev.touches[0].clientY;
+      moved = 0;
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", (ev) => {
+      if (touchY === null || ev.touches.length !== 1) return;
+      ev.preventDefault();
+      const y = ev.touches[0].clientY;
+      const dy = touchY - y;              // dedo hacia arriba = bajar la página
+      moved += Math.abs(dy);
+      touchY = y;
+      if (Math.abs(dy) >= 1 && ex().nuby_wheel(Math.round(dy))) { paint(); refreshState(); }
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", (ev) => {
+      if (touchY !== null && moved < 8) clickAt(ev.changedTouches[0]);
+      touchY = null;
+    }, { passive: false });
+
+    canvas.addEventListener("wheel", (ev) => {
       ev.preventDefault();
       ex().nuby_wheel(Math.round(ev.deltaY));
       paint(); refreshState();
     }, { passive: false });
 
+    // ---- Teclado FÍSICO (escritorio) ----
     window.addEventListener("keydown", (ev) => {
       const e = ex();
-      if (!e) return;
+      if (!e || !STATE.ready) return;
+      // Si el usuario está escribiendo en el campo oculto, ese camino manda.
+      if (document.activeElement === STATE.keys) return;
       const special = {
         Backspace: "Backspace", Enter: "Enter", Escape: "Escape",
         ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
@@ -170,23 +221,61 @@
       }
     });
 
-    let rt = null;
-    window.addEventListener("resize", () => {
-      clearTimeout(rt);
-      rt = setTimeout(() => {
-        resizeEngine();
+    // ---- Teclado TÁCTIL (móvil): campo oculto que recibe el texto real ----
+    const keys = STATE.keys;
+    if (keys) {
+      keys.addEventListener("input", () => {
+        const e = ex();
+        if (!e) return;
+        const value = keys.value;      // puede traer varias letras del autocorrector
+        keys.value = "";
+        for (const ch of value) {
+          const cp = ch.codePointAt(0);
+          if (cp >= 32 && cp !== 127) e.nuby_char(cp);
+        }
         paint(); refreshState();
-      }, 180);
-    });
+      });
+      keys.addEventListener("keydown", (ev) => {
+        const special = {
+          Backspace: "Backspace", Enter: "Enter", Escape: "Escape",
+          ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
+          ArrowUp: "ArrowUp", ArrowDown: "ArrowDown",
+        };
+        if (special[ev.key]) {
+          ev.preventDefault();
+          callString("nuby_key", special[ev.key]);
+          paint(); refreshState();
+        }
+      });
+    }
+
+    let rt = null;
+    const relayout = () => {
+      clearTimeout(rt);
+      rt = setTimeout(() => { resizeEngine(); paint(); refreshState(); }, 150);
+    };
+    window.addEventListener("resize", relayout);
+    window.addEventListener("orientationchange", relayout);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", relayout);
   }
 
+  // Tamaño de la ventana del motor = tamaño REAL del contenedor en píxeles
+  // lógicos (CSS). Antes estaba limitado a 900 px de alto (72% de la pantalla)
+  // y a 1400 de ancho: en un móvil la interfaz no llenaba la pantalla.
   function resizeEngine() {
     const ex = STATE.exports;
     if (!ex) return;
     const box = STATE.canvas.parentElement;
-    const w = Math.max(320, Math.min(1400, box.clientWidth));
-    const h = Math.max(360, Math.min(900, Math.round(window.innerHeight * 0.72)));
+    const rect = box.getBoundingClientRect();
+    const w = Math.max(240, Math.round(rect.width || box.clientWidth || window.innerWidth));
+    const h = Math.max(320, Math.round(rect.height || box.clientHeight || window.innerHeight));
+    // Densidad de la pantalla (2 o 3 en móviles): el motor rasteriza a esa
+    // resolución y el texto deja de verse pixelado.
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    if (typeof ex.nuby_set_scale === "function") ex.nuby_set_scale(dpr);
     ex.nuby_resize(w, h);
+    STATE.logicalW = ex.nuby_width ? ex.nuby_width() : w;
+    STATE.logicalH = ex.nuby_height ? ex.nuby_height() : h;
   }
 
   // --------------------------------------------------------------- arranque -
@@ -299,6 +388,7 @@
   window.addEventListener("DOMContentLoaded", () => {
     STATE.canvas = $("nuby-screen");
     STATE.ctx = STATE.canvas.getContext("2d", { alpha: false });
+    STATE.keys = $("nuby-keys");   // campo oculto: teclado del móvil
     boot().catch((err) => {
       setNote("No se pudo arrancar el motor: " + err.message);
       console.error(err);

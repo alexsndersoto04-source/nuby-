@@ -2,116 +2,137 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nuby — el motor ejecutándose en tu navegador (WebAssembly)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f9fa">
+<title>Nuby</title>
 <style>
-  :root { color-scheme: light; --t:#202124; --m:#5f6368; --line:#dfe1e5; --blue:#1a73e8; }
+  :root {
+    --tinta: #202124;
+    --gris: #5f6368;
+    --linea: #dfe1e5;
+    --acento: #1a73e8;
+    --alto-barra: 40px;
+    --alto-estado: 22px;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, "Segoe UI", Roboto, sans-serif; color:var(--t);
-         background:#f6f7f9; }
-  header { padding:18px 20px 6px; max-width:1180px; margin:0 auto; }
-  h1 { font-size:20px; margin:0 0 6px; font-weight:600; }
-  p.lead { margin:0; color:var(--m); font-size:14px; line-height:1.5; max-width:900px; }
-  main { max-width:1180px; margin:0 auto; padding:14px 20px 40px; }
-  .frame { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; }
-  #nuby-screen { width:100%; height:auto; display:block; border-radius:8px; cursor:text;
-                 outline:none; background:#fff; }
-  .stat { font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--m);
-          margin:10px 2px 0; word-break:break-word; }
-  .note { font-size:13px; color:#b3261e; margin:8px 2px 0; }
-  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:16px; }
-  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
-  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-  .card h2 { font-size:14px; margin:0 0 8px; text-transform:uppercase; letter-spacing:.04em; color:var(--m); }
-  .card ul { margin:0; padding-left:18px; font-size:14px; line-height:1.6; }
-  button, input[type=text] { font:inherit; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-  button { border:1px solid var(--line); background:#fff; border-radius:20px; padding:7px 14px; cursor:pointer; }
-  button:hover { border-color:#c6c9cd; }
-  .hint { font-size:13px; color:var(--m); margin-top:8px; line-height:1.5; }
-  code { background:#f1f3f4; border-radius:4px; padding:1px 5px; font-size:12px; }
-  footer { max-width:1180px; margin:0 auto; padding:0 20px 30px; color:var(--m); font-size:13px; }
-  a { color:var(--blue); }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%;
+    background: #f8f9fa;
+    color: var(--tinta);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* --- barra superior del producto (no es la interfaz del motor) --- */
+  .barra {
+    height: var(--alto-barra);
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 12px;
+    padding-top: env(safe-area-inset-top);
+    box-sizing: content-box;
+    background: #fff;
+    border-bottom: 1px solid var(--linea);
+  }
+  .marca { font-size: 17px; font-weight: 500; letter-spacing: -.2px; }
+  .marca b { color: var(--acento); font-weight: 500; }
+  .empuje { flex: 1 1 auto; }
+  .barra a, .barra button {
+    font: inherit; font-size: 13px; color: var(--gris);
+    text-decoration: none; background: none; border: 0;
+    padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  }
+  .barra a:hover, .barra button:hover { background: #f1f3f4; color: var(--tinta); }
+  .barra button[aria-pressed="true"] { background: #e8f0fe; color: var(--acento); }
+
+  /* --- pantalla: aquí vive el motor --- */
+  .pantalla {
+    flex: 1 1 auto;
+    min-height: 0;              /* imprescindible para que el flex no se desborde */
+    position: relative;
+    background: #fff;
+  }
+  #nuby-screen {
+    display: block;
+    width: 100%; height: 100%;
+    touch-action: none;          /* el scroll lo maneja el motor, no el navegador */
+    outline: none;
+    cursor: default;
+  }
+
+  /* --- línea de estado (información real del motor) --- */
+  .estado {
+    flex: 0 0 auto;
+    height: var(--alto-estado);
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px 0 12px;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: content-box;
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--gris);
+    background: #fff;
+    border-top: 1px solid var(--linea);
+    overflow: hidden; white-space: nowrap;
+  }
+  #nuby-stat { overflow: hidden; text-overflow: ellipsis; }
+  #nuby-note { color: #b3261e; }
+
+  /* --- campo oculto: es lo que abre el teclado en un móvil --- */
+  #nuby-keys {
+    position: fixed;
+    bottom: 0; left: 50%;
+    width: 1px; height: 1px;
+    padding: 0; border: 0;
+    opacity: 0.01;
+    font-size: 16px;             /* 16px evita el zoom automático de iOS */
+    caret-color: transparent;
+    transform: translateX(-50%);
+  }
 </style>
 </head>
 <body data-base="./">
-<header>
-  <h1>Nuby — el motor de navegador ejecutándose dentro de tu navegador</h1>
-  <p class="lead">
-    Lo que ves abajo son <strong>píxeles producidos por el motor Nuby escrito en C++</strong>, compilado a
-    WebAssembly y ejecutándose en tu equipo: el parser HTML, el motor CSS, el layout, el rasterizador,
-    las fuentes TrueType y el buscador BM25 son los mismos del repositorio. No hay servidor: nadie está
-    mandando imágenes desde una máquina remota. Haz clic, escribe en la caja de búsqueda, usa la rueda.
-  </p>
-</header>
 
-<main>
-  <div class="frame">
-    <canvas id="nuby-screen" width="1024" height="640" tabindex="0"></canvas>
-    <div class="stat" id="nuby-stat">Iniciando el motor…</div>
-    <div class="note" id="nuby-note"></div>
+  <header class="barra">
+    <span class="marca">Nu<b>by</b></span>
+    <span class="empuje"></span>
+    <button id="btn-full" title="Pantalla completa" aria-pressed="false">Pantalla completa</button>
+    <a href="about.html">Acerca de</a>
+  </header>
+
+  <main class="pantalla" id="nuby-shell">
+    <canvas id="nuby-screen" width="1024" height="640" tabindex="0" aria-label="Nuby"></canvas>
+  </main>
+
+  <div class="estado">
+    <span id="nuby-stat">Iniciando el motor…</span>
+    <span id="nuby-note"></span>
   </div>
 
-  <div class="grid">
-    <div class="card">
-      <h2>Qué es real en esta página</h2>
-      <ul>
-        <li>El motor C++ completo compilado a WebAssembly (<code>nuby.wasm</code>).</li>
-        <li>La interfaz del navegador la pinta el motor con su propio rasterizador.</li>
-        <li>El buscador es BM25 sobre 995 documentos del rastreo real
-            (<code>data/crawl_pages.tsv</code>).</li>
-        <li>Las fuentes son los mismos ficheros TrueType que usa la versión nativa (<code>data/fonts</code>).</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h2>Qué no puede hacer aquí (y por qué)</h2>
-      <ul>
-        <li><strong>No ejecuta JavaScript de las páginas</strong>: C++ para WebAssembly no tiene
-            excepciones en esta cadena de herramientas. La versión nativa sí lo ejecuta.</li>
-        <li><strong>No navega a webs externas</strong>: el navegador solo deja leer respuestas del mismo
-            origen (CORS). Si intentas abrir otra web, verás el error real del navegador.</li>
-        <li>No escribe en disco: el navegador no lo permite.</li>
-        <li>La versión nativa (<code>nuby_engine</code>) sí hace todo eso y tiene 20/20 pruebas.</li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:14px">
-    <h2>Navegación (se ejecuta dentro del motor)</h2>
-    <div class="row">
-      <button id="btn-home">Ir a la página de inicio del motor</button>
-      <button id="btn-demo">Abrir una página de ejemplo del repositorio</button>
-      <button id="btn-search">Buscar «ciencia» (BM25 real)</button>
-    </div>
-    <div class="hint">
-      El motor resuelve, descarga y pinta estas URLs igual que en la versión nativa. La página de ejemplo
-      vive en este mismo sitio para que el navegador permita leerla (mismo origen).
-    </div>
-  </div>
-</main>
-
-<footer>
-  Repositorio: <a href="https://github.com/alexsndersoto04-source/nuby-">alexsndersoto04-source/nuby-</a>
-  · El motor se puede compilar y ejecutar de forma nativa (<code>cd nuby_engine &amp;&amp; make &amp;&amp; ./bin/nuby_engine</code>).
-  · <a href="about.html">Qué es real y qué no</a>
-</footer>
+  <input id="nuby-keys" type="text" autocomplete="off" autocorrect="on"
+         autocapitalize="sentences" spellcheck="false" aria-hidden="true" tabindex="-1">
 
 <script src="nuby-wasi.js"></script>
 <script src="nuby.js"></script>
 <script>
-  // Botones de navegación: llaman al motor, no a la página.
-  document.getElementById("btn-home").addEventListener("click", () =>
-    window.NubyApp.goto("nuby://home"));
-  document.getElementById("btn-demo").addEventListener("click", () =>
-    window.NubyApp.goto(new URL("corpus/ejemplo.html", location.href).href));
-  document.getElementById("btn-search").addEventListener("click", () => {
-    const res = window.NubyApp.searchJson("ciencia");   // BM25 real del motor
-    if (!res) return;
-    const json = res.json;
-    const n = (JSON.parse(json).results || []).length;
-    document.getElementById("nuby-note").textContent =
-      "El motor devolvió " + n + " resultados BM25 reales para «ciencia» (ver consola para el JSON).";
-    console.log("[nuby] búsqueda:", json.slice(0, 400));
+  // Pantalla completa: el usuario decide, no se fuerza nunca.
+  const btnFull = document.getElementById("btn-full");
+  const shell = document.getElementById("nuby-shell");
+  btnFull.addEventListener("click", async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await (shell.requestFullscreen ? shell.requestFullscreen()
+                                       : shell.webkitRequestFullscreen());
+      } else {
+        await (document.exitFullscreen ? document.exitFullscreen()
+                                       : document.webkitExitFullscreen());
+      }
+    } catch (e) { /* el navegador lo denegó: no se inventa nada */ }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    btnFull.setAttribute("aria-pressed", document.fullscreenElement ? "true" : "false");
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 120);
   });
 </script>
 </body>
