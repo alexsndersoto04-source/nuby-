@@ -196,15 +196,36 @@
     return new Uint8Array(await r.arrayBuffer());
   }
 
+  // BUG REAL corregido (2026-10-13, visto en el movil del usuario): el motor
+  // pedia SIEMPRE "./data/..." y eso solo existe cuando el sitio se publica
+  // desde la carpeta web/ (build de Actions). Cuando GitHub Pages publica la
+  // raiz del repositorio, el indice vive en "../nuby_engine/data/", y la
+  // pagina mostraba "no se pudo descargar ./data/crawl_pages.tsv (404)".
+  // Ahora se prueban las rutas reales del proyecto, en orden, y se usa la
+  // primera que responde: la MISMA pagina funciona en los dos modos.
+  async function loadFirst(candidates) {
+    let lastErr = null;
+    for (const url of candidates) {
+      try { return await loadBinary(url); } catch (e) { lastErr = e; }
+    }
+    throw new Error(lastErr ? lastErr.message + " — rutas probadas: " +
+                    candidates.join(", ") : "no hay rutas candidatas");
+  }
+
   async function boot() {
     const base = document.body.dataset.base || "./";
     setNote("Cargando el motor (wasm), el índice real y las fuentes…");
 
+    // Bases posibles para los datos del motor (índice y fuentes):
+    //   1. ./data/                 -> sitio publicado desde web/ (Actions)
+    //   2. ../nuby_engine/data/    -> sitio publicado desde la raiz del repo
+    const dataBases = [base + "data/", base + "../nuby_engine/data/"];
+
     const [wasmBytes, tsv, fontRegular, fontBold] = await Promise.all([
       loadBinary(base + "nuby.wasm"),
-      loadBinary(base + "data/crawl_pages.tsv"),
-      loadBinary(base + "data/fonts/DejaVuSans.ttf"),
-      loadBinary(base + "data/fonts/DejaVuSans-Bold.ttf"),
+      loadFirst(dataBases.map((b) => b + "crawl_pages.tsv")),
+      loadFirst(dataBases.map((b) => b + "fonts/DejaVuSans.ttf")),
+      loadFirst(dataBases.map((b) => b + "fonts/DejaVuSans-Bold.ttf")),
     ]);
 
     // Sistema de archivos virtual: lo que el motor nativo lee del disco, aquí

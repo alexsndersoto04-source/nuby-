@@ -1,19 +1,27 @@
 {
-  "pages": 7339,
-  "pages_previous": 5404,
-  "pages_new": 1935,
-  "domains": 2120,
-  "wikipedia_share_pct": 18.4,
-  "tsv_bytes": 6848918,
-  "tsv_gzip_bytes": 2423378,
-  "bytes_per_page": 933.2,
-  "bytes_per_page_gzip": 330.2,
-  "terms_total_estimate": 867702,
-  "terms_unique_estimate": 87720,
+  "pages": 9245,
+  "pages_previous": 7339,
+  "pages_new": 1906,
+  "domains": 2797,
+  "wikipedia_share_pct": 16.4,
+  "tsv_bytes": 8747425,
+  "tsv_gzip_bytes": 3131629,
+  "bytes_per_page": 946.2,
+  "bytes_per_page_gzip": 338.7,
+  "terms_total_estimate": 1106729,
+  "terms_unique_estimate": 110601,
   "top_domains": [
     [
       "es.wikipedia.org",
-      477
+      481
+    ],
+    [
+      "wikimediafoundation.org",
+      38
+    ],
+    [
+      "abc.net.au",
+      34
     ],
     [
       "eldiario.es",
@@ -24,11 +32,15 @@
       33
     ],
     [
-      "docs.python.org",
+      "github.com",
+      33
+    ],
+    [
+      "en.wikipedia.org",
       31
     ],
     [
-      "abc.net.au",
+      "docs.python.org",
       31
     ],
     [
@@ -48,6 +60,18 @@
       30
     ],
     [
+      "irishtimes.com",
+      30
+    ],
+    [
+      "docs.rs",
+      30
+    ],
+    [
+      "simonwillison.net",
+      30
+    ],
+    [
       "dw.com",
       29
     ],
@@ -64,50 +88,26 @@
       29
     ],
     [
-      "irishtimes.com",
+      "ubuntu.com",
       29
-    ],
-    [
-      "github.com",
-      29
-    ],
-    [
-      "rtve.es",
-      28
-    ],
-    [
-      "en.wikipedia.org",
-      27
-    ],
-    [
-      "wikimediafoundation.org",
-      27
-    ],
-    [
-      "scmp.com",
-      27
-    ],
-    [
-      "simonwillison.net",
-      25
     ]
   ],
   "projections": {
     "10000_pages": {
-      "tsv_mb": 9.3,
-      "gzip_mb": 3.3
+      "tsv_mb": 9.5,
+      "gzip_mb": 3.4
     },
     "100000_pages": {
-      "tsv_mb": 93.3,
-      "gzip_mb": 33.0
+      "tsv_mb": 94.6,
+      "gzip_mb": 33.9
     },
     "500000_pages": {
-      "tsv_mb": 466.6,
-      "gzip_mb": 165.1
+      "tsv_mb": 473.1,
+      "gzip_mb": 169.4
     },
     "1000000_pages": {
-      "tsv_mb": 933.2,
-      "gzip_mb": 330.2
+      "tsv_mb": 946.2,
+      "gzip_mb": 338.7
     }
   },
   "github_pages_limit_mb": 1000
