@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: nuby
-    env: docker
-    dockerfilePath: Dockerfile
-    plan: free
-    healthCheckPath: /
-    autoDeploy: true
