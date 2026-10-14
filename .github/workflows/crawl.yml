@@ -22,10 +22,10 @@ on:
     inputs:
       max_pages:
         description: 'Páginas máximas en esta corrida'
-        default: '500'
+        default: '2000'
       max_seconds:
         description: 'Segundos máximos de rastreo'
-        default: '900'
+        default: '1500'
 
 permissions:
   contents: write
@@ -54,8 +54,8 @@ jobs:
 
       - name: Rastrear la web abierta (robots.txt respetado)
         env:
-          NUBY_MAX_PAGES: ${{ github.event.inputs.max_pages || '500' }}
-          NUBY_MAX_SECONDS: ${{ github.event.inputs.max_seconds || '900' }}
+          NUBY_MAX_PAGES: ${{ github.event.inputs.max_pages || '2000' }}
+          NUBY_MAX_SECONDS: ${{ github.event.inputs.max_seconds || '1500' }}
           NUBY_PER_DOMAIN: '20'
           NUBY_DELAY: '1.0'
           NUBY_WORKERS: '12'
