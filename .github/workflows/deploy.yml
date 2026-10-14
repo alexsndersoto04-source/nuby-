@@ -74,6 +74,35 @@ jobs:
           name: capturas-navegador
           path: capturas/
           if-no-files-found: warn
+
+      # ---------------------------------------------------------------------
+      # REGRESIÓN REAL (2026-10-13): el sitio que GitHub Pages sirve de verdad
+      # es la RAÍZ del repositorio (Pages está en modo legacy, branch main /).
+      # Ahí el índice NO está en web/data (esa carpeta no se versiona) sino en
+      # nuby_engine/data, y la página pedía "./data/..." → 404 en el móvil del
+      # usuario: "no se pudo arrancar el motor". Las pruebas solo cubrían el
+      # modo web/, así que el fallo pasaba el CI y rompía en producción.
+      # Esta prueba sirve la raíz del repo y comprueba el MISMO modo publicado.
+      # ---------------------------------------------------------------------
+      - name: Servir el sitio TAL COMO lo publica Pages (raíz del repositorio)
+        run: |
+          python3 -m http.server 8098 --directory . &
+          sleep 2
+          curl -sf -o /dev/null http://127.0.0.1:8098/web/index.html
+          curl -sf -o /dev/null http://127.0.0.1:8098/nuby_engine/data/crawl_pages.tsv
+      - name: Prueba en Chrome del modo publicado de verdad (raíz del repo)
+        env:
+          CHROME_REQUIRED: "1"
+        run: |
+          node nuby_engine/wasm/browser_check.mjs \
+            http://127.0.0.1:8098/web/index.html "$PWD/capturas-raiz"
+      - name: Guardar las capturas del modo publicado
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-modo-publicado
+          path: capturas-raiz/
+          if-no-files-found: warn
       - name: Empaquetar el sitio del motor
         uses: actions/upload-pages-artifact@v3
         with:
