@@ -1,110 +1,190 @@
 {
-  "run_utc": "2026-10-14T03:36:18Z",
-  "elapsed_s": 334.6,
-  "pages_indexed": 2009,
-  "domains": 773,
-  "pages_per_domain": 2.6,
-  "wikipedia_share_pct": 0.9,
+  "run_utc": "2026-10-14T04:01:49Z",
+  "elapsed_s": 341.8,
+  "pages_indexed": 2007,
+  "domains": 1168,
+  "pages_per_domain": 1.7,
+  "wikipedia_share_pct": 10.2,
   "fetch_failed": 60,
-  "robots_blocked": 125,
+  "robots_blocked": 246,
   "skipped_non_html": 27,
-  "duplicate_content": 153,
-  "bytes_fetched": 543182488,
-  "avg_page_bytes": 270374,
-  "frontier_pending": 70822,
+  "duplicate_content": 190,
+  "bytes_fetched": 371208646,
+  "avg_page_bytes": 184956,
+  "frontier_pending": 96910,
   "top_domains": [
     [
-      "help.abc.net.au",
-      15
-    ],
-    [
-      "lavanguardia.com",
-      15
-    ],
-    [
-      "iview.abc.net.au",
-      14
-    ],
-    [
-      "dw.com",
+      "hobbyconsolas.com",
       12
     ],
     [
-      "quo.eldiario.es",
-      12
-    ],
-    [
-      "play.google.com",
+      "wikimediafoundation.org",
       11
     ],
     [
-      "club.lavanguardia.com",
+      "forum.aljazeera.net",
       10
     ],
     [
-      "learn.microsoft.com",
-      10
-    ],
-    [
-      "akademie.dw.com",
-      10
-    ],
-    [
-      "redhat.com",
-      10
-    ],
-    [
-      "policies.google.com",
-      10
-    ],
-    [
-      "mozilla.org",
-      10
-    ],
-    [
-      "corporate.dw.com",
-      10
-    ],
-    [
-      "acpm.fr",
-      10
-    ],
-    [
-      "utdt.edu",
+      "peps.python.org",
       9
+    ],
+    [
+      "servers.com",
+      9
+    ],
+    [
+      "juliawise.net",
+      9
+    ],
+    [
+      "artificialanalysis.ai",
+      8
+    ],
+    [
+      "ifca.ai",
+      8
+    ],
+    [
+      "shopnpr.org",
+      8
+    ],
+    [
+      "eli.thegreenplace.net",
+      7
+    ],
+    [
+      "pulseos.finance",
+      7
+    ],
+    [
+      "anthropic.com",
+      7
+    ],
+    [
+      "foundation.wikimedia.org",
+      7
+    ],
+    [
+      "hillelwayne.com",
+      7
+    ],
+    [
+      "wp.me",
+      7
     ]
   ],
   "languages": {
-    "en": 567,
-    "es": 972,
-    "ru": 8,
-    "fr": 51,
-    "ar": 35,
-    "tr": 7,
-    "ro": 6,
-    "de": 10,
-    "el": 4,
-    "th": 1,
-    "pr": 1,
+    "tr": 4,
+    "en": 1179,
+    "hi": 7,
+    "de": 16,
+    "td": 1,
+    "lv": 2,
+    "ps": 1,
+    "hu": 3,
+    "es": 222,
+    "pt": 1,
+    "bn": 2,
+    "sg": 2,
+    "fr": 25,
+    "tp": 1,
+    "ro": 4,
     "it": 6,
-    "ca": 5,
-    "sr": 2,
-    "bn": 1,
-    "fa": 6,
-    "pt": 10,
-    "pl": 7,
-    "bs": 7,
-    "ja": 3,
-    "mh": 1,
-    "hu": 2,
-    "bm": 3,
-    "bg": 1,
-    "vi": 1,
-    "ha": 1,
+    "ar": 22,
+    "da": 3,
+    "as": 1,
+    "go": 2,
+    "fa": 7,
+    "sr": 4,
+    "bg": 6,
+    "uk": 4,
+    "et": 3,
+    "nb": 2,
+    "gs": 2,
+    "os": 1,
+    "gl": 4,
+    "sl": 4,
+    "pd": 1,
+    "ht": 1,
+    "ja": 17,
+    "ru": 16,
+    "ka": 7,
+    "zh": 5,
+    "sv": 2,
     "se": 1,
-    "ko": 1,
-    "hi": 1,
-    "nl": 1
+    "cs": 6,
+    "ko": 10,
+    "nl": 4,
+    "cr": 1,
+    "he": 3,
+    "an": 2,
+    "tu": 1,
+    "mr": 1,
+    "eu": 2,
+    "av": 3,
+    "ha": 4,
+    "in": 2,
+    "ki": 1,
+    "kn": 4,
+    "ku": 3,
+    "el": 3,
+    "ff": 2,
+    "yo": 2,
+    "th": 1,
+    "si": 1,
+    "my": 1,
+    "bm": 2,
+    "ch": 1,
+    "di": 1,
+    "yu": 1,
+    "st": 1,
+    "rk": 1,
+    " e": 1,
+    "pl": 3,
+    "hr": 1,
+    "id": 3,
+    "lt": 2,
+    "hy": 1,
+    "nd": 1,
+    "sc": 1,
+    "oc": 1,
+    "vi": 1,
+    "aa": 1,
+    "li": 2,
+    "az": 2,
+    "uz": 2,
+    "kr": 1,
+    "bs": 4,
+    "be": 4,
+    "ny": 1,
+    "tn": 1,
+    "ti": 1,
+    "bp": 1,
+    "ce": 2,
+    "br": 1,
+    "sd": 1,
+    "gc": 1,
+    "af": 2,
+    "eo": 1,
+    "kc": 1,
+    "ig": 2,
+    "gu": 1,
+    "mt": 1,
+    "zg": 1,
+    "or": 1,
+    "ga": 1,
+    "mi": 1,
+    "sq": 1,
+    "ur": 1,
+    "ve": 1,
+    "tg": 1,
+    "ba": 1,
+    "bd": 1,
+    "bo": 1,
+    "bt": 1,
+    "cb": 1,
+    "mn": 1
   },
-  "pages_per_second": 6.0
+  "pages_per_second": 5.87
 }
