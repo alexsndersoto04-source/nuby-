@@ -625,7 +625,9 @@ private:
         if (W >= 640) // en móvil el espacio es oro: sin logo en el chrome
             h << "<div data-action=\"home\" style=\"margin-right: 4px;\">"
                  "<span style=\"color: #202124; font-size: 18px; font-weight: 800;\">Nuby</span></div>";
-        h << navbtn("back", "&lt;") << navbtn("fwd", "&gt;") << navbtn("reload", "R")
+        // Recargar con la flecha circular del propio tipo de letra (la fuente
+        // tiene U+21BB): una "R" suelta no es lo que se ve en un navegador.
+        h << navbtn("back", "&lt;") << navbtn("fwd", "&gt;") << navbtn("reload", "↻")
           << "<div data-action=\"focus-url\" style=\"flex-grow: 1; background-color: #f1f3f4; border: 2px solid " << ring
           << "; border-radius: 18px; padding: 6px 12px;\">"
              "<div style=\"display: flex; flex-direction: row; align-items: center;\">" << lock
