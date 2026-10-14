@@ -77,6 +77,15 @@ public:
     int chrome_h() const { return mode_ == Mode::HOME ? 0 : CHROME_H; }
     int visible_h() const { return H - chrome_h(); }
 
+    // Alto del área de contenido: el tope de 8000 filas se recorta según la
+    // memoria, porque cada fila cuesta W*escala píxeles de dispositivo.
+    int content_view_h() const {
+        const double por_px_logico = (double)W * (double)render_scale_ * (double)render_scale_;
+        int cap = (int)(CONTENT_PIXEL_BUDGET / std::max(1.0, por_px_logico));
+        if (cap < visible_h()) cap = visible_h();
+        return cap < CONTENT_CAP ? cap : CONTENT_CAP;
+    }
+
     // ---- Densidad de render (2026-10-14) ----
     // El layout (W, H, todo el CSS y las decisiones responsive) sigue en px
     // lógicos; el rasterizador pinta a px de dispositivo. Un móvil con
@@ -177,7 +186,7 @@ public:
         engine_chrome_->set_render_scale(render_scale_);
         engine_content_->set_render_scale(render_scale_);
         engine_chrome_->set_viewport(W, CHROME_H);
-        engine_content_->set_viewport(W, CONTENT_CAP);
+        engine_content_->set_viewport(W, content_view_h());
         scroll_y_ = 0; // el alto visible cambió; el scroll viejo no aplica
         // Las páginas INTERNAS hornean medidas del viewport en su markup
         // (centrado por padding, caja responsiva): con un resize hay que
@@ -204,7 +213,7 @@ public:
             default: refresh_content(); break; // páginas web reales: mismo DOM, nuevo ancho
         }
     }
-    static constexpr int CONTENT_CAP = 8000; // tope de alto de página (seguridad)
+    static constexpr int CONTENT_CAP = 8000;   // tope de alto de página (seguridad)
     // Presupuestos de memoria (px de dispositivo).
     //  - FRAME: el lienzo que se ve (chrome + pantalla) y se envía cada frame.
     //  - CONTENIDO: la franja pintada de la página. Ya NO se pinta la página
@@ -212,7 +221,7 @@ public:
     //    navegadores reales), así el búfer no crece con lo largo del
     //    documento. Antes, una Wikipedia a densidad 3 pedía más de 100 MB.
     static constexpr double FRAME_PIXEL_BUDGET = 9.0e6;
-    static constexpr double CONTENT_PIXEL_BUDGET = 12.0e6;
+    static constexpr double CONTENT_PIXEL_BUDGET = 24.0e6;
     // Ventana de contenido: media pantalla por encima y una y media por debajo
     // (2 pantallas y media en total). Al salir de ella se re-pinta solo esa
     // franja, sin re-hacer el layout.
@@ -625,7 +634,9 @@ private:
         if (W >= 640) // en móvil el espacio es oro: sin logo en el chrome
             h << "<div data-action=\"home\" style=\"margin-right: 4px;\">"
                  "<span style=\"color: #202124; font-size: 18px; font-weight: 800;\">Nuby</span></div>";
-        h << navbtn("back", "&lt;") << navbtn("fwd", "&gt;") << navbtn("reload", "R")
+        // Recargar con la flecha circular del propio tipo de letra (la fuente
+        // tiene U+21BB): una "R" suelta no es lo que se ve en un navegador.
+        h << navbtn("back", "&lt;") << navbtn("fwd", "&gt;") << navbtn("reload", "↻")
           << "<div data-action=\"focus-url\" style=\"flex-grow: 1; background-color: #f1f3f4; border: 2px solid " << ring
           << "; border-radius: 18px; padding: 6px 12px;\">"
              "<div style=\"display: flex; flex-direction: row; align-items: center;\">" << lock
@@ -700,7 +711,7 @@ private:
             walk_bottom(res->layout_tree, max_bottom);
             doc_rows = (int)max_bottom + 12;
         }
-        content_height_ = std::max(visible_h(), std::min(doc_rows, CONTENT_CAP));
+        content_height_ = std::max(visible_h(), std::min(doc_rows, content_view_h()));
     }
 
     // ---------------- Scroll por ventana ----------------
@@ -714,8 +725,8 @@ private:
             return;   // la franja actual ya cubre lo que se ve
         }
         const int top = std::max(0, std::min(scroll_y_ - window_back(),
-                                             std::max(0, CONTENT_CAP - vis)));
-        const int rows = std::min(window_rows(), std::max(vis, CONTENT_CAP - top));
+                                             std::max(0, content_view_h() - vis)));
+        const int rows = std::min(window_rows(), std::max(vis, content_view_h() - top));
         auto win = engine_content_->rasterize_window(top, rows);
         if (win.pixels.empty()) return;
         content_fb_ = std::move(win.pixels);
