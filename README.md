@@ -38,7 +38,7 @@ completa — qué es real y qué no — en
 [`nuby_engine/ARCHITECTURE.md`](nuby_engine/ARCHITECTURE.md).
 
 - ✅ Parser HTML/CSS, layout (bloques/flex/inline), rasterizador software: propios.
-- ✅ Buscador BM25 con 995 páginas rastreadas de verdad + indexación en vivo.
+- ✅ Buscador BM25 con índice que **crece solo**: de 995 páginas (97 % Wikipedia) a **3.478 páginas de 1.122 dominios** (32 % Wikipedia) en la primera noche de rastreo automático. Indexación en vivo incluida.
 - ✅ Red: sockets propios + TLS vía OpenSSL del sistema.
 - ✅ JS: intérprete real para un subconjunto documentado.
 - ✅ Imágenes PNG con decodificador propio (inflate + filtros, sin librerías).
@@ -54,6 +54,7 @@ completa — qué es real y qué no — en
 | Carpeta/archivo | Qué es |
 |---|---|
 | `nuby_engine/` | El navegador (motor C++20 + shell + servidor). Ver su README. |
+| `crawler/` | **Rastreador que alimenta el índice hoy**: respeta `robots.txt`, va a 1 req/s por dominio y corre solo cada 6 h en GitHub Actions (ver `PLAN_ESCALABLE.md`). |
 | `spider.py`, `main.py` | Crawler y buscador FTS5 de la etapa Python (datos reales origen del índice). |
 | `index.html` | Página del proyecto (información + enlaces de arranque). |
 | `web/` | Build de navegador: el motor compilado a wasm (`web/nuby.wasm`), su runtime WASI en JS y la página que lo ejecuta. |
