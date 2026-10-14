@@ -1,22 +1,26 @@
 {
-  "pages": 3478,
-  "pages_previous": 1492,
-  "pages_new": 1986,
-  "domains": 1122,
-  "wikipedia_share_pct": 32.2,
-  "tsv_bytes": 2806876,
-  "tsv_gzip_bytes": 966552,
-  "bytes_per_page": 807.0,
-  "bytes_per_page_gzip": 277.9,
-  "terms_total_estimate": 360264,
-  "terms_unique_estimate": 41475,
+  "pages": 5404,
+  "pages_previous": 3478,
+  "pages_new": 1926,
+  "domains": 1726,
+  "wikipedia_share_pct": 24.6,
+  "tsv_bytes": 4867191,
+  "tsv_gzip_bytes": 1723931,
+  "bytes_per_page": 900.7,
+  "bytes_per_page_gzip": 319.0,
+  "terms_total_estimate": 606536,
+  "terms_unique_estimate": 64588,
   "top_domains": [
     [
       "es.wikipedia.org",
-      475
+      476
     ],
     [
       "en.wikipedia.org",
+      24
+    ],
+    [
+      "eldiario.es",
       24
     ],
     [
@@ -24,7 +28,23 @@
       23
     ],
     [
-      "eldiario.es",
+      "docs.python.org",
+      23
+    ],
+    [
+      "theguardian.com",
+      23
+    ],
+    [
+      "es.euronews.com",
+      22
+    ],
+    [
+      "developer.mozilla.org",
+      22
+    ],
+    [
+      "abc.net.au",
       22
     ],
     [
@@ -36,15 +56,27 @@
       21
     ],
     [
+      "abc.es",
+      21
+    ],
+    [
       "elmundo.es",
       21
     ],
     [
-      "docs.python.org",
+      "14ymedio.com",
       21
     ],
     [
-      "developer.mozilla.org",
+      "rtve.es",
+      21
+    ],
+    [
+      "redis.io",
+      21
+    ],
+    [
+      "npr.org",
       21
     ],
     [
@@ -58,56 +90,24 @@
     [
       "danluu.com",
       21
-    ],
-    [
-      "paulgraham.com",
-      21
-    ],
-    [
-      "nullprogram.com",
-      21
-    ],
-    [
-      "cloudflare.com",
-      21
-    ],
-    [
-      "abc.es",
-      20
-    ],
-    [
-      "france24.com",
-      20
-    ],
-    [
-      "lanacion.com.ar",
-      20
-    ],
-    [
-      "es.euronews.com",
-      20
-    ],
-    [
-      "14ymedio.com",
-      20
     ]
   ],
   "projections": {
     "10000_pages": {
-      "tsv_mb": 8.1,
-      "gzip_mb": 2.8
+      "tsv_mb": 9.0,
+      "gzip_mb": 3.2
     },
     "100000_pages": {
-      "tsv_mb": 80.7,
-      "gzip_mb": 27.8
+      "tsv_mb": 90.1,
+      "gzip_mb": 31.9
     },
     "500000_pages": {
-      "tsv_mb": 403.5,
-      "gzip_mb": 139.0
+      "tsv_mb": 450.3,
+      "gzip_mb": 159.5
     },
     "1000000_pages": {
-      "tsv_mb": 807.0,
-      "gzip_mb": 277.9
+      "tsv_mb": 900.7,
+      "gzip_mb": 319.0
     }
   },
   "github_pages_limit_mb": 1000
