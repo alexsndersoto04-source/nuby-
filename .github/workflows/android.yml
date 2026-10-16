@@ -60,7 +60,18 @@ jobs:
           gradle-version: '8.9'
 
       - name: Assemble debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: |
+          set +e
+          gradle --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee /tmp/nuby-gradle.log
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            while IFS= read -r line; do
+              safe=${line//'%'/'%25'}
+              safe=${safe//$'\r'/'%0D'}
+              echo "::error file=.github/workflows/android.yml,line=1::$safe"
+            done < <(tail -n 35 /tmp/nuby-gradle.log)
+            exit "$result"
+          fi
 
       - name: Publish APK artifact
         uses: actions/upload-artifact@v6
