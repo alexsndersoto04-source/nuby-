@@ -599,7 +599,7 @@ void Renderer::buildScene() {
     contactHalo.material.roughness = 0.38f;
 
     Entity& physicsOrb = scene_.create("Physics Sample", Primitive::Sphere);
-    physicsOrb.transform.position = {-1.65f, 0.48f, -0.18f};
+    physicsOrb.transform.position = {1.0f, 0.48f, 0.7f};
     physicsOrb.transform.scale = {0.19f, 0.19f, 0.19f};
     physicsOrb.rigidbody.enabled = true;
     physicsOrb.rigidbody.mass = 0.8f;
