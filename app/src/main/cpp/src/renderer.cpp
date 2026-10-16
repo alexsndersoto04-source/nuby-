@@ -194,6 +194,9 @@ in vec3 vWorldNormal;
 in vec4 vLightPosition;
 uniform vec3 uColor;
 uniform vec3 uEmission;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform float uAmbientOcclusion;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 uniform sampler2D uShadowMap;
@@ -222,6 +225,24 @@ float shadowAmount(vec3 normal, vec3 lightDirection) {
     return occlusion / 9.0;
 }
 
+float distributionGGX(float normalHalf, float roughness) {
+    const float pi = 3.14159265;
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
+    float denominator = normalHalf * normalHalf * (alphaSquared - 1.0) + 1.0;
+    return alphaSquared / max(pi * denominator * denominator, 0.001);
+}
+
+float geometrySchlickGGX(float normalDirection, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) * 0.125;
+    return normalDirection / max(normalDirection * (1.0 - k) + k, 0.001);
+}
+
+vec3 fresnelSchlick(float viewHalf, vec3 baseReflectance) {
+    return baseReflectance + (1.0 - baseReflectance) * pow(1.0 - viewHalf, 5.0);
+}
+
 void main() {
     vec3 normal = normalize(vWorldNormal);
     vec3 lightDirection = normalize(-uLightDirection);
@@ -244,16 +265,33 @@ void main() {
 
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
     vec3 halfDirection = normalize(lightDirection + viewDirection);
-    float diffuse = max(dot(normal, lightDirection), 0.0);
-    float specular = pow(max(dot(normal, halfDirection), 0.0), 48.0) * 0.42;
-    float fresnel = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0);
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    float normalView = max(dot(normal, viewDirection), 0.001);
+    float normalHalf = max(dot(normal, halfDirection), 0.0);
+    float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
+    float roughness = clamp(uRoughness, 0.06, 1.0);
+    float metallic = clamp(uMetallic, 0.0, 1.0);
 
-    vec3 color = uColor * (0.16 + diffuse * 0.88 * visibility);
-    color += specular * vec3(0.78, 0.9, 1.0) * visibility;
-    color += fresnel * vec3(0.08, 0.43, 0.58);
-    color += uEmission;
-    color = vec3(1.0) - exp(-color * 1.18);
-    color = pow(color, vec3(1.0 / 2.2));
+    vec3 baseReflectance = mix(vec3(0.04), uColor, metallic);
+    vec3 fresnel = fresnelSchlick(viewHalf, baseReflectance);
+    float distribution = distributionGGX(normalHalf, roughness);
+    float geometryTerm = geometrySchlickGGX(normalView, roughness)
+                       * geometrySchlickGGX(max(normalLight, 0.001), roughness);
+    vec3 specular = (distribution * geometryTerm * fresnel)
+                  / max(4.0 * normalView * max(normalLight, 0.001), 0.001);
+    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
+    vec3 radiance = vec3(2.3, 2.15, 1.88);
+    vec3 directLight = (diffuseWeight * uColor / 3.14159265 + specular)
+                     * radiance * normalLight * visibility;
+
+    float skyAmount = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 ambientLight = mix(vec3(0.075, 0.085, 0.14),
+                            vec3(0.22, 0.29, 0.46), skyAmount);
+    vec3 ambient = uColor * ambientLight * uAmbientOcclusion * (1.0 - metallic * 0.55);
+    vec3 color = ambient + directLight + uEmission;
+    color = (color * (2.51 * color + 0.03))
+          / max(color * (2.43 * color + 0.59) + 0.14, vec3(0.001));
+    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
     fragmentColor = vec4(color, 1.0);
 }
 )";
@@ -438,6 +476,8 @@ void Renderer::buildScene() {
     firstRing.spin.radiansPerSecond[1] = 0.21f;
     firstRing.material.color = {0.10f, 0.75f, 0.78f};
     firstRing.material.emission = {0.02f, 0.34f, 0.38f};
+    firstRing.material.metallic = 0.58f;
+    firstRing.material.roughness = 0.24f;
 
     Entity& secondRing = scene_.create("Halo Ring", Primitive::Torus);
     secondRing.transform.position = {0.0f, 0.02f, 0.0f};
@@ -446,12 +486,16 @@ void Renderer::buildScene() {
     secondRing.spin.radiansPerSecond[1] = -0.15f;
     secondRing.material.color = {0.92f, 0.48f, 0.22f};
     secondRing.material.emission = {0.26f, 0.08f, 0.015f};
+    secondRing.material.metallic = 0.72f;
+    secondRing.material.roughness = 0.27f;
 
     Entity& contactHalo = scene_.create("Ground Halo", Primitive::Torus);
     contactHalo.transform.position = {0.0f, -1.16f, 0.0f};
     contactHalo.transform.scale = {1.52f, 1.52f, 1.52f};
     contactHalo.material.color = {0.10f, 0.42f, 0.50f};
     contactHalo.material.emission = {0.015f, 0.09f, 0.12f};
+    contactHalo.material.metallic = 0.35f;
+    contactHalo.material.roughness = 0.38f;
 
     Entity& core = scene_.create("Aether Core", Primitive::Sphere);
     core.transform.scale = {0.70f, 0.70f, 0.70f};
@@ -461,6 +505,8 @@ void Renderer::buildScene() {
     core.orbit.angularSpeed = 1.15f;
     core.material.color = {0.29f, 0.25f, 0.78f};
     core.material.emission = {0.035f, 0.025f, 0.16f};
+    core.material.metallic = 0.18f;
+    core.material.roughness = 0.31f;
 
     Entity& innerCore = scene_.create("Core Light", Primitive::Sphere);
     innerCore.transform.scale = {0.25f, 0.25f, 0.25f};
@@ -473,6 +519,8 @@ void Renderer::buildScene() {
     innerCore.pulse.frequency = 0.42f;
     innerCore.material.color = {0.16f, 0.78f, 0.88f};
     innerCore.material.emission = {0.20f, 0.74f, 0.88f};
+    innerCore.material.metallic = 0.08f;
+    innerCore.material.roughness = 0.16f;
 
     for (int index = 0; index < 3; ++index) {
         Entity& satellite = scene_.create("Orbiting Shard " + std::to_string(index + 1),
@@ -495,6 +543,8 @@ void Renderer::buildScene() {
         satellite.material.emission = {satellite.material.color[0] * 0.28f,
                                        satellite.material.color[1] * 0.20f,
                                        satellite.material.color[2] * 0.16f};
+        satellite.material.metallic = 0.24f;
+        satellite.material.roughness = 0.29f;
     }
 }
 
@@ -594,6 +644,9 @@ void Renderer::initialize() {
     uniforms_.model = glGetUniformLocation(program_, "uModel");
     uniforms_.color = glGetUniformLocation(program_, "uColor");
     uniforms_.emission = glGetUniformLocation(program_, "uEmission");
+    uniforms_.metallic = glGetUniformLocation(program_, "uMetallic");
+    uniforms_.roughness = glGetUniformLocation(program_, "uRoughness");
+    uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
     uniforms_.lightViewProjection = glGetUniformLocation(program_, "uLightViewProjection");
@@ -617,8 +670,7 @@ void Renderer::resize(int width, int height) {
     glViewport(0, 0, width_, height_);
 }
 
-void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec3& color,
-                    const Vec3& emission, bool grid) {
+void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& material) {
     if (program_ == 0 || mesh.vao == 0) return;
 
     glUseProgram(program_);
@@ -626,13 +678,16 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec3& color,
     glUniformMatrix4fv(uniforms_.lightViewProjection, 1, GL_FALSE,
                        lightViewProjection_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
-    glUniform3fv(uniforms_.color, 1, color.data());
-    glUniform3fv(uniforms_.emission, 1, emission.data());
+    glUniform3fv(uniforms_.color, 1, material.color.data());
+    glUniform3fv(uniforms_.emission, 1, material.emission.data());
+    glUniform1f(uniforms_.metallic, material.metallic);
+    glUniform1f(uniforms_.roughness, material.roughness);
+    glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
     glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
     glUniform1i(uniforms_.shadowMap, 0);
     glUniform1i(uniforms_.shadowsEnabled, shadowsAvailable_ ? 1 : 0);
-    glUniform1i(uniforms_.grid, grid ? 1 : 0);
+    glUniform1i(uniforms_.grid, material.proceduralGrid ? 1 : 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
 
@@ -671,8 +726,7 @@ void Renderer::render(float deltaSeconds) {
         if (!entity.visible) continue;
         const Mesh* mesh = meshFor(entity.primitive);
         if (mesh == nullptr) continue;
-        draw(*mesh, modelMatrix(entity.transform), entity.material.color,
-             entity.material.emission, entity.material.proceduralGrid);
+        draw(*mesh, modelMatrix(entity.transform), entity.material);
     }
 }
 

@@ -38,6 +38,9 @@ private:
         GLint model = -1;
         GLint color = -1;
         GLint emission = -1;
+        GLint metallic = -1;
+        GLint roughness = -1;
+        GLint ambientOcclusion = -1;
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
         GLint lightViewProjection = -1;
@@ -54,8 +57,7 @@ private:
     Mesh makeGround();
     const Mesh* meshFor(Primitive primitive) const;
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
-              const std::array<float, 3>& color,
-              const std::array<float, 3>& emission, bool grid = false);
+              const Material& material);
     void buildScene();
     void initializeShadowMap();
     void renderShadowMap(const std::array<float, 16>& lightViewProjection);
