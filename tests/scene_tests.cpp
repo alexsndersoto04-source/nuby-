@@ -87,6 +87,33 @@ void testTransformHierarchyAndCycleProtection() {
            "detached entity returns to its local transform");
 }
 
+void testEntityDestructionCascadesAndPreservesOtherEntities() {
+    nuby::Scene scene;
+    nuby::Entity& root = scene.create("root", nuby::Primitive::None);
+    const std::uint32_t rootId = root.id;
+    nuby::Entity& camera = scene.create("camera child", nuby::Primitive::None);
+    const std::uint32_t cameraId = camera.id;
+    camera.camera.enabled = true;
+    nuby::Entity& leaf = scene.create("nested child", nuby::Primitive::Sphere);
+    const std::uint32_t leafId = leaf.id;
+    nuby::Entity& independent = scene.create("independent", nuby::Primitive::Sphere);
+    const std::uint32_t independentId = independent.id;
+    scene.setParent(cameraId, rootId);
+    scene.setParent(leafId, cameraId);
+    scene.setActiveCamera(cameraId);
+
+    expect(scene.destroyEntity(rootId), "existing entity can be destroyed");
+    expect(scene.find(rootId) == nullptr && scene.find(cameraId) == nullptr
+                   && scene.find(leafId) == nullptr,
+           "destroying a parent removes its full descendant subtree");
+    expect(scene.find(independentId) != nullptr, "unrelated entities survive subtree destruction");
+    expect(scene.activeCamera() == nullptr, "destroying the active camera clears the camera handle");
+    expect(!scene.destroyEntity(rootId), "destroying a missing entity returns false");
+
+    const nuby::Entity& next = scene.create("next", nuby::Primitive::Sphere);
+    expect(next.id > independentId, "destroyed entity IDs are not reused");
+}
+
 void testActiveCameraAndOrbitInput() {
     nuby::Scene scene;
     nuby::Entity& cameraEntity = scene.create("camera", nuby::Primitive::None);
@@ -231,6 +258,7 @@ int main() {
     testDeltaTimeIsClamped();
     testOrbitIsStable();
     testTransformHierarchyAndCycleProtection();
+    testEntityDestructionCascadesAndPreservesOtherEntities();
     testActiveCameraAndOrbitInput();
     testPointLightCollectionUsesWorldTransformsAndFiltersInvalidLights();
     testKeyframedAnimationInterpolationAndLooping();

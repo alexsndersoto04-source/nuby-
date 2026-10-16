@@ -136,6 +136,7 @@ struct Entity {
 class Scene final {
 public:
     Entity& create(std::string name, Primitive primitive);
+    bool destroyEntity(std::uint32_t id);
     Entity* find(std::uint32_t id);
     const Entity* find(std::uint32_t id) const;
     bool setParent(std::uint32_t childId, std::uint32_t parentId);

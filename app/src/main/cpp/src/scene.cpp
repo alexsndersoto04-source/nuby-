@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 #include <utility>
 
 namespace nuby {
@@ -153,6 +154,29 @@ Entity& Scene::create(std::string name, Primitive primitive) {
     entity.name = std::move(name);
     entity.primitive = primitive;
     return entity;
+}
+
+bool Scene::destroyEntity(std::uint32_t id) {
+    if (find(id) == nullptr) return false;
+
+    std::unordered_set<std::uint32_t> removedIds{id};
+    bool addedChild = true;
+    while (addedChild) {
+        addedChild = false;
+        for (const Entity& entity : entities_) {
+            if (removedIds.find(entity.parentId) != removedIds.end()
+                    && removedIds.insert(entity.id).second) {
+                addedChild = true;
+            }
+        }
+    }
+
+    entities_.erase(std::remove_if(entities_.begin(), entities_.end(),
+            [&removedIds](const Entity& entity) {
+                return removedIds.find(entity.id) != removedIds.end();
+            }), entities_.end());
+    if (removedIds.find(activeCameraId_) != removedIds.end()) activeCameraId_ = 0;
+    return true;
 }
 
 Entity* Scene::find(std::uint32_t id) {
