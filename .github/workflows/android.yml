@@ -34,6 +34,14 @@ jobs:
           -o /tmp/nuby-obj-tests
           && /tmp/nuby-obj-tests
 
+      - name: Compile and run scene serialization tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/scene_io.cpp
+          tests/scene_io_tests.cpp -o /tmp/nuby-scene-io-tests
+          && /tmp/nuby-scene-io-tests
+
   build-debug-apk:
     name: Build native Android APK
     needs: scene-tests

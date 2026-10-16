@@ -155,6 +155,8 @@ public:
     float elapsedSeconds() const { return elapsedSeconds_; }
 
 private:
+    friend class SceneSerializer;
+
     std::vector<Entity> entities_;
     std::uint32_t nextId_ = 1;
     std::uint32_t activeCameraId_ = 0;
