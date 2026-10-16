@@ -65,11 +65,15 @@ jobs:
           gradle --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee /tmp/nuby-gradle.log
           result=${PIPESTATUS[0]}
           if [ "$result" -ne 0 ]; then
+            diagnostics=$(grep -Ei 'error:|fatal error:|undefined reference|ninja:|failed|no such file|not declared|cannot convert|no matching function|does not name|has no member|invalid' /tmp/nuby-gradle.log | tail -n 25 || true)
+            if [ -z "$diagnostics" ]; then
+              diagnostics=$(tail -n 20 /tmp/nuby-gradle.log)
+            fi
             while IFS= read -r line; do
               safe=${line//'%'/'%25'}
               safe=${safe//$'\r'/'%0D'}
               echo "::error file=.github/workflows/android.yml,line=1::$safe"
-            done < <(tail -n 35 /tmp/nuby-gradle.log)
+            done <<< "$diagnostics"
             exit "$result"
           fi
 
