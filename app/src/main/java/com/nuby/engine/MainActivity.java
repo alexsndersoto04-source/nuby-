@@ -31,8 +31,10 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private long fpsWindowStartNanos = 0L;
     private int framesInWindow = 0;
     private volatile String gpuName = "GPU";
+    private volatile String shadowStatus = "SHADOWS CHECKING";
 
     private static native void nativeCreate();
+    private static native boolean nativeShadowsEnabled();
     private static native void nativeResize(int width, int height);
     private static native void nativeFrame(float deltaSeconds);
     private static native void nativeTouch(int action, float x, float y);
@@ -129,6 +131,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         nativeCreate();
+        shadowStatus = nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
         String detected = gl.glGetString(GL10.GL_RENDERER);
         gpuName = detected == null ? "GPU desconocida" : detected.trim();
         if (gpuName.length() > 26) gpuName = gpuName.substring(0, 26);
@@ -157,7 +160,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
             fpsWindowStartNanos = now;
             runOnUiThread(() -> {
                 if (telemetry != null) telemetry.setText(
-                        String.format(Locale.US, "%d FPS  ·  %s", fps, gpuName));
+                        String.format(Locale.US, "%d FPS  ·  %s  ·  %s", fps, gpuName, shadowStatus));
             });
         }
     }

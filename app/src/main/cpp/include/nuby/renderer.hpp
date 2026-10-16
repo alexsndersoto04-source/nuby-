@@ -19,6 +19,7 @@ public:
     void resize(int width, int height);
     void render(float deltaSeconds);
     void touch(int action, float x, float y);
+    bool shadowsEnabled() const { return shadowsAvailable_; }
 
     struct Vertex {
         float position[3];
