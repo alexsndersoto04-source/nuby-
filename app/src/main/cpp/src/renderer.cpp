@@ -1022,19 +1022,42 @@ void Renderer::render(float deltaSeconds) {
     if (postProcessingAvailable_) renderBloom();
 }
 
-void Renderer::touch(int action, float x, float y) {
-    if (action == 0) {
+void Renderer::touch(int action, float x, float y, float pinchDistance, int pointerCount) {
+    constexpr int kActionDown = 0;
+    constexpr int kActionUp = 1;
+    constexpr int kActionMove = 2;
+    constexpr int kActionCancel = 3;
+    constexpr int kActionPointerDown = 5;
+    constexpr int kActionPointerUp = 6;
+
+    if (action == kActionDown || action == kActionPointerDown) {
         lastTouchX_ = x;
         lastTouchY_ = y;
+        lastPinchDistance_ = pointerCount >= 2 && pinchDistance > 0.0f
+                ? pinchDistance : 0.0f;
         return;
     }
-    if (action == 2) {
-        const float deltaX = x - lastTouchX_;
-        const float deltaY = y - lastTouchY_;
-        scene_.orbitActiveCamera(deltaX, deltaY);
+    if (action == kActionUp || action == kActionCancel || action == kActionPointerUp) {
         lastTouchX_ = x;
         lastTouchY_ = y;
+        lastPinchDistance_ = 0.0f;
+        return;
     }
+    if (action != kActionMove) return;
+
+    const float deltaX = x - lastTouchX_;
+    const float deltaY = y - lastTouchY_;
+    if (pointerCount >= 2 && pinchDistance > 0.0f) {
+        if (lastPinchDistance_ > 0.0f) {
+            scene_.zoomActiveCamera(lastPinchDistance_ / pinchDistance);
+        }
+        lastPinchDistance_ = pinchDistance;
+    } else {
+        lastPinchDistance_ = 0.0f;
+        scene_.orbitActiveCamera(deltaX, deltaY);
+    }
+    lastTouchX_ = x;
+    lastTouchY_ = y;
 }
 
 }  // namespace nuby

@@ -45,6 +45,7 @@ Java_com_nuby_engine_MainActivity_nativeFrame(JNIEnv*, jclass, jfloat deltaSecon
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeTouch(
-        JNIEnv*, jclass, jint action, jfloat x, jfloat y) {
-    if (gRenderer) gRenderer->touch(action, x, y);
+        JNIEnv*, jclass, jint action, jfloat x, jfloat y,
+        jfloat pinchDistance, jint pointerCount) {
+    if (gRenderer) gRenderer->touch(action, x, y, pinchDistance, pointerCount);
 }

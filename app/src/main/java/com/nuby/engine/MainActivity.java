@@ -41,7 +41,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeSampleMeshLoaded();
     private static native void nativeResize(int width, int height);
     private static native void nativeFrame(float deltaSeconds);
-    private static native void nativeTouch(int action, float x, float y);
+    private static native void nativeTouch(
+            int action, float x, float y, float pinchDistance, int pointerCount);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,10 +61,43 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         surface.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
         surface.setOnTouchListener((view, event) -> {
             final int action = event.getActionMasked();
-            final float x = event.getX();
-            final float y = event.getY();
+            int pointerCount = Math.min(event.getPointerCount(), 2);
+            int firstIndex = 0;
+            int secondIndex = 1;
+            if (action == MotionEvent.ACTION_POINTER_UP) {
+                final int liftedIndex = event.getActionIndex();
+                firstIndex = -1;
+                secondIndex = -1;
+                for (int index = 0; index < event.getPointerCount(); ++index) {
+                    if (index == liftedIndex) continue;
+                    if (firstIndex < 0) firstIndex = index;
+                    else if (secondIndex < 0) secondIndex = index;
+                }
+                pointerCount = Math.min(event.getPointerCount() - 1, 2);
+            }
+
+            float x = 0.0f;
+            float y = 0.0f;
+            float pinchDistance = 0.0f;
+            if (pointerCount >= 2 && firstIndex >= 0 && secondIndex >= 0) {
+                final float firstX = event.getX(firstIndex);
+                final float firstY = event.getY(firstIndex);
+                final float secondX = event.getX(secondIndex);
+                final float secondY = event.getY(secondIndex);
+                x = (firstX + secondX) * 0.5f;
+                y = (firstY + secondY) * 0.5f;
+                pinchDistance = (float) Math.hypot(secondX - firstX, secondY - firstY);
+            } else if (firstIndex >= 0) {
+                x = event.getX(firstIndex);
+                y = event.getY(firstIndex);
+            }
+
+            final float touchX = x;
+            final float touchY = y;
+            final float span = pinchDistance;
+            final int pointers = pointerCount;
             // Keep all renderer state on GLSurfaceView's GL thread.
-            surface.queueEvent(() -> nativeTouch(action, x, y));
+            surface.queueEvent(() -> nativeTouch(action, touchX, touchY, span, pointers));
             return true;
         });
         root.addView(surface, new FrameLayout.LayoutParams(

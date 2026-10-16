@@ -107,6 +107,15 @@ void testActiveCameraAndOrbitInput() {
     expect(near(active->orbitCamera.pitch, 0.5f), "orbit pitch is clamped to camera limits");
     expect(!scene.orbitActiveCamera(std::numeric_limits<float>::infinity(), 1.0f),
            "non-finite orbit input is rejected");
+    expect(scene.zoomActiveCamera(0.5f), "pinch zoom scales camera distance");
+    expect(near(scene.activeCamera()->orbitCamera.distance, 2.8f),
+           "pinch zoom clamps to minimum camera distance");
+    expect(scene.zoomActiveCamera(100.0f), "zoom-out input is accepted");
+    expect(near(scene.activeCamera()->orbitCamera.distance, 10.0f),
+           "pinch zoom clamps to maximum camera distance");
+    expect(!scene.zoomActiveCamera(0.0f), "zero zoom factor is rejected");
+    expect(!scene.zoomActiveCamera(std::numeric_limits<float>::infinity()),
+           "non-finite zoom factor is rejected");
 
     scene.clear();
     expect(scene.activeCamera() == nullptr, "clearing a scene resets its active camera");

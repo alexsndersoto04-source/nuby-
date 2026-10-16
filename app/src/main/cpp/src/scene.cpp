@@ -145,6 +145,23 @@ bool Scene::orbitActiveCamera(float deltaX, float deltaY) {
     return true;
 }
 
+bool Scene::zoomActiveCamera(float distanceFactor) {
+    Entity* camera = activeCamera();
+    if (camera == nullptr || !camera->orbitCamera.enabled
+            || !std::isfinite(distanceFactor) || distanceFactor <= 0.0f) {
+        return false;
+    }
+
+    OrbitCameraController& controller = camera->orbitCamera;
+    const float minimumDistance = std::max(0.1f,
+            std::min(controller.minimumDistance, controller.maximumDistance));
+    const float maximumDistance = std::max(minimumDistance,
+            std::max(controller.minimumDistance, controller.maximumDistance));
+    controller.distance = std::clamp(controller.distance * distanceFactor,
+                                      minimumDistance, maximumDistance);
+    return true;
+}
+
 std::array<float, 16> Scene::worldMatrix(std::uint32_t id) const {
     const Entity* current = find(id);
     if (current == nullptr) return identity();

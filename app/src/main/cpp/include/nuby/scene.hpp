@@ -63,6 +63,8 @@ struct OrbitCameraController {
     bool enabled = false;
     std::array<float, 3> target{0.0f, 0.0f, 0.0f};
     float distance = 5.4f;
+    float minimumDistance = 2.8f;
+    float maximumDistance = 10.0f;
     float yaw = 0.45f;
     float pitch = 0.18f;
     float minimumPitch = -0.62f;
@@ -99,6 +101,7 @@ public:
     Entity* activeCamera();
     const Entity* activeCamera() const;
     bool orbitActiveCamera(float deltaX, float deltaY);
+    bool zoomActiveCamera(float distanceFactor);
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();

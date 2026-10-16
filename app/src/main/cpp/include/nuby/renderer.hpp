@@ -22,7 +22,7 @@ public:
     void initialize(AAssetManager* assetManager);
     void resize(int width, int height);
     void render(float deltaSeconds);
-    void touch(int action, float x, float y);
+    void touch(int action, float x, float y, float pinchDistance, int pointerCount);
     bool shadowsEnabled() const { return shadowsAvailable_; }
     bool postProcessingEnabled() const { return postProcessingAvailable_; }
     bool sampleMeshLoaded() const {
@@ -116,6 +116,7 @@ private:
     int height_ = 1;
     float lastTouchX_ = 0.0f;
     float lastTouchY_ = 0.0f;
+    float lastPinchDistance_ = 0.0f;
     std::array<float, 16> viewProjection_{};
     std::array<float, 16> lightViewProjection_{};
     std::array<float, 3> cameraPosition_{};
