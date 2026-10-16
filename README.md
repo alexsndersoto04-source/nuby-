@@ -4,9 +4,9 @@ Motor propio nativo para Android, con renderizado 3D en C++/OpenGL ES 3 y una ru
 
 ## Estado
 
-**Fase 1 — base Android y prueba de renderizado completada en CI. Fase 2 — núcleo de escenas en curso.** El proyecto ya genera un APK nativo mediante GitHub Actions. El renderizador y el núcleo de escenas están escritos para este motor; no se usa Unity, Unreal ni Godot. Todavía faltan los sistemas de juego, el juego de muestra y el editor final.
+**Fase 1 — base Android y compilación remota completadas. Fase 2 — núcleo de escenas implementado. Fase 3 — renderizador con sombras dinámicas en validación.** El proyecto ya genera un APK nativo mediante GitHub Actions. El renderizador y el núcleo de escenas son código propio; no se usa Unity, Unreal ni Godot. Todavía faltan sistemas de juego, el juego de muestra y el editor final.
 
-La escena actual es una prueba interactiva del renderizador y del modelo de entidades: arrastra el dedo para orbitar la cámara. Muestra FPS medidos y el nombre de la GPU detectada para que el perfilado en el Redmi 9C se base en datos del teléfono. El núcleo de escena ya tiene entidades identificadas, transformaciones y componentes de giro, órbita y pulso, con pruebas automáticas independientes de Android. Las decisiones gráficas se validarán en el teléfono, no se darán por buenas solo porque compile en CI.
+La escena actual es una prueba interactiva del renderizador y del modelo de entidades: arrastra el dedo para orbitar la cámara. Muestra FPS medidos y el nombre de la GPU detectada para que el perfilado en el Redmi 9C se base en datos del teléfono. El núcleo incluye entidades identificadas, transformaciones y componentes de giro, órbita y pulso, con pruebas automáticas independientes de Android. El renderizador incorpora sombras direccionales dinámicas con mapa de profundidad de 512 × 512 y filtrado PCF; si el dispositivo no admite el framebuffer, usa iluminación sin sombras como respaldo. La compilación CI pasó; el impacto visual y el rendimiento de las sombras aún deben medirse en el Redmi.
 
 ## Compilación automática
 
