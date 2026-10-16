@@ -9,8 +9,26 @@ permissions:
   contents: read
 
 jobs:
+  scene-tests:
+    name: Test engine scene core
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Compile scene tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp tests/scene_tests.cpp
+          -o /tmp/nuby-scene-tests
+
+      - name: Run scene tests
+        run: /tmp/nuby-scene-tests
+
   build-debug-apk:
     name: Build native Android APK
+    needs: scene-tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -29,7 +47,7 @@ jobs:
         run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.9'
 
@@ -37,7 +55,7 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Publish APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nuby-engine-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk

@@ -4,6 +4,7 @@ project(nuby_engine LANGUAGES CXX)
 add_library(nuby-engine SHARED
     native_engine.cpp
     src/renderer.cpp
+    src/scene.cpp
 )
 
 target_include_directories(nuby-engine PRIVATE

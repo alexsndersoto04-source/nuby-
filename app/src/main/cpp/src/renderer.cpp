@@ -74,6 +74,17 @@ Mat4 rotationY(float angle) {
     return result;
 }
 
+Mat4 rotationZ(float angle) {
+    Mat4 result = identity();
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    result[0] = c;
+    result[4] = -s;
+    result[1] = s;
+    result[5] = c;
+    return result;
+}
+
 Vec3 subtract(const Vec3& a, const Vec3& b) {
     return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
 }
@@ -342,9 +353,79 @@ Renderer::Mesh Renderer::makeGround() {
 }
 
 void Renderer::buildScene() {
+    scene_.clear();
     sphere_ = makeSphere(28, 40);
     torus_ = makeTorus(64, 14, 1.0f, 0.025f);
     ground_ = makeGround();
+
+    Entity& ground = scene_.create("Horizon Grid", Primitive::Ground);
+    ground.material.color = {0.02f, 0.04f, 0.08f};
+    ground.material.proceduralGrid = true;
+
+    Entity& firstRing = scene_.create("Aether Ring", Primitive::Torus);
+    firstRing.transform.position = {0.0f, 0.05f, 0.0f};
+    firstRing.transform.rotation[0] = 1.02f;
+    firstRing.spin.radiansPerSecond[1] = 0.21f;
+    firstRing.material.color = {0.10f, 0.75f, 0.78f};
+    firstRing.material.emission = {0.02f, 0.34f, 0.38f};
+
+    Entity& secondRing = scene_.create("Halo Ring", Primitive::Torus);
+    secondRing.transform.position = {0.0f, 0.02f, 0.0f};
+    secondRing.transform.rotation[0] = -0.72f;
+    secondRing.transform.scale = {1.28f, 1.28f, 1.28f};
+    secondRing.spin.radiansPerSecond[1] = -0.15f;
+    secondRing.material.color = {0.92f, 0.48f, 0.22f};
+    secondRing.material.emission = {0.26f, 0.08f, 0.015f};
+
+    Entity& contactHalo = scene_.create("Ground Halo", Primitive::Torus);
+    contactHalo.transform.position = {0.0f, -1.16f, 0.0f};
+    contactHalo.transform.scale = {1.52f, 1.52f, 1.52f};
+    contactHalo.material.color = {0.10f, 0.42f, 0.50f};
+    contactHalo.material.emission = {0.015f, 0.09f, 0.12f};
+
+    Entity& core = scene_.create("Aether Core", Primitive::Sphere);
+    core.transform.scale = {0.70f, 0.70f, 0.70f};
+    core.spin.radiansPerSecond[1] = 0.18f;
+    core.orbit.enabled = true;
+    core.orbit.verticalAmplitude = 0.07f;
+    core.orbit.angularSpeed = 1.15f;
+    core.material.color = {0.29f, 0.25f, 0.78f};
+    core.material.emission = {0.035f, 0.025f, 0.16f};
+
+    Entity& innerCore = scene_.create("Core Light", Primitive::Sphere);
+    innerCore.transform.scale = {0.25f, 0.25f, 0.25f};
+    innerCore.orbit.enabled = true;
+    innerCore.orbit.verticalAmplitude = 0.07f;
+    innerCore.orbit.angularSpeed = 1.15f;
+    innerCore.pulse.enabled = true;
+    innerCore.pulse.baseScale = innerCore.transform.scale;
+    innerCore.pulse.amplitude = 0.10f;
+    innerCore.pulse.frequency = 0.42f;
+    innerCore.material.color = {0.16f, 0.78f, 0.88f};
+    innerCore.material.emission = {0.20f, 0.74f, 0.88f};
+
+    for (int index = 0; index < 3; ++index) {
+        Entity& satellite = scene_.create("Orbiting Shard " + std::to_string(index + 1),
+                                          Primitive::Sphere);
+        const float orbit = 1.46f + 0.08f * static_cast<float>(index);
+        satellite.transform.scale = {0.075f + 0.018f * static_cast<float>(index),
+                                     0.075f + 0.018f * static_cast<float>(index),
+                                     0.075f + 0.018f * static_cast<float>(index)};
+        satellite.orbit.enabled = true;
+        satellite.orbit.radius = orbit;
+        satellite.orbit.angularSpeed = 0.48f + 0.08f * static_cast<float>(index);
+        satellite.orbit.phase = 2.0f * kPi * static_cast<float>(index) / 3.0f;
+        satellite.orbit.verticalAmplitude = 0.44f;
+        satellite.orbit.verticalFrequency = 1.7f;
+        if (index == 1) {
+            satellite.material.color = {0.95f, 0.43f, 0.20f};
+        } else {
+            satellite.material.color = {0.18f, 0.79f, 0.78f};
+        }
+        satellite.material.emission = {satellite.material.color[0] * 0.28f,
+                                       satellite.material.color[1] * 0.20f,
+                                       satellite.material.color[2] * 0.16f};
+    }
 }
 
 void Renderer::initialize() {
@@ -402,7 +483,7 @@ void Renderer::render(float deltaSeconds) {
     }
 
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
-    elapsed_ += dt;
+    scene_.update(dt);
 
     const float distance = 5.4f;
     const float horizontal = std::cos(pitch_) * distance;
@@ -415,41 +496,28 @@ void Renderer::render(float deltaSeconds) {
     viewProjection_ = multiply(projection, view);
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    draw(ground_, identity(), {0.02f, 0.04f, 0.08f}, {0.0f, 0.0f, 0.0f}, true);
+    for (const Entity& entity : scene_.entities()) {
+        if (!entity.visible) continue;
 
-    const Mat4 ringOne = multiply(translation(0.0f, 0.05f, 0.0f),
-            multiply(rotationY(elapsed_ * 0.21f), rotationX(1.02f)));
-    draw(torus_, ringOne, {0.10f, 0.75f, 0.78f}, {0.02f, 0.34f, 0.38f});
+        const Mat4 translationMatrix = translation(entity.transform.position[0],
+                entity.transform.position[1], entity.transform.position[2]);
+        const Mat4 rotationMatrix = multiply(rotationY(entity.transform.rotation[1]),
+                multiply(rotationX(entity.transform.rotation[0]),
+                        rotationZ(entity.transform.rotation[2])));
+        const Mat4 scaleMatrix = scale(entity.transform.scale[0],
+                entity.transform.scale[1], entity.transform.scale[2]);
+        const Mat4 model = multiply(translationMatrix, multiply(rotationMatrix, scaleMatrix));
 
-    const Mat4 ringTwo = multiply(translation(0.0f, 0.02f, 0.0f),
-            multiply(rotationY(-elapsed_ * 0.15f),
-                    multiply(rotationX(-0.72f), scale(1.28f, 1.28f, 1.28f))));
-    draw(torus_, ringTwo, {0.92f, 0.48f, 0.22f}, {0.26f, 0.08f, 0.015f});
-
-    const Mat4 contactHalo = multiply(translation(0.0f, -1.16f, 0.0f),
-                                      scale(1.62f, 0.12f, 1.62f));
-    draw(torus_, contactHalo, {0.10f, 0.42f, 0.50f}, {0.015f, 0.09f, 0.12f});
-
-    const float bob = std::sin(elapsed_ * 1.15f) * 0.07f;
-    const Mat4 core = multiply(translation(0.0f, bob, 0.0f),
-            multiply(rotationY(elapsed_ * 0.18f), scale(0.70f, 0.70f, 0.70f)));
-    draw(sphere_, core, {0.29f, 0.25f, 0.78f}, {0.035f, 0.025f, 0.16f});
-
-    const float pulse = 0.25f + 0.025f * std::sin(elapsed_ * 2.6f);
-    const Mat4 innerCore = multiply(translation(0.0f, bob, 0.0f), scale(pulse, pulse, pulse));
-    draw(sphere_, innerCore, {0.16f, 0.78f, 0.88f}, {0.20f, 0.74f, 0.88f});
-
-    for (int index = 0; index < 3; ++index) {
-        const float phase = elapsed_ * (0.48f + 0.08f * static_cast<float>(index))
-                            + 2.0f * kPi * static_cast<float>(index) / 3.0f;
-        const float orbit = 1.46f + 0.08f * static_cast<float>(index);
-        const float x = std::cos(phase) * orbit;
-        const float y = std::sin(phase * 1.7f) * 0.44f;
-        const float z = std::sin(phase) * orbit;
-        const float size = 0.075f + 0.018f * static_cast<float>(index);
-        const Mat4 satellite = multiply(translation(x, y, z), scale(size, size, size));
-        const Vec3 tint = index == 1 ? Vec3{0.95f, 0.43f, 0.20f} : Vec3{0.18f, 0.79f, 0.78f};
-        draw(sphere_, satellite, tint, {tint[0] * 0.28f, tint[1] * 0.20f, tint[2] * 0.16f});
+        const Mesh* mesh = nullptr;
+        switch (entity.primitive) {
+            case Primitive::Sphere: mesh = &sphere_; break;
+            case Primitive::Torus: mesh = &torus_; break;
+            case Primitive::Ground: mesh = &ground_; break;
+        }
+        if (mesh != nullptr) {
+            draw(*mesh, model, entity.material.color, entity.material.emission,
+                 entity.material.proceduralGrid);
+        }
     }
 }
 

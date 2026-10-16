@@ -6,6 +6,8 @@
 
 #include <GLES3/gl3.h>
 
+#include "nuby/scene.hpp"
+
 namespace nuby {
 
 class Renderer final {
@@ -56,9 +58,9 @@ private:
     Mesh sphere_{};
     Mesh torus_{};
     Mesh ground_{};
+    Scene scene_;
     int width_ = 1;
     int height_ = 1;
-    float elapsed_ = 0.0f;
     float yaw_ = 0.45f;
     float pitch_ = 0.18f;
     float lastTouchX_ = 0.0f;

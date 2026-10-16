@@ -4,9 +4,9 @@ Motor propio nativo para Android, con renderizado 3D en C++/OpenGL ES 3 y una ru
 
 ## Estado
 
-**Fase 1 — base Android y prueba de renderizado en curso.** Esta primera entrega establece el APK nativo, la integración C++/Java, el renderizador inicial y el flujo CI. No es todavía el motor completo, el juego de muestra ni el editor final.
+**Fase 1 — base Android y prueba de renderizado completada en CI. Fase 2 — núcleo de escenas en curso.** El proyecto ya genera un APK nativo mediante GitHub Actions. El renderizador y el núcleo de escenas están escritos para este motor; no se usa Unity, Unreal ni Godot. Todavía faltan los sistemas de juego, el juego de muestra y el editor final.
 
-La escena inicial es una prueba técnica interactiva del renderizador. Arrastra el dedo sobre la pantalla para orbitar la cámara. El Redmi 9C es el dispositivo de referencia; las decisiones gráficas se validarán en el teléfono, no se darán por buenas solo porque compile en CI.
+La escena actual es una prueba interactiva del renderizador y del modelo de entidades: arrastra el dedo para orbitar la cámara. El núcleo de escena ya tiene entidades identificadas, transformaciones y componentes de giro, órbita y pulso, con pruebas automáticas independientes de Android. El Redmi 9C es el dispositivo de referencia; las decisiones gráficas se validarán en el teléfono, no se darán por buenas solo porque compile en CI.
 
 ## Compilación automática
 
