@@ -52,6 +52,31 @@ struct PulseComponent {
     float phase = 0.0f;
 };
 
+struct Vector3Keyframe {
+    float timeSeconds = 0.0f;
+    std::array<float, 3> value{0.0f, 0.0f, 0.0f};
+};
+
+struct Vector3Track {
+    std::vector<Vector3Keyframe> keyframes;
+    bool addKeyframe(float timeSeconds, const std::array<float, 3>& value);
+    std::array<float, 3> sample(float timeSeconds,
+                                const std::array<float, 3>& fallback) const;
+    float durationSeconds() const;
+};
+
+struct AnimationComponent {
+    bool enabled = false;
+    bool playing = true;
+    bool looping = true;
+    float playbackRate = 1.0f;
+    float timeSeconds = 0.0f;
+    float durationSeconds = 0.0f;
+    Vector3Track position;
+    Vector3Track rotation;
+    Vector3Track scale;
+};
+
 struct CameraComponent {
     bool enabled = false;
     float verticalFovRadians = 0.76f;
@@ -84,6 +109,7 @@ struct Entity {
     SpinComponent spin;
     OrbitComponent orbit;
     PulseComponent pulse;
+    AnimationComponent animation;
     CameraComponent camera;
     OrbitCameraController orbitCamera;
     bool visible = true;

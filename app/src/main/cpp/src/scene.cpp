@@ -68,7 +68,83 @@ Mat4 localMatrix(const Transform& transform) {
     const Mat4 rotation = multiply(rotationY, multiply(rotationX, rotationZ));
     return multiply(translation, multiply(rotation, scale));
 }
+
+void updateAnimation(AnimationComponent& animation, Transform& transform, float deltaSeconds) {
+    if (!animation.enabled) return;
+
+    const float authoredDuration = std::isfinite(animation.durationSeconds)
+            ? std::max(animation.durationSeconds, 0.0f) : 0.0f;
+    const float duration = std::max({authoredDuration, animation.position.durationSeconds(),
+            animation.rotation.durationSeconds(), animation.scale.durationSeconds()});
+    if (animation.playing) {
+        const float current = std::isfinite(animation.timeSeconds) ? animation.timeSeconds : 0.0f;
+        const float rate = std::isfinite(animation.playbackRate) ? animation.playbackRate : 0.0f;
+        const float next = current + deltaSeconds * rate;
+        if (duration <= 0.0f) {
+            animation.timeSeconds = 0.0f;
+            animation.playing = false;
+        } else if (animation.looping) {
+            animation.timeSeconds = std::fmod(next, duration);
+            if (animation.timeSeconds < 0.0f) animation.timeSeconds += duration;
+        } else if (next >= duration) {
+            animation.timeSeconds = duration;
+            animation.playing = false;
+        } else if (next <= 0.0f && rate < 0.0f) {
+            animation.timeSeconds = 0.0f;
+            animation.playing = false;
+        } else {
+            animation.timeSeconds = std::clamp(next, 0.0f, duration);
+        }
+    }
+
+    transform.position = animation.position.sample(animation.timeSeconds, transform.position);
+    transform.rotation = animation.rotation.sample(animation.timeSeconds, transform.rotation);
+    transform.scale = animation.scale.sample(animation.timeSeconds, transform.scale);
+}
 }  // namespace
+
+bool Vector3Track::addKeyframe(float timeSeconds, const std::array<float, 3>& value) {
+    if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f
+            || !std::isfinite(value[0]) || !std::isfinite(value[1])
+            || !std::isfinite(value[2])) {
+        return false;
+    }
+
+    const auto position = std::lower_bound(keyframes.begin(), keyframes.end(), timeSeconds,
+            [](const Vector3Keyframe& keyframe, float time) {
+                return keyframe.timeSeconds < time;
+            });
+    if (position != keyframes.end() && position->timeSeconds == timeSeconds) {
+        position->value = value;
+    } else {
+        keyframes.insert(position, Vector3Keyframe{timeSeconds, value});
+    }
+    return true;
+}
+
+std::array<float, 3> Vector3Track::sample(float timeSeconds,
+                                          const std::array<float, 3>& fallback) const {
+    if (keyframes.empty()) return fallback;
+    if (!std::isfinite(timeSeconds)) timeSeconds = 0.0f;
+    if (timeSeconds <= keyframes.front().timeSeconds) return keyframes.front().value;
+    if (timeSeconds >= keyframes.back().timeSeconds) return keyframes.back().value;
+
+    const auto next = std::upper_bound(keyframes.begin(), keyframes.end(), timeSeconds,
+            [](float time, const Vector3Keyframe& keyframe) {
+                return time < keyframe.timeSeconds;
+            });
+    const Vector3Keyframe& right = *next;
+    const Vector3Keyframe& left = *(next - 1);
+    const float span = right.timeSeconds - left.timeSeconds;
+    const float blend = span > 0.0f ? (timeSeconds - left.timeSeconds) / span : 0.0f;
+    return {left.value[0] + (right.value[0] - left.value[0]) * blend,
+            left.value[1] + (right.value[1] - left.value[1]) * blend,
+            left.value[2] + (right.value[2] - left.value[2]) * blend};
+}
+
+float Vector3Track::durationSeconds() const {
+    return keyframes.empty() ? 0.0f : keyframes.back().timeSeconds;
+}
 
 Entity& Scene::create(std::string name, Primitive primitive) {
     entities_.push_back(Entity{});
@@ -183,13 +259,22 @@ void Scene::clear() {
 }
 
 void Scene::update(float deltaSeconds) {
-    const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
+    const float dt = std::isfinite(deltaSeconds)
+            ? std::clamp(deltaSeconds, 0.0f, 0.05f) : 0.0f;
     elapsedSeconds_ += dt;
 
     for (Entity& entity : entities_) {
-        if (entity.spin.radiansPerSecond[0] != 0.0f
-                || entity.spin.radiansPerSecond[1] != 0.0f
-                || entity.spin.radiansPerSecond[2] != 0.0f) {
+        // Animation establishes authored local transforms first. Orbit and
+        // pulse own position and scale when enabled; an authored rotation track
+        // takes precedence over procedural spin.
+        updateAnimation(entity.animation, entity.transform, dt);
+
+        const bool animationOwnsRotation = entity.animation.enabled
+                && !entity.animation.rotation.keyframes.empty();
+        if (!animationOwnsRotation
+                && (entity.spin.radiansPerSecond[0] != 0.0f
+                    || entity.spin.radiansPerSecond[1] != 0.0f
+                    || entity.spin.radiansPerSecond[2] != 0.0f)) {
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 entity.transform.rotation[axis] += entity.spin.radiansPerSecond[axis] * dt;
             }

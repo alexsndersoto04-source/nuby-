@@ -35,6 +35,8 @@ void testDeltaTimeIsClamped() {
     nuby::Scene scene;
     nuby::Entity& spinner = scene.create("spinner", nuby::Primitive::Sphere);
     spinner.spin.radiansPerSecond[0] = 1.0f;
+    scene.update(std::numeric_limits<float>::quiet_NaN());
+    expect(near(scene.elapsedSeconds(), 0.0f), "non-finite frame delta is ignored");
     scene.update(5.0f);
     expect(near(spinner.transform.rotation[0], 0.05f), "large frame delta is clamped");
 }
@@ -121,6 +123,48 @@ void testActiveCameraAndOrbitInput() {
     expect(scene.activeCamera() == nullptr, "clearing a scene resets its active camera");
 }
 
+void testKeyframedAnimationInterpolationAndLooping() {
+    nuby::Scene scene;
+    nuby::Entity& animated = scene.create("animated", nuby::Primitive::Sphere);
+    animated.animation.enabled = true;
+    animated.animation.durationSeconds = 1.0f;
+    animated.animation.position.addKeyframe(1.0f, {4.0f, 2.0f, 0.0f});
+    animated.animation.position.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    animated.animation.rotation.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    animated.animation.rotation.addKeyframe(1.0f, {0.0f, 2.0f, 0.0f});
+    animated.animation.scale.addKeyframe(0.0f, {1.0f, 1.0f, 1.0f});
+    animated.animation.scale.addKeyframe(1.0f, {3.0f, 3.0f, 3.0f});
+    animated.spin.radiansPerSecond[1] = 9.0f;
+    expect(!animated.animation.position.addKeyframe(-1.0f, {0.0f, 0.0f, 0.0f}),
+           "negative keyframe time is rejected");
+    expect(!animated.animation.position.addKeyframe(
+                   0.25f, {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}),
+           "non-finite keyframe value is rejected");
+
+    for (int frame = 0; frame < 10; ++frame) scene.update(0.05f);
+    expect(near(animated.transform.position[0], 2.0f), "position track interpolates linearly");
+    expect(near(animated.transform.position[1], 1.0f), "position track interpolates every axis");
+    expect(near(animated.transform.rotation[1], 1.0f),
+           "animation rotation track takes precedence over spin");
+    expect(near(animated.transform.scale[0], 2.0f), "scale track interpolates linearly");
+
+    for (int frame = 0; frame < 11; ++frame) scene.update(0.05f);
+    expect(near(animated.animation.timeSeconds, 0.05f), "looping clip wraps at its duration");
+    expect(near(animated.transform.position[0], 0.2f), "wrapped clip samples the start segment");
+
+    nuby::Entity& oneShot = scene.create("one shot", nuby::Primitive::Sphere);
+    oneShot.animation.enabled = true;
+    oneShot.animation.looping = false;
+    oneShot.animation.durationSeconds = 0.1f;
+    oneShot.animation.position.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    oneShot.animation.position.addKeyframe(0.1f, {1.0f, 0.0f, 0.0f});
+    scene.update(0.05f);
+    expect(near(oneShot.transform.position[0], 0.5f), "one-shot animation samples between keys");
+    scene.update(0.05f);
+    expect(!oneShot.animation.playing && near(oneShot.transform.position[0], 1.0f),
+           "one-shot animation holds its final pose");
+}
+
 void testPulseDoesNotAccumulateScaleError() {
     nuby::Scene scene;
     nuby::Entity& pulsing = scene.create("pulsing", nuby::Primitive::Sphere);
@@ -144,6 +188,7 @@ int main() {
     testOrbitIsStable();
     testTransformHierarchyAndCycleProtection();
     testActiveCameraAndOrbitInput();
+    testKeyframedAnimationInterpolationAndLooping();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {
         std::cerr << failures << " scene test(s) failed\n";

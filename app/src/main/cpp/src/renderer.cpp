@@ -542,6 +542,11 @@ void Renderer::buildScene() {
     firstRing.spin.radiansPerSecond[1] = 0.21f;
     firstRing.material.color = {0.10f, 0.75f, 0.78f};
     firstRing.material.emission = {0.02f, 0.34f, 0.38f};
+    firstRing.animation.enabled = true;
+    firstRing.animation.durationSeconds = 4.0f;
+    firstRing.animation.position.addKeyframe(0.0f, {0.0f, 0.05f, 0.0f});
+    firstRing.animation.position.addKeyframe(2.0f, {0.0f, 0.12f, 0.0f});
+    firstRing.animation.position.addKeyframe(4.0f, {0.0f, 0.05f, 0.0f});
     firstRing.material.metallic = 0.58f;
     firstRing.material.roughness = 0.24f;
 
