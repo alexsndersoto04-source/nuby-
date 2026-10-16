@@ -136,6 +136,27 @@ Mat4 perspective(float verticalFov, float aspect, float nearPlane, float farPlan
     return result;
 }
 
+Mat4 orthographic(float left, float right, float bottom, float top,
+                  float nearPlane, float farPlane) {
+    Mat4 result = identity();
+    result[0] = 2.0f / (right - left);
+    result[5] = 2.0f / (top - bottom);
+    result[10] = -2.0f / (farPlane - nearPlane);
+    result[12] = -(right + left) / (right - left);
+    result[13] = -(top + bottom) / (top - bottom);
+    result[14] = -(farPlane + nearPlane) / (farPlane - nearPlane);
+    return result;
+}
+
+Mat4 modelMatrix(const Transform& transform) {
+    const Mat4 translationMatrix = translation(transform.position[0],
+            transform.position[1], transform.position[2]);
+    const Mat4 rotationMatrix = multiply(rotationY(transform.rotation[1]),
+            multiply(rotationX(transform.rotation[0]), rotationZ(transform.rotation[2])));
+    const Mat4 scaleMatrix = scale(transform.scale[0], transform.scale[1], transform.scale[2]);
+    return multiply(translationMatrix, multiply(rotationMatrix, scaleMatrix));
+}
+
 void appendTriangle(std::vector<Renderer::Vertex>& vertices,
                     const Renderer::Vertex& a,
                     const Renderer::Vertex& b,
@@ -151,13 +172,16 @@ precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 uniform mat4 uViewProjection;
+uniform mat4 uLightViewProjection;
 uniform mat4 uModel;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
+out vec4 vLightPosition;
 void main() {
     vec4 world = uModel * vec4(aPosition, 1.0);
     vWorldPosition = world.xyz;
     vWorldNormal = mat3(uModel) * aNormal;
+    vLightPosition = uLightViewProjection * world;
     gl_Position = uViewProjection * world;
 }
 )";
@@ -167,13 +191,43 @@ constexpr const char* kFragmentShader = R"(
 precision highp float;
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
+in vec4 vLightPosition;
 uniform vec3 uColor;
 uniform vec3 uEmission;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
+uniform sampler2D uShadowMap;
+uniform int uShadowsEnabled;
 uniform int uGrid;
 out vec4 fragmentColor;
+
+float shadowAmount(vec3 normal, vec3 lightDirection) {
+    if (uShadowsEnabled == 0) return 0.0;
+    vec3 projected = vLightPosition.xyz / max(vLightPosition.w, 0.0001);
+    projected = projected * 0.5 + 0.5;
+    if (projected.x < 0.0 || projected.x > 1.0 ||
+        projected.y < 0.0 || projected.y > 1.0 ||
+        projected.z < 0.0 || projected.z > 1.0) return 0.0;
+
+    float bias = max(0.0015 * (1.0 - dot(normal, lightDirection)), 0.00045);
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float occlusion = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float closestDepth = texture(uShadowMap,
+                    projected.xy + vec2(float(x), float(y)) * texel).r;
+            occlusion += projected.z - bias > closestDepth ? 1.0 : 0.0;
+        }
+    }
+    return occlusion / 9.0;
+}
+
 void main() {
+    vec3 normal = normalize(vWorldNormal);
+    vec3 lightDirection = normalize(-uLightDirection);
+    float shadow = shadowAmount(normal, lightDirection);
+    float visibility = 1.0 - shadow * 0.82;
+
     if (uGrid == 1) {
         vec2 coordinate = vWorldPosition.xz * 0.5;
         vec2 derivative = max(fwidth(coordinate), vec2(0.0001));
@@ -181,28 +235,44 @@ void main() {
         float line = 1.0 - min(min(gridDistance.x, gridDistance.y), 1.0);
         float fade = 1.0 - smoothstep(2.0, 15.0, length(vWorldPosition.xz));
         float centerGlow = exp(-length(vWorldPosition.xz) * 0.48);
-        vec3 base = vec3(0.012, 0.019, 0.043);
-        vec3 gridColor = vec3(0.12, 0.67, 0.72) * (line * fade * 0.48 + centerGlow * 0.12);
+        vec3 base = vec3(0.012, 0.019, 0.043) * (0.48 + visibility * 0.52);
+        vec3 gridColor = vec3(0.12, 0.67, 0.72)
+                * (line * fade * 0.48 * (0.38 + visibility * 0.62) + centerGlow * 0.12);
         fragmentColor = vec4(base + gridColor, 1.0);
         return;
     }
 
-    vec3 normal = normalize(vWorldNormal);
-    vec3 lightDirection = normalize(-uLightDirection);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
     vec3 halfDirection = normalize(lightDirection + viewDirection);
     float diffuse = max(dot(normal, lightDirection), 0.0);
     float specular = pow(max(dot(normal, halfDirection), 0.0), 48.0) * 0.42;
     float fresnel = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0);
 
-    vec3 color = uColor * (0.16 + diffuse * 0.88);
-    color += specular * vec3(0.78, 0.9, 1.0);
+    vec3 color = uColor * (0.16 + diffuse * 0.88 * visibility);
+    color += specular * vec3(0.78, 0.9, 1.0) * visibility;
     color += fresnel * vec3(0.08, 0.43, 0.58);
     color += uEmission;
     color = vec3(1.0) - exp(-color * 1.18);
     color = pow(color, vec3(1.0 / 2.2));
     fragmentColor = vec4(color, 1.0);
 }
+)";
+
+constexpr const char* kShadowVertexShader = R"(
+#version 300 es
+precision highp float;
+layout(location = 0) in vec3 aPosition;
+uniform mat4 uLightViewProjection;
+uniform mat4 uModel;
+void main() {
+    gl_Position = uLightViewProjection * uModel * vec4(aPosition, 1.0);
+}
+)";
+
+constexpr const char* kShadowFragmentShader = R"(
+#version 300 es
+precision highp float;
+void main() { }
 )";
 
 }  // namespace
@@ -428,6 +498,91 @@ void Renderer::buildScene() {
     }
 }
 
+const Renderer::Mesh* Renderer::meshFor(Primitive primitive) const {
+    switch (primitive) {
+        case Primitive::Sphere: return &sphere_;
+        case Primitive::Torus: return &torus_;
+        case Primitive::Ground: return &ground_;
+    }
+    return nullptr;
+}
+
+void Renderer::initializeShadowMap() {
+    shadowProgram_ = createProgram(kShadowVertexShader, kShadowFragmentShader);
+    if (shadowProgram_ == 0) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "Shadow shaders unavailable; continuing without dynamic shadows");
+        return;
+    }
+    shadowProgramLightViewProjection_ = glGetUniformLocation(shadowProgram_, "uLightViewProjection");
+    shadowProgramModel_ = glGetUniformLocation(shadowProgram_, "uModel");
+
+    glGenTextures(1, &shadowDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16,
+                 kShadowMapSize, kShadowMapSize, 0,
+                 GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &shadowFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, shadowDepthTexture_, 0);
+    const GLenum noColorBuffer = GL_NONE;
+    glDrawBuffers(1, &noColorBuffer);
+    glReadBuffer(GL_NONE);
+
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    shadowsAvailable_ = status == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (!shadowsAvailable_) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "Shadow framebuffer unavailable (0x%x); using unshadowed lighting", status);
+        if (shadowFramebuffer_ != 0) glDeleteFramebuffers(1, &shadowFramebuffer_);
+        if (shadowDepthTexture_ != 0) glDeleteTextures(1, &shadowDepthTexture_);
+        shadowFramebuffer_ = 0;
+        shadowDepthTexture_ = 0;
+        return;
+    }
+
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                        "Dynamic shadow map enabled at %dx%d", kShadowMapSize, kShadowMapSize);
+}
+
+void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
+    if (!shadowsAvailable_ || shadowProgram_ == 0) return;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer_);
+    glViewport(0, 0, kShadowMapSize, kShadowMapSize);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.5f, 2.5f);
+    glUseProgram(shadowProgram_);
+    glUniformMatrix4fv(shadowProgramLightViewProjection_, 1, GL_FALSE,
+                       lightViewProjection.data());
+
+    for (const Entity& entity : scene_.entities()) {
+        if (!entity.visible || entity.primitive == Primitive::Ground) continue;
+        const Mesh* mesh = meshFor(entity.primitive);
+        if (mesh == nullptr || mesh->vao == 0) continue;
+        const Mat4 model = modelMatrix(entity.transform);
+        glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
+        glBindVertexArray(mesh->vao);
+        glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
+    }
+
+    glBindVertexArray(0);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width_, height_);
+}
+
 void Renderer::initialize() {
     program_ = createProgram(kVertexShader, kFragmentShader);
     if (program_ == 0) {
@@ -441,9 +596,13 @@ void Renderer::initialize() {
     uniforms_.emission = glGetUniformLocation(program_, "uEmission");
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
+    uniforms_.lightViewProjection = glGetUniformLocation(program_, "uLightViewProjection");
+    uniforms_.shadowMap = glGetUniformLocation(program_, "uShadowMap");
+    uniforms_.shadowsEnabled = glGetUniformLocation(program_, "uShadowsEnabled");
     uniforms_.grid = glGetUniformLocation(program_, "uGrid");
 
     buildScene();
+    initializeShadowMap();
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_CULL_FACE);
@@ -464,12 +623,18 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec3& color,
 
     glUseProgram(program_);
     glUniformMatrix4fv(uniforms_.viewProjection, 1, GL_FALSE, viewProjection_.data());
+    glUniformMatrix4fv(uniforms_.lightViewProjection, 1, GL_FALSE,
+                       lightViewProjection_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
     glUniform3fv(uniforms_.color, 1, color.data());
     glUniform3fv(uniforms_.emission, 1, emission.data());
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
     glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
+    glUniform1i(uniforms_.shadowMap, 0);
+    glUniform1i(uniforms_.shadowsEnabled, shadowsAvailable_ ? 1 : 0);
     glUniform1i(uniforms_.grid, grid ? 1 : 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
 
     glBindVertexArray(mesh.vao);
     glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
@@ -485,6 +650,12 @@ void Renderer::render(float deltaSeconds) {
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
     scene_.update(dt);
 
+    const Vec3 lightPosition{4.5f, 8.2f, 3.4f};
+    const Mat4 lightView = lookAt(lightPosition, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+    const Mat4 lightProjection = orthographic(-4.2f, 4.2f, -4.2f, 4.2f, 0.1f, 20.0f);
+    lightViewProjection_ = multiply(lightProjection, lightView);
+    renderShadowMap(lightViewProjection_);
+
     const float distance = 5.4f;
     const float horizontal = std::cos(pitch_) * distance;
     cameraPosition_ = {std::sin(yaw_) * horizontal,
@@ -498,26 +669,10 @@ void Renderer::render(float deltaSeconds) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible) continue;
-
-        const Mat4 translationMatrix = translation(entity.transform.position[0],
-                entity.transform.position[1], entity.transform.position[2]);
-        const Mat4 rotationMatrix = multiply(rotationY(entity.transform.rotation[1]),
-                multiply(rotationX(entity.transform.rotation[0]),
-                        rotationZ(entity.transform.rotation[2])));
-        const Mat4 scaleMatrix = scale(entity.transform.scale[0],
-                entity.transform.scale[1], entity.transform.scale[2]);
-        const Mat4 model = multiply(translationMatrix, multiply(rotationMatrix, scaleMatrix));
-
-        const Mesh* mesh = nullptr;
-        switch (entity.primitive) {
-            case Primitive::Sphere: mesh = &sphere_; break;
-            case Primitive::Torus: mesh = &torus_; break;
-            case Primitive::Ground: mesh = &ground_; break;
-        }
-        if (mesh != nullptr) {
-            draw(*mesh, model, entity.material.color, entity.material.emission,
-                 entity.material.proceduralGrid);
-        }
+        const Mesh* mesh = meshFor(entity.primitive);
+        if (mesh == nullptr) continue;
+        draw(*mesh, modelMatrix(entity.transform), entity.material.color,
+             entity.material.emission, entity.material.proceduralGrid);
     }
 }
 

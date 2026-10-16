@@ -39,6 +39,9 @@ private:
         GLint emission = -1;
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
+        GLint lightViewProjection = -1;
+        GLint shadowMap = -1;
+        GLint shadowsEnabled = -1;
         GLint grid = -1;
     };
 
@@ -48,12 +51,22 @@ private:
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
     Mesh makeGround();
+    const Mesh* meshFor(Primitive primitive) const;
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
               const std::array<float, 3>& color,
               const std::array<float, 3>& emission, bool grid = false);
     void buildScene();
+    void initializeShadowMap();
+    void renderShadowMap(const std::array<float, 16>& lightViewProjection);
 
     GLuint program_ = 0;
+    GLuint shadowProgram_ = 0;
+    GLuint shadowFramebuffer_ = 0;
+    GLuint shadowDepthTexture_ = 0;
+    bool shadowsAvailable_ = false;
+    GLint shadowProgramLightViewProjection_ = -1;
+    GLint shadowProgramModel_ = -1;
+    static constexpr int kShadowMapSize = 512;
     Uniforms uniforms_{};
     Mesh sphere_{};
     Mesh torus_{};
@@ -66,6 +79,7 @@ private:
     float lastTouchX_ = 0.0f;
     float lastTouchY_ = 0.0f;
     std::array<float, 16> viewProjection_{};
+    std::array<float, 16> lightViewProjection_{};
     std::array<float, 3> cameraPosition_{};
 };
 
