@@ -238,6 +238,34 @@ bool Scene::zoomActiveCamera(float distanceFactor) {
     return true;
 }
 
+void Scene::collectPointLights(std::size_t maximum,
+                               std::vector<PointLightData>& output) const {
+    output.clear();
+    if (maximum == 0) return;
+    output.reserve(std::min(maximum, entities_.size()));
+
+    for (const Entity& entity : entities_) {
+        const PointLightComponent& light = entity.pointLight;
+        if (!light.enabled || !std::isfinite(light.intensity) || light.intensity <= 0.0f
+                || !std::isfinite(light.range) || light.range <= 0.0f
+                || !std::isfinite(light.color[0]) || !std::isfinite(light.color[1])
+                || !std::isfinite(light.color[2])) {
+            continue;
+        }
+        const Mat4 world = worldMatrix(entity.id);
+        if (!std::isfinite(world[12]) || !std::isfinite(world[13])
+                || !std::isfinite(world[14])) {
+            continue;
+        }
+        const std::array<float, 3> color{std::max(light.color[0], 0.0f),
+                                         std::max(light.color[1], 0.0f),
+                                         std::max(light.color[2], 0.0f)};
+        output.push_back({{world[12], world[13], world[14]}, color,
+                          light.intensity, light.range});
+        if (output.size() == maximum) break;
+    }
+}
+
 std::array<float, 16> Scene::worldMatrix(std::uint32_t id) const {
     const Entity* current = find(id);
     if (current == nullptr) return identity();

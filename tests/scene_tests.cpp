@@ -123,6 +123,50 @@ void testActiveCameraAndOrbitInput() {
     expect(scene.activeCamera() == nullptr, "clearing a scene resets its active camera");
 }
 
+void testPointLightCollectionUsesWorldTransformsAndFiltersInvalidLights() {
+    nuby::Scene scene;
+    nuby::Entity& parent = scene.create("light rig", nuby::Primitive::None);
+    const std::uint32_t parentId = parent.id;
+    parent.transform.position = {1.0f, 2.0f, 3.0f};
+
+    nuby::Entity& lightEntity = scene.create("point light", nuby::Primitive::None);
+    const std::uint32_t lightId = lightEntity.id;
+    lightEntity.transform.position = {2.0f, 0.0f, 0.0f};
+    lightEntity.pointLight.enabled = true;
+    lightEntity.pointLight.color = {0.2f, -0.4f, 0.8f};
+    lightEntity.pointLight.intensity = 3.0f;
+    lightEntity.pointLight.range = 7.0f;
+    expect(scene.setParent(lightId, parentId), "light entity can inherit a parent transform");
+
+    nuby::Entity& invalidLight = scene.create("invalid light", nuby::Primitive::None);
+    invalidLight.pointLight.enabled = true;
+    invalidLight.pointLight.intensity = std::numeric_limits<float>::quiet_NaN();
+    for (int index = 0; index < 4; ++index) {
+        nuby::Entity& extra = scene.create("extra light", nuby::Primitive::None);
+        extra.pointLight.enabled = true;
+        extra.pointLight.intensity = 1.0f;
+    }
+
+    std::vector<nuby::PointLightData> lights;
+    scene.collectPointLights(4, lights);
+    expect(lights.size() == 4, "invalid lights are filtered and the render budget is enforced");
+    if (!lights.empty()) {
+        expect(near(lights[0].position[0], 3.0f)
+                       && near(lights[0].position[1], 2.0f)
+                       && near(lights[0].position[2], 3.0f),
+               "point-light collection composes parent world position");
+        expect(near(lights[0].intensity, 3.0f) && near(lights[0].range, 7.0f),
+               "point-light photometric settings are preserved");
+        expect(near(lights[0].color[0], 0.2f) && near(lights[0].color[1], 0.0f)
+                       && near(lights[0].color[2], 0.8f),
+               "negative light color channels are clamped to zero");
+    }
+    scene.collectPointLights(1, lights);
+    expect(lights.size() == 1, "point-light collection respects a smaller render budget");
+    scene.collectPointLights(0, lights);
+    expect(lights.empty(), "zero light budget produces an empty render list");
+}
+
 void testKeyframedAnimationInterpolationAndLooping() {
     nuby::Scene scene;
     nuby::Entity& animated = scene.create("animated", nuby::Primitive::Sphere);
@@ -188,6 +232,7 @@ int main() {
     testOrbitIsStable();
     testTransformHierarchyAndCycleProtection();
     testActiveCameraAndOrbitInput();
+    testPointLightCollectionUsesWorldTransformsAndFiltersInvalidLights();
     testKeyframedAnimationInterpolationAndLooping();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {

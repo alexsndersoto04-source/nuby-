@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -77,6 +78,20 @@ struct AnimationComponent {
     Vector3Track scale;
 };
 
+struct PointLightComponent {
+    bool enabled = false;
+    std::array<float, 3> color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float range = 5.0f;
+};
+
+struct PointLightData {
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float range = 5.0f;
+};
+
 struct CameraComponent {
     bool enabled = false;
     float verticalFovRadians = 0.76f;
@@ -110,6 +125,7 @@ struct Entity {
     OrbitComponent orbit;
     PulseComponent pulse;
     AnimationComponent animation;
+    PointLightComponent pointLight;
     CameraComponent camera;
     OrbitCameraController orbitCamera;
     bool visible = true;
@@ -128,6 +144,7 @@ public:
     const Entity* activeCamera() const;
     bool orbitActiveCamera(float deltaX, float deltaY);
     bool zoomActiveCamera(float distanceFactor);
+    void collectPointLights(std::size_t maximum, std::vector<PointLightData>& output) const;
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();

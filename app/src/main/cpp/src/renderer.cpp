@@ -149,6 +149,9 @@ uniform vec3 uLightDirection;
 uniform sampler2D uShadowMap;
 uniform int uShadowsEnabled;
 uniform int uGrid;
+uniform int uPointLightCount;
+uniform vec4 uPointLightPositionRange[4];
+uniform vec4 uPointLightColorIntensity[4];
 out vec4 fragmentColor;
 
 float shadowAmount(vec3 normal, vec3 lightDirection) {
@@ -190,6 +193,27 @@ vec3 fresnelSchlick(float viewHalf, vec3 baseReflectance) {
     return baseReflectance + (1.0 - baseReflectance) * pow(1.0 - viewHalf, 5.0);
 }
 
+vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
+                         vec3 baseColor, float metallic, float roughness, vec3 radiance) {
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    if (normalLight <= 0.0) return vec3(0.0);
+
+    vec3 halfDirection = normalize(lightDirection + viewDirection);
+    float normalView = max(dot(normal, viewDirection), 0.001);
+    float normalHalf = max(dot(normal, halfDirection), 0.0);
+    float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
+    vec3 baseReflectance = mix(vec3(0.04), baseColor, metallic);
+    vec3 fresnel = fresnelSchlick(viewHalf, baseReflectance);
+    float distribution = distributionGGX(normalHalf, roughness);
+    float geometryTerm = geometrySchlickGGX(normalView, roughness)
+                       * geometrySchlickGGX(max(normalLight, 0.001), roughness);
+    vec3 specular = (distribution * geometryTerm * fresnel)
+                  / max(4.0 * normalView * max(normalLight, 0.001), 0.001);
+    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
+    return (diffuseWeight * baseColor / 3.14159265 + specular)
+            * radiance * normalLight;
+}
+
 void main() {
     vec3 normal = normalize(vWorldNormal);
     vec3 lightDirection = normalize(-uLightDirection);
@@ -211,25 +235,27 @@ void main() {
     }
 
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
-    vec3 halfDirection = normalize(lightDirection + viewDirection);
-    float normalLight = max(dot(normal, lightDirection), 0.0);
-    float normalView = max(dot(normal, viewDirection), 0.001);
-    float normalHalf = max(dot(normal, halfDirection), 0.0);
-    float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
     float roughness = clamp(uRoughness, 0.06, 1.0);
     float metallic = clamp(uMetallic, 0.0, 1.0);
+    vec3 directLight = evaluateDirectLight(normal, viewDirection, lightDirection,
+            uColor, metallic, roughness, vec3(2.3, 2.15, 1.88)) * visibility;
 
-    vec3 baseReflectance = mix(vec3(0.04), uColor, metallic);
-    vec3 fresnel = fresnelSchlick(viewHalf, baseReflectance);
-    float distribution = distributionGGX(normalHalf, roughness);
-    float geometryTerm = geometrySchlickGGX(normalView, roughness)
-                       * geometrySchlickGGX(max(normalLight, 0.001), roughness);
-    vec3 specular = (distribution * geometryTerm * fresnel)
-                  / max(4.0 * normalView * max(normalLight, 0.001), 0.001);
-    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
-    vec3 radiance = vec3(2.3, 2.15, 1.88);
-    vec3 directLight = (diffuseWeight * uColor / 3.14159265 + specular)
-                     * radiance * normalLight * visibility;
+    for (int index = 0; index < 4; ++index) {
+        if (index >= uPointLightCount) break;
+        vec4 positionRange = uPointLightPositionRange[index];
+        vec3 toLight = positionRange.xyz - vWorldPosition;
+        float distanceSquared = max(dot(toLight, toLight), 0.04);
+        float distanceToLight = sqrt(distanceSquared);
+        float rangeFraction = distanceToLight / max(positionRange.w, 0.01);
+        float rangeFade = clamp(1.0 - rangeFraction * rangeFraction
+                                      * rangeFraction * rangeFraction, 0.0, 1.0);
+        float attenuation = rangeFade * rangeFade / distanceSquared;
+        vec4 colorIntensity = uPointLightColorIntensity[index];
+        vec3 pointRadiance = colorIntensity.rgb * colorIntensity.a * attenuation;
+        directLight += evaluateDirectLight(normal, viewDirection,
+                toLight / max(distanceToLight, 0.001), uColor, metallic, roughness,
+                pointRadiance);
+    }
 
     float skyAmount = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 ambientLight = mix(vec3(0.075, 0.085, 0.14),
@@ -618,6 +644,26 @@ void Renderer::buildScene() {
         satellite.material.roughness = 0.29f;
     }
 
+    Entity& cyanLight = scene_.create("Aether Point Light", Primitive::None);
+    cyanLight.visible = false;
+    cyanLight.pointLight.enabled = true;
+    cyanLight.pointLight.color = {0.10f, 0.62f, 1.0f};
+    cyanLight.pointLight.intensity = 6.5f;
+    cyanLight.pointLight.range = 5.0f;
+    cyanLight.orbit.enabled = true;
+    cyanLight.orbit.radius = 1.55f;
+    cyanLight.orbit.angularSpeed = 0.34f;
+    cyanLight.orbit.verticalAmplitude = 0.62f;
+    cyanLight.orbit.verticalFrequency = 0.72f;
+
+    Entity& emberLight = scene_.create("Ember Point Light", Primitive::None);
+    emberLight.visible = false;
+    emberLight.transform.position = {-1.35f, 0.48f, -0.82f};
+    emberLight.pointLight.enabled = true;
+    emberLight.pointLight.color = {1.0f, 0.23f, 0.075f};
+    emberLight.pointLight.intensity = 4.5f;
+    emberLight.pointLight.range = 4.2f;
+
     loadSceneAssets();
 }
 
@@ -913,6 +959,9 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.shadowMap = glGetUniformLocation(program_, "uShadowMap");
     uniforms_.shadowsEnabled = glGetUniformLocation(program_, "uShadowsEnabled");
     uniforms_.grid = glGetUniformLocation(program_, "uGrid");
+    uniforms_.pointLightCount = glGetUniformLocation(program_, "uPointLightCount");
+    uniforms_.pointLightPositionRange = glGetUniformLocation(program_, "uPointLightPositionRange[0]");
+    uniforms_.pointLightColorIntensity = glGetUniformLocation(program_, "uPointLightColorIntensity[0]");
 
     buildScene();
     initializeShadowMap();
@@ -950,6 +999,11 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.shadowMap, 0);
     glUniform1i(uniforms_.shadowsEnabled, shadowsAvailable_ ? 1 : 0);
     glUniform1i(uniforms_.grid, material.proceduralGrid ? 1 : 0);
+    glUniform1i(uniforms_.pointLightCount, static_cast<GLint>(pointLights_.size()));
+    glUniform4fv(uniforms_.pointLightPositionRange, kMaxPointLights,
+                 pointLightPositionRanges_.data());
+    glUniform4fv(uniforms_.pointLightColorIntensity, kMaxPointLights,
+                 pointLightColorIntensities_.data());
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
 
@@ -966,6 +1020,21 @@ void Renderer::render(float deltaSeconds) {
 
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
     scene_.update(dt);
+    scene_.collectPointLights(kMaxPointLights, pointLights_);
+    pointLightPositionRanges_.fill(0.0f);
+    pointLightColorIntensities_.fill(0.0f);
+    for (std::size_t index = 0; index < pointLights_.size(); ++index) {
+        const PointLightData& light = pointLights_[index];
+        const std::size_t offset = index * 4;
+        pointLightPositionRanges_[offset] = light.position[0];
+        pointLightPositionRanges_[offset + 1] = light.position[1];
+        pointLightPositionRanges_[offset + 2] = light.position[2];
+        pointLightPositionRanges_[offset + 3] = light.range;
+        pointLightColorIntensities_[offset] = light.color[0];
+        pointLightColorIntensities_[offset + 1] = light.color[1];
+        pointLightColorIntensities_[offset + 2] = light.color[2];
+        pointLightColorIntensities_[offset + 3] = light.intensity;
+    }
 
     const Vec3 lightPosition{4.5f, 8.2f, 3.4f};
     const Mat4 lightView = lookAt(lightPosition, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});

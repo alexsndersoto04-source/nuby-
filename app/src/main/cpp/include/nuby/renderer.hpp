@@ -59,6 +59,9 @@ private:
         GLint shadowMap = -1;
         GLint shadowsEnabled = -1;
         GLint grid = -1;
+        GLint pointLightCount = -1;
+        GLint pointLightPositionRange = -1;
+        GLint pointLightColorIntensity = -1;
     };
 
     GLuint compileShader(GLenum type, const char* source);
@@ -107,7 +110,11 @@ private:
     GLint shadowProgramLightViewProjection_ = -1;
     GLint shadowProgramModel_ = -1;
     static constexpr int kShadowMapSize = 512;
+    static constexpr int kMaxPointLights = 4;
     Uniforms uniforms_{};
+    std::vector<PointLightData> pointLights_;
+    std::array<float, kMaxPointLights * 4> pointLightPositionRanges_{};
+    std::array<float, kMaxPointLights * 4> pointLightColorIntensities_{};
     Mesh sphere_{};
     Mesh torus_{};
     Mesh ground_{};
