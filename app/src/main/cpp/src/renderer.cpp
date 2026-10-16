@@ -547,6 +547,10 @@ Renderer::Mesh Renderer::makeGround() {
 
 void Renderer::buildScene() {
     scene_.clear();
+    scene_.physicsSettings().floorEnabled = true;
+    scene_.physicsSettings().floorHeight = -1.22f;
+    scene_.physicsSettings().floorRestitution = 0.38f;
+    scene_.physicsSettings().floorFriction = 0.48f;
     sphere_ = makeSphere(28, 40);
     torus_ = makeTorus(64, 14, 1.0f, 0.025f);
     ground_ = makeGround();
@@ -593,6 +597,21 @@ void Renderer::buildScene() {
     contactHalo.material.emission = {0.015f, 0.09f, 0.12f};
     contactHalo.material.metallic = 0.35f;
     contactHalo.material.roughness = 0.38f;
+
+    Entity& physicsOrb = scene_.create("Physics Sample", Primitive::Sphere);
+    physicsOrb.transform.position = {-1.65f, 0.48f, -0.18f};
+    physicsOrb.transform.scale = {0.19f, 0.19f, 0.19f};
+    physicsOrb.rigidbody.enabled = true;
+    physicsOrb.rigidbody.mass = 0.8f;
+    physicsOrb.rigidbody.linearDamping = 0.06f;
+    physicsOrb.sphereCollider.enabled = true;
+    physicsOrb.sphereCollider.radius = 1.0f;
+    physicsOrb.sphereCollider.restitution = 0.52f;
+    physicsOrb.sphereCollider.friction = 0.42f;
+    physicsOrb.material.color = {0.96f, 0.55f, 0.20f};
+    physicsOrb.material.emission = {0.32f, 0.09f, 0.018f};
+    physicsOrb.material.metallic = 0.26f;
+    physicsOrb.material.roughness = 0.24f;
 
     Entity& core = scene_.create("Aether Core", Primitive::Sphere);
     core.transform.scale = {0.70f, 0.70f, 0.70f};

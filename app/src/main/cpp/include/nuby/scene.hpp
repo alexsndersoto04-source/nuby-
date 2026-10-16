@@ -78,6 +78,32 @@ struct AnimationComponent {
     Vector3Track scale;
 };
 
+struct RigidbodyComponent {
+    bool enabled = false;
+    float mass = 1.0f;
+    std::array<float, 3> velocity{0.0f, 0.0f, 0.0f};
+    float linearDamping = 0.02f;
+    float gravityScale = 1.0f;
+};
+
+struct SphereColliderComponent {
+    bool enabled = false;
+    float radius = 0.5f;
+    float restitution = 0.2f;
+    float friction = 0.35f;
+    bool trigger = false;
+};
+
+struct PhysicsSettings {
+    std::array<float, 3> gravity{0.0f, -9.81f, 0.0f};
+    float fixedTimeStep = 1.0f / 60.0f;
+    unsigned int maximumSubsteps = 4;
+    bool floorEnabled = false;
+    float floorHeight = 0.0f;
+    float floorRestitution = 0.2f;
+    float floorFriction = 0.35f;
+};
+
 struct PointLightComponent {
     bool enabled = false;
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
@@ -125,6 +151,8 @@ struct Entity {
     OrbitComponent orbit;
     PulseComponent pulse;
     AnimationComponent animation;
+    RigidbodyComponent rigidbody;
+    SphereColliderComponent sphereCollider;
     PointLightComponent pointLight;
     CameraComponent camera;
     OrbitCameraController orbitCamera;
@@ -153,14 +181,19 @@ public:
     const std::vector<Entity>& entities() const { return entities_; }
     std::vector<Entity>& entities() { return entities_; }
     float elapsedSeconds() const { return elapsedSeconds_; }
+    PhysicsSettings& physicsSettings() { return physicsSettings_; }
+    const PhysicsSettings& physicsSettings() const { return physicsSettings_; }
 
 private:
+    void simulatePhysics(float deltaSeconds);
     friend class SceneSerializer;
 
     std::vector<Entity> entities_;
     std::uint32_t nextId_ = 1;
     std::uint32_t activeCameraId_ = 0;
     float elapsedSeconds_ = 0.0f;
+    PhysicsSettings physicsSettings_;
+    float physicsAccumulator_ = 0.0f;
 };
 
 }  // namespace nuby

@@ -89,6 +89,11 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.pulse.amplitude) || !finite(entity.pulse.frequency)
             || !finite(entity.pulse.phase) || !finite(entity.animation.playbackRate)
             || !finite(entity.animation.timeSeconds) || !finite(entity.animation.durationSeconds)
+            || !finite(entity.rigidbody.mass) || !finite3(entity.rigidbody.velocity)
+            || !finite(entity.rigidbody.linearDamping) || !finite(entity.rigidbody.gravityScale)
+            || !finite(entity.sphereCollider.radius)
+            || !finite(entity.sphereCollider.restitution)
+            || !finite(entity.sphereCollider.friction)
             || !finite3(entity.pointLight.color) || !finite(entity.pointLight.intensity)
             || !finite(entity.pointLight.range) || !finite(entity.camera.verticalFovRadians)
             || !finite(entity.camera.nearPlane) || !finite(entity.camera.farPlane)
@@ -98,6 +103,13 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.orbitCamera.pitch) || !finite(entity.orbitCamera.minimumPitch)
             || !finite(entity.orbitCamera.maximumPitch) || !finite(entity.orbitCamera.yawPerPixel)
             || !finite(entity.orbitCamera.pitchPerPixel)) {
+        return false;
+    }
+    if ((entity.rigidbody.enabled && entity.rigidbody.mass < 1.0e-6f)
+            || entity.rigidbody.linearDamping < 0.0f
+            || (entity.sphereCollider.enabled && entity.sphereCollider.radius <= 0.0f)
+            || entity.sphereCollider.restitution < 0.0f || entity.sphereCollider.restitution > 1.0f
+            || entity.sphereCollider.friction < 0.0f || entity.sphereCollider.friction > 1.0f) {
         return false;
     }
     return validTrack(entity.animation.position) && validTrack(entity.animation.rotation)
@@ -120,6 +132,17 @@ bool validateScene(const Scene& scene, std::uint32_t activeCameraId,
             return fail(error, "Scene contains invalid entity data or duplicate IDs");
         }
         maximumId = std::max(maximumId, entity.id);
+    }
+    const PhysicsSettings& physics = scene.physicsSettings();
+    if (!std::isfinite(physics.gravity[0]) || !std::isfinite(physics.gravity[1])
+            || !std::isfinite(physics.gravity[2]) || !std::isfinite(physics.fixedTimeStep)
+            || physics.fixedTimeStep <= 0.0f || physics.maximumSubsteps == 0
+            || physics.maximumSubsteps > 16 || !std::isfinite(physics.floorHeight)
+            || !std::isfinite(physics.floorRestitution)
+            || physics.floorRestitution < 0.0f || physics.floorRestitution > 1.0f
+            || !std::isfinite(physics.floorFriction) || physics.floorFriction < 0.0f
+            || physics.floorFriction > 1.0f) {
+        return fail(error, "Scene physics settings are invalid");
     }
     if (nextEntityId <= maximumId) {
         return fail(error, "Next entity ID would be reused");
@@ -246,11 +269,21 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << ' ' << entity.orbitCamera.minimumPitch << ' ' << entity.orbitCamera.maximumPitch
            << ' ' << entity.orbitCamera.yawPerPixel << ' ' << entity.orbitCamera.pitchPerPixel
            << '\n';
+    output << "RIGIDBODY " << (entity.rigidbody.enabled ? 1 : 0) << ' '
+           << entity.rigidbody.mass;
+    writeFloatArray(output, entity.rigidbody.velocity);
+    output << ' ' << entity.rigidbody.linearDamping << ' ' << entity.rigidbody.gravityScale << '\n';
+
+    output << "SPHERE_COLLIDER " << (entity.sphereCollider.enabled ? 1 : 0) << ' '
+           << entity.sphereCollider.radius << ' ' << entity.sphereCollider.restitution << ' '
+           << entity.sphereCollider.friction << ' '
+           << (entity.sphereCollider.trigger ? 1 : 0) << '\n';
+
     output << "END_ENTITY\n";
 }
 
 bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
-                std::size_t& totalKeyframes, std::string& error) {
+                std::size_t& totalKeyframes, unsigned int version, std::string& error) {
     if (!readTag(input, "ENTITY", error)) return false;
     std::uint32_t id = 0;
     std::uint32_t parentId = 0;
@@ -377,10 +410,33 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
             || !std::isfinite(entity.orbitCamera.minimumPitch)
             || !std::isfinite(entity.orbitCamera.maximumPitch)
             || !std::isfinite(entity.orbitCamera.yawPerPixel)
-            || !std::isfinite(entity.orbitCamera.pitchPerPixel)
-            || !readTag(input, "END_ENTITY", error)) {
+            || !std::isfinite(entity.orbitCamera.pitchPerPixel)) {
         return fail(error, "Entity orbit camera component is invalid");
     }
+
+    if (version >= 2) {
+        if (!readTag(input, "RIGIDBODY", error)
+                || !readBool(input, entity.rigidbody.enabled)
+                || !(input >> entity.rigidbody.mass)
+                || !readFloatArray(input, entity.rigidbody.velocity)
+                || !(input >> entity.rigidbody.linearDamping >> entity.rigidbody.gravityScale)
+                || !std::isfinite(entity.rigidbody.mass)
+                || !std::isfinite(entity.rigidbody.linearDamping)
+                || !std::isfinite(entity.rigidbody.gravityScale)) {
+            return fail(error, "Entity rigidbody component is invalid");
+        }
+        if (!readTag(input, "SPHERE_COLLIDER", error)
+                || !readBool(input, entity.sphereCollider.enabled)
+                || !(input >> entity.sphereCollider.radius >> entity.sphereCollider.restitution
+                            >> entity.sphereCollider.friction)
+                || !readBool(input, entity.sphereCollider.trigger)
+                || !std::isfinite(entity.sphereCollider.radius)
+                || !std::isfinite(entity.sphereCollider.restitution)
+                || !std::isfinite(entity.sphereCollider.friction)) {
+            return fail(error, "Entity sphere collider component is invalid");
+        }
+    }
+    if (!readTag(input, "END_ENTITY", error)) return false;
     return true;
 }
 }  // namespace
@@ -392,6 +448,12 @@ bool SceneSerializer::save(const Scene& scene, std::ostream& output, std::string
     output << "NUBY_SCENE " << kCurrentVersion << '\n';
     output << "SCENE " << scene.elapsedSeconds_ << ' ' << scene.activeCameraId_ << ' '
            << scene.nextId_ << ' ' << scene.entities_.size() << '\n';
+    const PhysicsSettings& physics = scene.physicsSettings_;
+    output << "PHYSICS";
+    writeFloatArray(output, physics.gravity);
+    output << ' ' << physics.fixedTimeStep << ' ' << physics.maximumSubsteps << ' '
+           << (physics.floorEnabled ? 1 : 0) << ' ' << physics.floorHeight << ' '
+           << physics.floorRestitution << ' ' << physics.floorFriction << '\n';
     for (const Entity& entity : scene.entities_) writeEntity(output, entity);
     output << "END_SCENE\n";
     if (!output) return fail(error, "Could not write complete scene data");
@@ -403,7 +465,7 @@ bool SceneSerializer::load(Scene& scene, std::istream& input, std::string& error
     input.imbue(std::locale::classic());
     if (!readTag(input, "NUBY_SCENE", error)) return false;
     unsigned int version = 0;
-    if (!(input >> version) || version != kCurrentVersion) {
+    if (!(input >> version) || version < 1 || version > kCurrentVersion) {
         return fail(error, "Unsupported scene file version");
     }
 
@@ -420,10 +482,27 @@ bool SceneSerializer::load(Scene& scene, std::istream& input, std::string& error
     }
 
     Scene candidate;
+    if (version >= 2) {
+        PhysicsSettings& physics = candidate.physicsSettings_;
+        if (!readTag(input, "PHYSICS", error)
+                || !readFloatArray(input, physics.gravity)
+                || !(input >> physics.fixedTimeStep >> physics.maximumSubsteps)
+                || !readBool(input, physics.floorEnabled)
+                || !(input >> physics.floorHeight >> physics.floorRestitution >> physics.floorFriction)
+                || !std::isfinite(physics.fixedTimeStep) || physics.fixedTimeStep <= 0.0f
+                || physics.maximumSubsteps == 0 || physics.maximumSubsteps > 16
+                || !std::isfinite(physics.floorHeight)
+                || !std::isfinite(physics.floorRestitution)
+                || physics.floorRestitution < 0.0f || physics.floorRestitution > 1.0f
+                || !std::isfinite(physics.floorFriction) || physics.floorFriction < 0.0f
+                || physics.floorFriction > 1.0f) {
+            return fail(error, "Scene physics settings are invalid");
+        }
+    }
     std::uint32_t maximumId = 0;
     std::size_t totalKeyframes = 0;
     for (std::size_t index = 0; index < entityCount; ++index) {
-        if (!readEntity(input, candidate, maximumId, totalKeyframes, error)) return false;
+        if (!readEntity(input, candidate, maximumId, totalKeyframes, version, error)) return false;
     }
     if (!readTag(input, "END_SCENE", error)) return false;
     std::string trailingData;

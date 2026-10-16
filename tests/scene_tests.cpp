@@ -236,6 +236,79 @@ void testKeyframedAnimationInterpolationAndLooping() {
            "one-shot animation holds its final pose");
 }
 
+void testPhysicsFixedStepGravityAndFloorContact() {
+    nuby::Scene scene;
+    nuby::PhysicsSettings& settings = scene.physicsSettings();
+    settings.floorEnabled = true;
+    settings.floorHeight = 0.0f;
+    settings.floorRestitution = 0.0f;
+    settings.floorFriction = 0.0f;
+    nuby::Entity& ball = scene.create("falling ball", nuby::Primitive::Sphere);
+    ball.transform.position[1] = 2.0f;
+    ball.rigidbody.enabled = true;
+    ball.rigidbody.linearDamping = 0.0f;
+    ball.sphereCollider.enabled = true;
+    ball.sphereCollider.radius = 0.5f;
+    ball.sphereCollider.restitution = 0.0f;
+
+    for (int frame = 0; frame < 180; ++frame) scene.update(1.0f / 60.0f);
+    expect(near(ball.transform.position[1], 0.5f, 0.002f),
+           "sphere collider rests on the configured world floor");
+    expect(near(ball.rigidbody.velocity[1], 0.0f, 0.002f),
+           "zero-restitution floor contact removes downward velocity");
+}
+
+void testPhysicsSphereImpulseAndHierarchySafety() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t leftId = scene.create("left", nuby::Primitive::Sphere).id;
+    const std::uint32_t rightId = scene.create("right", nuby::Primitive::Sphere).id;
+    nuby::Entity* left = scene.find(leftId);
+    nuby::Entity* right = scene.find(rightId);
+    left->transform.position[0] = -0.6f;
+    left->rigidbody.enabled = true;
+    left->rigidbody.linearDamping = 0.0f;
+    left->rigidbody.velocity[0] = 1.0f;
+    left->sphereCollider.enabled = true;
+    left->sphereCollider.restitution = 1.0f;
+    right->transform.position[0] = 0.6f;
+    right->rigidbody.enabled = true;
+    right->rigidbody.linearDamping = 0.0f;
+    right->rigidbody.velocity[0] = -1.0f;
+    right->sphereCollider.enabled = true;
+    right->sphereCollider.restitution = 1.0f;
+
+    for (int frame = 0; frame < 12; ++frame) scene.update(1.0f / 60.0f);
+    expect(left->rigidbody.velocity[0] < -0.9f && right->rigidbody.velocity[0] > 0.9f,
+           "equal-mass elastic sphere collision exchanges normal velocities");
+    expect(right->transform.position[0] - left->transform.position[0] >= 0.998f,
+           "sphere collision positional correction prevents deep interpenetration");
+
+    nuby::Entity& parent = scene.create("parent", nuby::Primitive::None);
+    nuby::Entity& child = scene.create("child body", nuby::Primitive::Sphere);
+    child.transform.position[1] = 3.0f;
+    child.rigidbody.enabled = true;
+    child.rigidbody.linearDamping = 0.0f;
+    const float initialY = child.transform.position[1];
+    scene.setParent(child.id, parent.id);
+    for (int frame = 0; frame < 60; ++frame) scene.update(1.0f / 60.0f);
+    expect(near(child.transform.position[1], initialY),
+           "physics safely leaves parented rigidbodies under transform animation control");
+}
+
+void testPhysicsSubstepCapKeepsSimulationBounded() {
+    nuby::Scene scene;
+    scene.physicsSettings().maximumSubsteps = 2;
+    nuby::Entity& body = scene.create("bounded", nuby::Primitive::None);
+    body.rigidbody.enabled = true;
+    body.rigidbody.linearDamping = 0.0f;
+    scene.update(0.05f);
+    const float afterCappedUpdate = body.transform.position[1];
+    scene.update(0.0f);
+    expect(near(body.transform.position[1], afterCappedUpdate),
+           "excess accumulated time is discarded after the configured physics substep cap");
+}
+
 void testPulseDoesNotAccumulateScaleError() {
     nuby::Scene scene;
     nuby::Entity& pulsing = scene.create("pulsing", nuby::Primitive::Sphere);
@@ -262,6 +335,9 @@ int main() {
     testActiveCameraAndOrbitInput();
     testPointLightCollectionUsesWorldTransformsAndFiltersInvalidLights();
     testKeyframedAnimationInterpolationAndLooping();
+    testPhysicsFixedStepGravityAndFloorContact();
+    testPhysicsSphereImpulseAndHierarchySafety();
+    testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {
         std::cerr << failures << " scene test(s) failed\n";

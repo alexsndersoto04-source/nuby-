@@ -31,6 +31,16 @@ nuby::Scene makeScene() {
     root.material.metallic = 0.4f;
     root.material.roughness = 0.3f;
     root.material.ambientOcclusion = 0.8f;
+    root.rigidbody.enabled = true;
+    root.rigidbody.mass = 2.5f;
+    root.rigidbody.velocity = {1.0f, -2.0f, 0.5f};
+    root.rigidbody.linearDamping = 0.08f;
+    root.rigidbody.gravityScale = 0.0f;
+    root.sphereCollider.enabled = true;
+    root.sphereCollider.radius = 0.65f;
+    root.sphereCollider.restitution = 0.6f;
+    root.sphereCollider.friction = 0.25f;
+    root.sphereCollider.trigger = true;
 
     nuby::Entity& mesh = scene.create("mesh", nuby::Primitive::ImportedMesh);
     const std::uint32_t meshId = mesh.id;
@@ -91,6 +101,14 @@ nuby::Scene makeScene() {
 
     nuby::Entity& removed = scene.create("removed", nuby::Primitive::Sphere);
     expect(scene.destroyEntity(removed.id), "sample entity is removed to create an ID gap");
+    nuby::PhysicsSettings& physics = scene.physicsSettings();
+    physics.gravity = {0.0f, -12.0f, 0.0f};
+    physics.fixedTimeStep = 1.0f / 120.0f;
+    physics.maximumSubsteps = 8;
+    physics.floorEnabled = true;
+    physics.floorHeight = -1.5f;
+    physics.floorRestitution = 0.45f;
+    physics.floorFriction = 0.2f;
     scene.update(0.025f);
     return scene;
 }
@@ -110,12 +128,23 @@ void testRoundTripAllSceneData() {
     expect(loaded.elapsedSeconds() == original.elapsedSeconds(), "round-trip preserves scene time");
     expect(loaded.activeCamera() != nullptr && loaded.activeCamera()->id == 3,
            "round-trip preserves the active camera ID");
+    expect(near(loaded.physicsSettings().gravity[1], -12.0f)
+                   && near(loaded.physicsSettings().fixedTimeStep, 1.0f / 120.0f)
+                   && loaded.physicsSettings().maximumSubsteps == 8
+                   && loaded.physicsSettings().floorEnabled
+                   && near(loaded.physicsSettings().floorHeight, -1.5f),
+           "round-trip preserves world physics settings");
 
     const nuby::Entity* root = loaded.find(1);
     const nuby::Entity* mesh = loaded.find(2);
     const nuby::Entity* camera = loaded.find(3);
     expect(root != nullptr && root->name == "root \"quoted\" \\ node",
            "quoted entity names are escaped and restored");
+    expect(root != nullptr && root->rigidbody.enabled && near(root->rigidbody.mass, 2.5f)
+                   && near(root->rigidbody.velocity[1], -2.0f, 0.005f)
+                   && root->sphereCollider.enabled && root->sphereCollider.trigger
+                   && near(root->sphereCollider.radius, 0.65f),
+           "rigidbody and sphere collider components are restored");
     expect(mesh != nullptr && mesh->parentId == 1
                    && mesh->meshAsset == "meshes/shard \"A\".obj",
            "mesh path and parent link are restored");
@@ -176,6 +205,18 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "truncated scene is rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "truncated file leaves target scene unchanged");
+
+    std::stringstream legacyV1("NUBY_SCENE 1\nSCENE 2.5 0 1 0\nEND_SCENE\n");
+    expect(nuby::SceneSerializer::load(target, legacyV1, error),
+           "version-one scenes remain readable after the physics schema upgrade");
+    expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
+           "legacy scene loads receive safe default physics settings");
+
+    nuby::Scene invalidPhysics;
+    invalidPhysics.physicsSettings().fixedTimeStep = 0.0f;
+    std::stringstream invalidPhysicsOutput;
+    expect(!nuby::SceneSerializer::save(invalidPhysics, invalidPhysicsOutput, error),
+           "scene serialization rejects invalid physics settings");
 }
 }  // namespace
 

@@ -308,6 +308,226 @@ void Scene::clear() {
     nextId_ = 1;
     activeCameraId_ = 0;
     elapsedSeconds_ = 0.0f;
+    physicsSettings_ = PhysicsSettings{};
+    physicsAccumulator_ = 0.0f;
+}
+
+void Scene::simulatePhysics(float deltaSeconds) {
+    const float step = physicsSettings_.fixedTimeStep;
+    if (!std::isfinite(step) || step <= 0.0f || physicsSettings_.maximumSubsteps == 0) {
+        physicsAccumulator_ = 0.0f;
+        return;
+    }
+    if (!std::isfinite(physicsSettings_.gravity[0])
+            || !std::isfinite(physicsSettings_.gravity[1])
+            || !std::isfinite(physicsSettings_.gravity[2])) {
+        physicsAccumulator_ = 0.0f;
+        return;
+    }
+    physicsAccumulator_ += deltaSeconds;
+    const unsigned int maximumSubsteps = std::min(physicsSettings_.maximumSubsteps, 16U);
+    std::vector<std::size_t> colliderIndices;
+    colliderIndices.reserve(entities_.size());
+
+    for (unsigned int substep = 0; substep < maximumSubsteps
+            && physicsAccumulator_ >= step; ++substep) {
+        const float dt = step;
+        for (Entity& entity : entities_) {
+            RigidbodyComponent& body = entity.rigidbody;
+            if (!body.enabled || entity.parentId != 0 || !std::isfinite(body.mass)
+                    || body.mass < 1.0e-6f || !std::isfinite(body.linearDamping)
+                    || !std::isfinite(body.gravityScale)
+                    || !std::isfinite(entity.transform.position[0])
+                    || !std::isfinite(entity.transform.position[1])
+                    || !std::isfinite(entity.transform.position[2])) {
+                continue;
+            }
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                if (!std::isfinite(body.velocity[axis])) body.velocity[axis] = 0.0f;
+                body.velocity[axis] += physicsSettings_.gravity[axis] * body.gravityScale * dt;
+            }
+            const float damping = std::max(body.linearDamping, 0.0f);
+            const float dampingFactor = std::exp(-damping * dt);
+            for (float& velocity : body.velocity) velocity *= dampingFactor;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                entity.transform.position[axis] += body.velocity[axis] * dt;
+            }
+        }
+
+        if (physicsSettings_.floorEnabled && std::isfinite(physicsSettings_.floorHeight)
+                && std::isfinite(physicsSettings_.floorRestitution)
+                && std::isfinite(physicsSettings_.floorFriction)) {
+            for (Entity& entity : entities_) {
+                RigidbodyComponent& body = entity.rigidbody;
+                const SphereColliderComponent& collider = entity.sphereCollider;
+                if (!body.enabled || !std::isfinite(body.mass) || body.mass < 1.0e-6f
+                        || entity.parentId != 0 || !collider.enabled || !std::isfinite(collider.radius)
+                        || collider.radius <= 0.0f || !std::isfinite(collider.restitution)
+                        || !std::isfinite(collider.friction)
+                        || !std::isfinite(entity.transform.scale[0])
+                        || !std::isfinite(entity.transform.scale[1])
+                        || !std::isfinite(entity.transform.scale[2])) {
+                    continue;
+                }
+                const float scale = std::max({std::fabs(entity.transform.scale[0]),
+                        std::fabs(entity.transform.scale[1]),
+                        std::fabs(entity.transform.scale[2])});
+                const float radius = collider.radius * scale;
+                const float penetration = physicsSettings_.floorHeight + radius
+                        - entity.transform.position[1];
+                if (penetration <= 0.0f || !std::isfinite(penetration)) continue;
+                entity.transform.position[1] += penetration;
+                const float restitution = std::clamp(std::min(collider.restitution,
+                        physicsSettings_.floorRestitution), 0.0f, 1.0f);
+                if (body.velocity[1] < 0.0f) body.velocity[1] = -body.velocity[1] * restitution;
+                const float friction = std::max(0.0f, std::min(collider.friction,
+                        physicsSettings_.floorFriction));
+                const float frictionFactor = std::max(0.0f, 1.0f - friction * dt * 9.81f);
+                body.velocity[0] *= frictionFactor;
+                body.velocity[2] *= frictionFactor;
+            }
+        }
+
+        colliderIndices.clear();
+        for (std::size_t index = 0; index < entities_.size(); ++index) {
+            const Entity& entity = entities_[index];
+            const SphereColliderComponent& collider = entity.sphereCollider;
+            if (!collider.enabled || entity.parentId != 0
+                    || !std::isfinite(collider.radius) || collider.radius <= 0.0f
+                    || !std::isfinite(collider.restitution)
+                    || !std::isfinite(entity.transform.scale[0])
+                    || !std::isfinite(entity.transform.scale[1])
+                    || !std::isfinite(entity.transform.scale[2])
+                    || !std::isfinite(entity.transform.position[0])
+                    || !std::isfinite(entity.transform.position[1])
+                    || !std::isfinite(entity.transform.position[2])) continue;
+            const float scale = std::max({std::fabs(entity.transform.scale[0]),
+                    std::fabs(entity.transform.scale[1]), std::fabs(entity.transform.scale[2])});
+            if (std::isfinite(collider.radius * scale) && collider.radius * scale > 0.0f) {
+                colliderIndices.push_back(index);
+            }
+        }
+
+        std::sort(colliderIndices.begin(), colliderIndices.end(), [this](std::size_t left,
+                                                                         std::size_t right) {
+            const Entity& a = entities_[left];
+            const Entity& b = entities_[right];
+            const float aScale = std::max({std::fabs(a.transform.scale[0]),
+                    std::fabs(a.transform.scale[1]), std::fabs(a.transform.scale[2])});
+            const float bScale = std::max({std::fabs(b.transform.scale[0]),
+                    std::fabs(b.transform.scale[1]), std::fabs(b.transform.scale[2])});
+            return a.transform.position[0] - a.sphereCollider.radius * aScale
+                    < b.transform.position[0] - b.sphereCollider.radius * bScale;
+        });
+
+        for (std::size_t firstColliderIndex = 0;
+                firstColliderIndex < colliderIndices.size(); ++firstColliderIndex) {
+            Entity& first = entities_[colliderIndices[firstColliderIndex]];
+            const SphereColliderComponent& firstCollider = first.sphereCollider;
+            if (firstCollider.trigger) continue;
+            const float firstScale = std::max({std::fabs(first.transform.scale[0]),
+                    std::fabs(first.transform.scale[1]), std::fabs(first.transform.scale[2])});
+            const float firstRadius = firstCollider.radius * firstScale;
+            for (std::size_t secondColliderIndex = firstColliderIndex + 1;
+                    secondColliderIndex < colliderIndices.size(); ++secondColliderIndex) {
+                Entity& second = entities_[colliderIndices[secondColliderIndex]];
+                const SphereColliderComponent& secondCollider = second.sphereCollider;
+                if (secondCollider.trigger) continue;
+                const float secondScale = std::max({std::fabs(second.transform.scale[0]),
+                        std::fabs(second.transform.scale[1]), std::fabs(second.transform.scale[2])});
+                const float secondRadius = secondCollider.radius * secondScale;
+                if (second.transform.position[0] - secondRadius
+                        > first.transform.position[0] + firstRadius) break;
+                float dx = second.transform.position[0] - first.transform.position[0];
+                float dy = second.transform.position[1] - first.transform.position[1];
+                float dz = second.transform.position[2] - first.transform.position[2];
+                const float distanceSquared = dx * dx + dy * dy + dz * dz;
+                const float combinedRadius = firstRadius + secondRadius;
+                if (!std::isfinite(distanceSquared) || distanceSquared >= combinedRadius * combinedRadius) continue;
+                const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
+                if (distance > 1.0e-6f) {
+                    dx /= distance;
+                    dy /= distance;
+                    dz /= distance;
+                } else {
+                    dx = 1.0f;
+                    dy = 0.0f;
+                    dz = 0.0f;
+                }
+                RigidbodyComponent& firstBody = first.rigidbody;
+                RigidbodyComponent& secondBody = second.rigidbody;
+                const float firstInverseMass = firstBody.enabled && std::isfinite(firstBody.mass)
+                        && firstBody.mass >= 1.0e-6f ? 1.0f / firstBody.mass : 0.0f;
+                const float secondInverseMass = secondBody.enabled && std::isfinite(secondBody.mass)
+                        && secondBody.mass >= 1.0e-6f ? 1.0f / secondBody.mass : 0.0f;
+                const float inverseMassSum = firstInverseMass + secondInverseMass;
+                if (inverseMassSum <= 0.0f) continue;
+                const float penetration = combinedRadius - distance;
+                const float correction = std::max(penetration - 0.001f, 0.0f) * 0.8f
+                        / inverseMassSum;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const float normal = axis == 0 ? dx : axis == 1 ? dy : dz;
+                    first.transform.position[axis] -= normal * correction * firstInverseMass;
+                    second.transform.position[axis] += normal * correction * secondInverseMass;
+                }
+                const float firstVx = firstBody.velocity[0];
+                const float firstVy = firstBody.velocity[1];
+                const float firstVz = firstBody.velocity[2];
+                const float secondVx = secondBody.velocity[0];
+                const float secondVy = secondBody.velocity[1];
+                const float secondVz = secondBody.velocity[2];
+                const float relativeNormalVelocity = (secondVx - firstVx) * dx
+                        + (secondVy - firstVy) * dy + (secondVz - firstVz) * dz;
+                if (relativeNormalVelocity >= 0.0f) continue;
+                const float restitution = std::clamp(std::min(firstCollider.restitution,
+                        secondCollider.restitution), 0.0f, 1.0f);
+                const float impulse = -(1.0f + restitution) * relativeNormalVelocity / inverseMassSum;
+                const float impulseX = impulse * dx;
+                const float impulseY = impulse * dy;
+                const float impulseZ = impulse * dz;
+                if (firstInverseMass > 0.0f) {
+                    firstBody.velocity[0] -= impulseX * firstInverseMass;
+                    firstBody.velocity[1] -= impulseY * firstInverseMass;
+                    firstBody.velocity[2] -= impulseZ * firstInverseMass;
+                }
+                if (secondInverseMass > 0.0f) {
+                    secondBody.velocity[0] += impulseX * secondInverseMass;
+                    secondBody.velocity[1] += impulseY * secondInverseMass;
+                    secondBody.velocity[2] += impulseZ * secondInverseMass;
+                }
+
+                const float relativeX = secondVx - firstVx;
+                const float relativeY = secondVy - firstVy;
+                const float relativeZ = secondVz - firstVz;
+                const float tangentX = relativeX - relativeNormalVelocity * dx;
+                const float tangentY = relativeY - relativeNormalVelocity * dy;
+                const float tangentZ = relativeZ - relativeNormalVelocity * dz;
+                const float tangentSpeed = std::sqrt(tangentX * tangentX + tangentY * tangentY
+                                                     + tangentZ * tangentZ);
+                if (tangentSpeed > 1.0e-6f) {
+                    const float friction = std::sqrt(std::max(0.0f,
+                            firstCollider.friction * secondCollider.friction));
+                    const float tangentImpulse = std::min(tangentSpeed / inverseMassSum,
+                                                           impulse * friction);
+                    const float tx = tangentX / tangentSpeed * tangentImpulse;
+                    const float ty = tangentY / tangentSpeed * tangentImpulse;
+                    const float tz = tangentZ / tangentSpeed * tangentImpulse;
+                    if (firstInverseMass > 0.0f) {
+                        firstBody.velocity[0] += tx * firstInverseMass;
+                        firstBody.velocity[1] += ty * firstInverseMass;
+                        firstBody.velocity[2] += tz * firstInverseMass;
+                    }
+                    if (secondInverseMass > 0.0f) {
+                        secondBody.velocity[0] -= tx * secondInverseMass;
+                        secondBody.velocity[1] -= ty * secondInverseMass;
+                        secondBody.velocity[2] -= tz * secondInverseMass;
+                    }
+                }
+            }
+        }
+        physicsAccumulator_ -= step;
+    }
+    if (physicsAccumulator_ >= step) physicsAccumulator_ = std::fmod(physicsAccumulator_, step);
 }
 
 void Scene::update(float deltaSeconds) {
@@ -353,6 +573,7 @@ void Scene::update(float deltaSeconds) {
             }
         }
     }
+    simulatePhysics(dt);
 }
 
 }  // namespace nuby
