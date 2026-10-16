@@ -112,6 +112,39 @@ bool Scene::setParent(std::uint32_t childId, std::uint32_t parentId) {
     return false;
 }
 
+bool Scene::setActiveCamera(std::uint32_t id) {
+    const Entity* candidate = find(id);
+    if (candidate == nullptr || !candidate->camera.enabled) return false;
+    activeCameraId_ = id;
+    return true;
+}
+
+Entity* Scene::activeCamera() {
+    Entity* candidate = find(activeCameraId_);
+    return candidate != nullptr && candidate->camera.enabled ? candidate : nullptr;
+}
+
+const Entity* Scene::activeCamera() const {
+    const Entity* candidate = find(activeCameraId_);
+    return candidate != nullptr && candidate->camera.enabled ? candidate : nullptr;
+}
+
+bool Scene::orbitActiveCamera(float deltaX, float deltaY) {
+    Entity* camera = activeCamera();
+    if (camera == nullptr || !camera->orbitCamera.enabled
+            || !std::isfinite(deltaX) || !std::isfinite(deltaY)) {
+        return false;
+    }
+
+    OrbitCameraController& controller = camera->orbitCamera;
+    controller.yaw = std::remainder(controller.yaw + deltaX * controller.yawPerPixel, kTau);
+    const float minimumPitch = std::min(controller.minimumPitch, controller.maximumPitch);
+    const float maximumPitch = std::max(controller.minimumPitch, controller.maximumPitch);
+    controller.pitch = std::clamp(controller.pitch + deltaY * controller.pitchPerPixel,
+                                   minimumPitch, maximumPitch);
+    return true;
+}
+
 std::array<float, 16> Scene::worldMatrix(std::uint32_t id) const {
     const Entity* current = find(id);
     if (current == nullptr) return identity();
@@ -128,6 +161,7 @@ std::array<float, 16> Scene::worldMatrix(std::uint32_t id) const {
 void Scene::clear() {
     entities_.clear();
     nextId_ = 1;
+    activeCameraId_ = 0;
     elapsedSeconds_ = 0.0f;
 }
 

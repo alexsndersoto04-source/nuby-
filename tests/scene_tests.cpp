@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 int failures = 0;
@@ -84,6 +85,33 @@ void testTransformHierarchyAndCycleProtection() {
            "detached entity returns to its local transform");
 }
 
+void testActiveCameraAndOrbitInput() {
+    nuby::Scene scene;
+    nuby::Entity& cameraEntity = scene.create("camera", nuby::Primitive::None);
+    const std::uint32_t cameraId = cameraEntity.id;
+    cameraEntity.camera.enabled = true;
+    cameraEntity.orbitCamera.enabled = true;
+    cameraEntity.orbitCamera.minimumPitch = -0.5f;
+    cameraEntity.orbitCamera.maximumPitch = 0.5f;
+
+    nuby::Entity& notACamera = scene.create("ordinary entity", nuby::Primitive::Sphere);
+    expect(!scene.setActiveCamera(notACamera.id), "entities without cameras cannot be activated as cameras");
+    expect(!scene.setActiveCamera(9999), "missing entity cannot become the active camera");
+    expect(scene.setActiveCamera(cameraId), "enabled camera can become active");
+    expect(scene.activeCamera() != nullptr && scene.activeCamera()->id == cameraId,
+           "active camera lookup returns the selected camera");
+
+    expect(scene.orbitActiveCamera(100.0f, 1000.0f), "orbit input updates an active orbit camera");
+    const nuby::Entity* active = scene.activeCamera();
+    expect(near(active->orbitCamera.yaw, 1.05f), "orbit yaw uses configured pixel sensitivity");
+    expect(near(active->orbitCamera.pitch, 0.5f), "orbit pitch is clamped to camera limits");
+    expect(!scene.orbitActiveCamera(std::numeric_limits<float>::infinity(), 1.0f),
+           "non-finite orbit input is rejected");
+
+    scene.clear();
+    expect(scene.activeCamera() == nullptr, "clearing a scene resets its active camera");
+}
+
 void testPulseDoesNotAccumulateScaleError() {
     nuby::Scene scene;
     nuby::Entity& pulsing = scene.create("pulsing", nuby::Primitive::Sphere);
@@ -106,6 +134,7 @@ int main() {
     testDeltaTimeIsClamped();
     testOrbitIsStable();
     testTransformHierarchyAndCycleProtection();
+    testActiveCameraAndOrbitInput();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {
         std::cerr << failures << " scene test(s) failed\n";

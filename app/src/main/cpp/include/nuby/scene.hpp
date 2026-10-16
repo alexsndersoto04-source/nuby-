@@ -11,7 +11,8 @@ enum class Primitive : std::uint8_t {
     Sphere,
     Torus,
     Ground,
-    ImportedMesh
+    ImportedMesh,
+    None
 };
 
 struct Transform {
@@ -51,6 +52,25 @@ struct PulseComponent {
     float phase = 0.0f;
 };
 
+struct CameraComponent {
+    bool enabled = false;
+    float verticalFovRadians = 0.76f;
+    float nearPlane = 0.1f;
+    float farPlane = 80.0f;
+};
+
+struct OrbitCameraController {
+    bool enabled = false;
+    std::array<float, 3> target{0.0f, 0.0f, 0.0f};
+    float distance = 5.4f;
+    float yaw = 0.45f;
+    float pitch = 0.18f;
+    float minimumPitch = -0.62f;
+    float maximumPitch = 0.62f;
+    float yawPerPixel = 0.006f;
+    float pitchPerPixel = 0.004f;
+};
+
 struct Entity {
     std::uint32_t id = 0;
     std::uint32_t parentId = 0;
@@ -62,6 +82,8 @@ struct Entity {
     SpinComponent spin;
     OrbitComponent orbit;
     PulseComponent pulse;
+    CameraComponent camera;
+    OrbitCameraController orbitCamera;
     bool visible = true;
 };
 
@@ -73,6 +95,10 @@ public:
     Entity* find(std::uint32_t id);
     const Entity* find(std::uint32_t id) const;
     bool setParent(std::uint32_t childId, std::uint32_t parentId);
+    bool setActiveCamera(std::uint32_t id);
+    Entity* activeCamera();
+    const Entity* activeCamera() const;
+    bool orbitActiveCamera(float deltaX, float deltaY);
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();
@@ -84,6 +110,7 @@ public:
 private:
     std::vector<Entity> entities_;
     std::uint32_t nextId_ = 1;
+    std::uint32_t activeCameraId_ = 0;
     float elapsedSeconds_ = 0.0f;
 };
 

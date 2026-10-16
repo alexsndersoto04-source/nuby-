@@ -526,6 +526,12 @@ void Renderer::buildScene() {
     ground_ = makeGround();
     importedMeshes_.clear();
 
+    Entity& camera = scene_.create("Main Camera", Primitive::None);
+    camera.visible = false;
+    camera.camera.enabled = true;
+    camera.orbitCamera.enabled = true;
+    scene_.setActiveCamera(camera.id);
+
     Entity& ground = scene_.create("Horizon Grid", Primitive::Ground);
     ground.material.color = {0.02f, 0.04f, 0.08f};
     ground.material.proceduralGrid = true;
@@ -633,6 +639,7 @@ const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
             const auto found = importedMeshes_.find(entity.meshAsset);
             return found == importedMeshes_.end() ? &sphere_ : &found->second;
         }
+        case Primitive::None: return nullptr;
     }
     return nullptr;
 }
@@ -961,14 +968,40 @@ void Renderer::render(float deltaSeconds) {
     lightViewProjection_ = multiply(lightProjection, lightView);
     renderShadowMap(lightViewProjection_);
 
-    const float distance = 5.4f;
-    const float horizontal = std::cos(pitch_) * distance;
-    cameraPosition_ = {std::sin(yaw_) * horizontal,
-                       std::sin(pitch_) * distance + 0.12f,
-                       std::cos(yaw_) * horizontal};
-    const Mat4 view = lookAt(cameraPosition_, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
-    const Mat4 projection = perspective(0.76f,
-            static_cast<float>(width_) / static_cast<float>(height_), 0.1f, 80.0f);
+    const Entity* cameraEntity = scene_.activeCamera();
+    const CameraComponent camera = cameraEntity == nullptr
+            ? CameraComponent{} : cameraEntity->camera;
+    Mat4 view{};
+    if (cameraEntity != nullptr && cameraEntity->orbitCamera.enabled) {
+        const OrbitCameraController& orbit = cameraEntity->orbitCamera;
+        const float distance = std::max(orbit.distance, 0.1f);
+        const float horizontal = std::cos(orbit.pitch) * distance;
+        const Vec3 target = orbit.target;
+        cameraPosition_ = {target[0] + std::sin(orbit.yaw) * horizontal,
+                           target[1] + std::sin(orbit.pitch) * distance + 0.12f,
+                           target[2] + std::cos(orbit.yaw) * horizontal};
+        view = lookAt(cameraPosition_, target, {0.0f, 1.0f, 0.0f});
+    } else if (cameraEntity != nullptr) {
+        const Mat4 cameraWorld = scene_.worldMatrix(cameraEntity->id);
+        cameraPosition_ = {cameraWorld[12], cameraWorld[13], cameraWorld[14]};
+        const Vec3 forward{-cameraWorld[8], -cameraWorld[9], -cameraWorld[10]};
+        const Vec3 target{cameraPosition_[0] + forward[0],
+                          cameraPosition_[1] + forward[1],
+                          cameraPosition_[2] + forward[2]};
+        const Vec3 up{cameraWorld[4], cameraWorld[5], cameraWorld[6]};
+        view = lookAt(cameraPosition_, target, up);
+    } else {
+        const OrbitCameraController fallback{};
+        const float horizontal = std::cos(fallback.pitch) * fallback.distance;
+        cameraPosition_ = {std::sin(fallback.yaw) * horizontal,
+                           std::sin(fallback.pitch) * fallback.distance + 0.12f,
+                           std::cos(fallback.yaw) * horizontal};
+        view = lookAt(cameraPosition_, fallback.target, {0.0f, 1.0f, 0.0f});
+    }
+    const float nearPlane = std::max(camera.nearPlane, 0.01f);
+    const float farPlane = std::max(camera.farPlane, nearPlane + 0.01f);
+    const Mat4 projection = perspective(std::clamp(camera.verticalFovRadians, 0.1f, 2.8f),
+            static_cast<float>(width_) / static_cast<float>(height_), nearPlane, farPlane);
     viewProjection_ = multiply(projection, view);
 
     if (postProcessingAvailable_) {
@@ -998,8 +1031,7 @@ void Renderer::touch(int action, float x, float y) {
     if (action == 2) {
         const float deltaX = x - lastTouchX_;
         const float deltaY = y - lastTouchY_;
-        yaw_ += deltaX * 0.006f;
-        pitch_ = std::clamp(pitch_ + deltaY * 0.004f, -0.62f, 0.62f);
+        scene_.orbitActiveCamera(deltaX, deltaY);
         lastTouchX_ = x;
         lastTouchY_ = y;
     }

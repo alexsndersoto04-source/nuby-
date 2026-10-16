@@ -114,8 +114,6 @@ private:
     Scene scene_;
     int width_ = 1;
     int height_ = 1;
-    float yaw_ = 0.45f;
-    float pitch_ = 0.18f;
     float lastTouchX_ = 0.0f;
     float lastTouchY_ = 0.0f;
     std::array<float, 16> viewProjection_{};
