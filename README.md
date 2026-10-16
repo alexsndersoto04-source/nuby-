@@ -14,7 +14,7 @@ El motor incluye un parser propio en C++17, sin dependencia de motor ni parser e
 
 ## Compilación automática
 
-El workflow `.github/workflows/android.yml` compila `app-debug.apk` en cada push, pull request o ejecución manual. En GitHub, abre **Actions → Android build → el último workflow → Artifacts** y descarga `nuby-engine-debug-apk`. Instala el APK en Android para probar la versión de ese hito.
+El workflow `.github/workflows/android.yml` ejecuta las pruebas nativas y compila Android en cada push, pull request o ejecución manual. Para no generar un artefacto descargable por cada integración, el APK solo se publica cuando se inicia el workflow manualmente (`workflow_dispatch`), al cerrar un hito que vaya a probarse en el teléfono. Entonces, abre **Actions → Android build → la ejecución manual → Artifacts** y descarga `nuby-engine-debug-apk`. Las ejecuciones automáticas siguen comprobando el código, pero no hace falta descargar ni instalar nada en el teléfono hasta que se anuncie un nuevo APK de hito.
 
 La compilación está configurada para `arm64-v8a` y `armeabi-v7a`, con Android API mínima 24 y OpenGL ES 3.0.
 
