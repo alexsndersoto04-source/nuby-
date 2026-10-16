@@ -14,6 +14,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.Locale;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
@@ -24,8 +25,12 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     }
 
     private GLSurfaceView surface;
+    private TextView telemetry;
     private float density;
     private long lastFrameNanos = 0L;
+    private long fpsWindowStartNanos = 0L;
+    private int framesInWindow = 0;
+    private volatile String gpuName = "GPU";
 
     private static native void nativeCreate();
     private static native void nativeResize(int width, int height);
@@ -74,6 +79,16 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         brandParams.setMargins(dp(18), dp(18), 0, 0);
         root.addView(brand, brandParams);
 
+        telemetry = label("CHECKING GPU  ·  GLES 3", 10, 0xFFB7E5DF, true);
+        telemetry.setPadding(dp(14), dp(10), dp(14), dp(10));
+        telemetry.setBackground(pill(0xB8141B2D, dp(18)));
+        FrameLayout.LayoutParams telemetryParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.END);
+        telemetryParams.setMargins(0, dp(18), dp(18), 0);
+        root.addView(telemetry, telemetryParams);
+
         TextView hint = label("DRAG TO ORBIT", 10, 0xFFD7E6F5, true);
         hint.setGravity(Gravity.CENTER);
         hint.setPadding(dp(15), dp(9), dp(15), dp(9));
@@ -114,6 +129,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         nativeCreate();
+        String detected = gl.glGetString(GL10.GL_RENDERER);
+        gpuName = detected == null ? "GPU desconocida" : detected.trim();
+        if (gpuName.length() > 26) gpuName = gpuName.substring(0, 26);
     }
 
     @Override
@@ -129,6 +147,19 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 : Math.min((now - lastFrameNanos) / 1_000_000_000.0f, 0.05f);
         lastFrameNanos = now;
         nativeFrame(deltaSeconds);
+
+        framesInWindow++;
+        if (fpsWindowStartNanos == 0L) fpsWindowStartNanos = now;
+        long elapsed = now - fpsWindowStartNanos;
+        if (elapsed >= 1_000_000_000L) {
+            final int fps = Math.round(framesInWindow * 1_000_000_000.0f / elapsed);
+            framesInWindow = 0;
+            fpsWindowStartNanos = now;
+            runOnUiThread(() -> {
+                if (telemetry != null) telemetry.setText(
+                        String.format(Locale.US, "%d FPS  ·  %s", fps, gpuName));
+            });
+        }
     }
 
     @Override
