@@ -53,6 +53,7 @@ struct PulseComponent {
 
 struct Entity {
     std::uint32_t id = 0;
+    std::uint32_t parentId = 0;
     std::string name;
     std::string meshAsset;
     Primitive primitive = Primitive::Sphere;
@@ -64,11 +65,15 @@ struct Entity {
     bool visible = true;
 };
 
-// Small data-oriented scene container. Rendering and game systems consume the
-// same entities; it is intentionally independent of Android and GLES.
+// Scene state is platform independent. Entity transforms are local to their
+// parent; rendering consumes the composed world matrix.
 class Scene final {
 public:
     Entity& create(std::string name, Primitive primitive);
+    Entity* find(std::uint32_t id);
+    const Entity* find(std::uint32_t id) const;
+    bool setParent(std::uint32_t childId, std::uint32_t parentId);
+    std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();
 

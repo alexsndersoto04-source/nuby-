@@ -72,6 +72,7 @@ private:
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
               const Material& material);
     void buildScene();
+    void loadSceneAssets();
     void initializeShadowMap();
     void renderShadowMap(const std::array<float, 16>& lightViewProjection);
     void initializePostProcessing();

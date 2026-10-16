@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include <android/log.h>
@@ -34,56 +35,6 @@ Mat4 multiply(const Mat4& a, const Mat4& b) {
             }
         }
     }
-    return result;
-}
-
-Mat4 translation(float x, float y, float z) {
-    Mat4 result = identity();
-    result[12] = x;
-    result[13] = y;
-    result[14] = z;
-    return result;
-}
-
-Mat4 scale(float x, float y, float z) {
-    Mat4 result{};
-    result[0] = x;
-    result[5] = y;
-    result[10] = z;
-    result[15] = 1.0f;
-    return result;
-}
-
-Mat4 rotationX(float angle) {
-    Mat4 result = identity();
-    const float c = std::cos(angle);
-    const float s = std::sin(angle);
-    result[5] = c;
-    result[9] = -s;
-    result[6] = s;
-    result[10] = c;
-    return result;
-}
-
-Mat4 rotationY(float angle) {
-    Mat4 result = identity();
-    const float c = std::cos(angle);
-    const float s = std::sin(angle);
-    result[0] = c;
-    result[8] = s;
-    result[2] = -s;
-    result[10] = c;
-    return result;
-}
-
-Mat4 rotationZ(float angle) {
-    Mat4 result = identity();
-    const float c = std::cos(angle);
-    const float s = std::sin(angle);
-    result[0] = c;
-    result[4] = -s;
-    result[1] = s;
-    result[5] = c;
     return result;
 }
 
@@ -148,15 +99,6 @@ Mat4 orthographic(float left, float right, float bottom, float top,
     result[13] = -(top + bottom) / (top - bottom);
     result[14] = -(farPlane + nearPlane) / (farPlane - nearPlane);
     return result;
-}
-
-Mat4 modelMatrix(const Transform& transform) {
-    const Mat4 translationMatrix = translation(transform.position[0],
-            transform.position[1], transform.position[2]);
-    const Mat4 rotationMatrix = multiply(rotationY(transform.rotation[1]),
-            multiply(rotationX(transform.rotation[0]), rotationZ(transform.rotation[2])));
-    const Mat4 scaleMatrix = scale(transform.scale[0], transform.scale[1], transform.scale[2]);
-    return multiply(translationMatrix, multiply(rotationMatrix, scaleMatrix));
 }
 
 void appendTriangle(std::vector<MeshVertex>& vertices,
@@ -583,10 +525,6 @@ void Renderer::buildScene() {
     torus_ = makeTorus(64, 14, 1.0f, 0.025f);
     ground_ = makeGround();
     importedMeshes_.clear();
-    Mesh orbitalShard{};
-    if (loadObjAsset("meshes/orbital_shard.obj", orbitalShard)) {
-        importedMeshes_.emplace("meshes/orbital_shard.obj", orbitalShard);
-    }
 
     Entity& ground = scene_.create("Horizon Grid", Primitive::Ground);
     ground.material.color = {0.02f, 0.04f, 0.08f};
@@ -629,12 +567,11 @@ void Renderer::buildScene() {
     core.material.emission = {0.035f, 0.025f, 0.16f};
     core.material.metallic = 0.18f;
     core.material.roughness = 0.31f;
+    const std::uint32_t coreId = core.id;
 
     Entity& innerCore = scene_.create("Core Light", Primitive::Sphere);
-    innerCore.transform.scale = {0.25f, 0.25f, 0.25f};
-    innerCore.orbit.enabled = true;
-    innerCore.orbit.verticalAmplitude = 0.07f;
-    innerCore.orbit.angularSpeed = 1.15f;
+    innerCore.transform.scale = {0.36f, 0.36f, 0.36f};
+    scene_.setParent(innerCore.id, coreId);
     innerCore.pulse.enabled = true;
     innerCore.pulse.baseScale = innerCore.transform.scale;
     innerCore.pulse.amplitude = 0.10f;
@@ -668,6 +605,22 @@ void Renderer::buildScene() {
                                        satellite.material.color[2] * 0.16f};
         satellite.material.metallic = 0.24f;
         satellite.material.roughness = 0.29f;
+    }
+
+    loadSceneAssets();
+}
+
+void Renderer::loadSceneAssets() {
+    std::unordered_set<std::string> attempted;
+    for (const Entity& entity : scene_.entities()) {
+        if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()
+                || !attempted.insert(entity.meshAsset).second) {
+            continue;
+        }
+        Mesh mesh{};
+        if (loadObjAsset(entity.meshAsset, mesh)) {
+            importedMeshes_.emplace(entity.meshAsset, mesh);
+        }
     }
 }
 
@@ -748,7 +701,7 @@ void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
         if (!entity.visible || entity.primitive == Primitive::Ground) continue;
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr || mesh->vao == 0) continue;
-        const Mat4 model = modelMatrix(entity.transform);
+        const Mat4 model = scene_.worldMatrix(entity.id);
         glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
         glBindVertexArray(mesh->vao);
         glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
@@ -1031,7 +984,7 @@ void Renderer::render(float deltaSeconds) {
         if (!entity.visible) continue;
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr) continue;
-        draw(*mesh, modelMatrix(entity.transform), entity.material);
+        draw(*mesh, scene_.worldMatrix(entity.id), entity.material);
     }
     if (postProcessingAvailable_) renderBloom();
 }

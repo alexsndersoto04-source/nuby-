@@ -7,7 +7,68 @@
 namespace nuby {
 namespace {
 constexpr float kTau = 6.28318530717958647692f;
+using Mat4 = std::array<float, 16>;
+
+Mat4 identity() {
+    Mat4 result{};
+    result[0] = result[5] = result[10] = result[15] = 1.0f;
+    return result;
 }
+
+Mat4 multiply(const Mat4& a, const Mat4& b) {
+    Mat4 result{};
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            for (int k = 0; k < 4; ++k) {
+                result[column * 4 + row] += a[k * 4 + row] * b[column * 4 + k];
+            }
+        }
+    }
+    return result;
+}
+
+Mat4 localMatrix(const Transform& transform) {
+    const float cx = std::cos(transform.rotation[0]);
+    const float sx = std::sin(transform.rotation[0]);
+    const float cy = std::cos(transform.rotation[1]);
+    const float sy = std::sin(transform.rotation[1]);
+    const float cz = std::cos(transform.rotation[2]);
+    const float sz = std::sin(transform.rotation[2]);
+
+    Mat4 rotationX = identity();
+    rotationX[5] = cx;
+    rotationX[9] = -sx;
+    rotationX[6] = sx;
+    rotationX[10] = cx;
+
+    Mat4 rotationY = identity();
+    rotationY[0] = cy;
+    rotationY[8] = sy;
+    rotationY[2] = -sy;
+    rotationY[10] = cy;
+
+    Mat4 rotationZ = identity();
+    rotationZ[0] = cz;
+    rotationZ[4] = -sz;
+    rotationZ[1] = sz;
+    rotationZ[5] = cz;
+
+    Mat4 translation{};
+    translation[0] = translation[5] = translation[10] = translation[15] = 1.0f;
+    translation[12] = transform.position[0];
+    translation[13] = transform.position[1];
+    translation[14] = transform.position[2];
+
+    Mat4 scale{};
+    scale[0] = transform.scale[0];
+    scale[5] = transform.scale[1];
+    scale[10] = transform.scale[2];
+    scale[15] = 1.0f;
+
+    const Mat4 rotation = multiply(rotationY, multiply(rotationX, rotationZ));
+    return multiply(translation, multiply(rotation, scale));
+}
+}  // namespace
 
 Entity& Scene::create(std::string name, Primitive primitive) {
     entities_.push_back(Entity{});
@@ -16,6 +77,52 @@ Entity& Scene::create(std::string name, Primitive primitive) {
     entity.name = std::move(name);
     entity.primitive = primitive;
     return entity;
+}
+
+Entity* Scene::find(std::uint32_t id) {
+    const auto found = std::find_if(entities_.begin(), entities_.end(),
+            [id](const Entity& entity) { return entity.id == id; });
+    return found == entities_.end() ? nullptr : &*found;
+}
+
+const Entity* Scene::find(std::uint32_t id) const {
+    const auto found = std::find_if(entities_.begin(), entities_.end(),
+            [id](const Entity& entity) { return entity.id == id; });
+    return found == entities_.end() ? nullptr : &*found;
+}
+
+bool Scene::setParent(std::uint32_t childId, std::uint32_t parentId) {
+    Entity* child = find(childId);
+    if (child == nullptr) return false;
+    if (parentId == 0) {
+        child->parentId = 0;
+        return true;
+    }
+    if (childId == parentId || find(parentId) == nullptr) return false;
+
+    const Entity* ancestor = find(parentId);
+    for (std::size_t depth = 0; ancestor != nullptr && depth < entities_.size(); ++depth) {
+        if (ancestor->id == childId) return false;
+        if (ancestor->parentId == 0) {
+            child->parentId = parentId;
+            return true;
+        }
+        ancestor = find(ancestor->parentId);
+    }
+    return false;
+}
+
+std::array<float, 16> Scene::worldMatrix(std::uint32_t id) const {
+    const Entity* current = find(id);
+    if (current == nullptr) return identity();
+
+    Mat4 result = identity();
+    for (std::size_t depth = 0; current != nullptr && depth < entities_.size(); ++depth) {
+        result = multiply(localMatrix(current->transform), result);
+        if (current->parentId == 0) break;
+        current = find(current->parentId);
+    }
+    return result;
 }
 
 void Scene::clear() {
