@@ -650,6 +650,7 @@ void Renderer::buildScene() {
                 useImportedMesh ? Primitive::ImportedMesh : Primitive::Sphere);
         if (useImportedMesh) satellite.meshAsset = "meshes/orbital_shard.obj";
         const float size = useImportedMesh ? 0.13f : 0.075f + 0.018f * static_cast<float>(index);
+        const float orbit = 1.46f + 0.08f * static_cast<float>(index);
         satellite.transform.scale = {size, size, size};
         satellite.orbit.enabled = true;
         satellite.orbit.radius = orbit;
