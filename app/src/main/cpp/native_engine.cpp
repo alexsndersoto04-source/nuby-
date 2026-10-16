@@ -20,6 +20,11 @@ Java_com_nuby_engine_MainActivity_nativeShadowsEnabled(JNIEnv*, jclass) {
     return gRenderer && gRenderer->shadowsEnabled() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativePostProcessingEnabled(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->postProcessingEnabled() ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeResize(JNIEnv*, jclass, jint width, jint height) {
     if (gRenderer) gRenderer->resize(width, height);

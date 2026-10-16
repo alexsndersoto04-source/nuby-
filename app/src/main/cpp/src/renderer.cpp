@@ -313,6 +313,64 @@ precision highp float;
 void main() { }
 )";
 
+constexpr const char* kFullscreenVertexShader = R"(
+#version 300 es
+precision highp float;
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aUv;
+out vec2 vUv;
+void main() {
+    vUv = aUv;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+)";
+
+constexpr const char* kBloomExtractFragmentShader = R"(
+#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+out vec4 fragmentColor;
+void main() {
+    vec3 color = texture(uScene, vUv).rgb;
+    float brightness = max(max(color.r, color.g), color.b);
+    float contribution = max(brightness - 0.72, 0.0) / max(brightness, 0.001);
+    fragmentColor = vec4(color * contribution, 1.0);
+}
+)";
+
+constexpr const char* kBlurFragmentShader = R"(
+#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSource;
+uniform vec2 uDirection;
+uniform vec2 uTexelSize;
+out vec4 fragmentColor;
+void main() {
+    vec3 result = texture(uSource, vUv).rgb * 0.227027;
+    result += texture(uSource, vUv + uDirection * uTexelSize * 1.384615).rgb * 0.316216;
+    result += texture(uSource, vUv - uDirection * uTexelSize * 1.384615).rgb * 0.316216;
+    result += texture(uSource, vUv + uDirection * uTexelSize * 3.230769).rgb * 0.070270;
+    result += texture(uSource, vUv - uDirection * uTexelSize * 3.230769).rgb * 0.070270;
+    fragmentColor = vec4(result, 1.0);
+}
+)";
+
+constexpr const char* kCompositeFragmentShader = R"(
+#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+out vec4 fragmentColor;
+void main() {
+    vec3 sceneColor = texture(uScene, vUv).rgb;
+    vec3 bloomColor = texture(uBloom, vUv).rgb;
+    fragmentColor = vec4(clamp(sceneColor + bloomColor * 0.32, 0.0, 1.0), 1.0);
+}
+)";
+
 }  // namespace
 
 GLuint Renderer::compileShader(GLenum type, const char* source) {
@@ -633,6 +691,173 @@ void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
     glViewport(0, 0, width_, height_);
 }
 
+void Renderer::initializePostProcessing() {
+    bloomExtractProgram_ = createProgram(kFullscreenVertexShader, kBloomExtractFragmentShader);
+    blurProgram_ = createProgram(kFullscreenVertexShader, kBlurFragmentShader);
+    compositeProgram_ = createProgram(kFullscreenVertexShader, kCompositeFragmentShader);
+    if (bloomExtractProgram_ == 0 || blurProgram_ == 0 || compositeProgram_ == 0) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "Post-processing shaders unavailable; rendering directly to screen");
+        return;
+    }
+
+    postUniforms_.extractScene = glGetUniformLocation(bloomExtractProgram_, "uScene");
+    postUniforms_.blurSource = glGetUniformLocation(blurProgram_, "uSource");
+    postUniforms_.blurDirection = glGetUniformLocation(blurProgram_, "uDirection");
+    postUniforms_.blurTexelSize = glGetUniformLocation(blurProgram_, "uTexelSize");
+    postUniforms_.compositeScene = glGetUniformLocation(compositeProgram_, "uScene");
+    postUniforms_.compositeBloom = glGetUniformLocation(compositeProgram_, "uBloom");
+
+    constexpr float quadVertices[] = {
+        -1.0f, -1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, 1.0f, 0.0f,
+         1.0f,  1.0f, 1.0f, 1.0f,
+        -1.0f, -1.0f, 0.0f, 0.0f,
+         1.0f,  1.0f, 1.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f, 1.0f
+    };
+    glGenVertexArrays(1, &fullscreenVao_);
+    glGenBuffers(1, &fullscreenVbo_);
+    glBindVertexArray(fullscreenVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, fullscreenVbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          reinterpret_cast<const void*>(2 * sizeof(float)));
+    glBindVertexArray(0);
+}
+
+void Renderer::releasePostProcessing() {
+    if (sceneFramebuffer_ != 0) glDeleteFramebuffers(1, &sceneFramebuffer_);
+    if (sceneColorTexture_ != 0) glDeleteTextures(1, &sceneColorTexture_);
+    if (sceneDepthBuffer_ != 0) glDeleteRenderbuffers(1, &sceneDepthBuffer_);
+    glDeleteFramebuffers(static_cast<GLsizei>(bloomFramebuffers_.size()), bloomFramebuffers_.data());
+    glDeleteTextures(static_cast<GLsizei>(bloomTextures_.size()), bloomTextures_.data());
+    sceneFramebuffer_ = 0;
+    sceneColorTexture_ = 0;
+    sceneDepthBuffer_ = 0;
+    bloomFramebuffers_ = {0, 0};
+    bloomTextures_ = {0, 0};
+    postWidth_ = 0;
+    postHeight_ = 0;
+    postProcessingAvailable_ = false;
+}
+
+void Renderer::resizePostProcessing() {
+    if (width_ <= 0 || height_ <= 0) return;
+    if (postProcessingAvailable_ && sceneColorTexture_ != 0
+            && postWidth_ == width_ && postHeight_ == height_) return;
+    releasePostProcessing();
+    if (bloomExtractProgram_ == 0 || blurProgram_ == 0 || compositeProgram_ == 0
+            || fullscreenVao_ == 0) return;
+
+    bloomWidth_ = std::max(width_ / 4, 1);
+    bloomHeight_ = std::max(height_ / 4, 1);
+    glGenTextures(1, &sceneColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, sceneColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenRenderbuffers(1, &sceneDepthBuffer_);
+    glBindRenderbuffer(GL_RENDERBUFFER, sceneDepthBuffer_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width_, height_);
+
+    glGenFramebuffers(1, &sceneFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, sceneColorTexture_, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, sceneDepthBuffer_);
+    bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glGenFramebuffers(static_cast<GLsizei>(bloomFramebuffers_.size()), bloomFramebuffers_.data());
+    glGenTextures(static_cast<GLsizei>(bloomTextures_.size()), bloomTextures_.data());
+    for (std::size_t index = 0; index < bloomFramebuffers_.size(); ++index) {
+        glBindTexture(GL_TEXTURE_2D, bloomTextures_[index]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bloomWidth_, bloomHeight_, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, bloomFramebuffers_[index]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, bloomTextures_[index], 0);
+        complete = complete
+                && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    postProcessingAvailable_ = complete;
+    if (!postProcessingAvailable_) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "Bloom framebuffers unavailable; rendering directly to screen");
+        releasePostProcessing();
+        return;
+    }
+    postWidth_ = width_;
+    postHeight_ = height_;
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+            "Quarter-resolution bloom enabled (%dx%d)", bloomWidth_, bloomHeight_);
+}
+
+void Renderer::drawFullscreen() {
+    glBindVertexArray(fullscreenVao_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+}
+
+void Renderer::renderBloom() {
+    if (!postProcessingAvailable_) return;
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glViewport(0, 0, bloomWidth_, bloomHeight_);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, bloomFramebuffers_[0]);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(bloomExtractProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sceneColorTexture_);
+    glUniform1i(postUniforms_.extractScene, 0);
+    drawFullscreen();
+
+    glUseProgram(blurProgram_);
+    glUniform1i(postUniforms_.blurSource, 0);
+    glUniform2f(postUniforms_.blurTexelSize,
+                1.0f / static_cast<float>(bloomWidth_),
+                1.0f / static_cast<float>(bloomHeight_));
+    glBindFramebuffer(GL_FRAMEBUFFER, bloomFramebuffers_[1]);
+    glBindTexture(GL_TEXTURE_2D, bloomTextures_[0]);
+    glUniform2f(postUniforms_.blurDirection, 1.0f, 0.0f);
+    drawFullscreen();
+
+    glBindFramebuffer(GL_FRAMEBUFFER, bloomFramebuffers_[0]);
+    glBindTexture(GL_TEXTURE_2D, bloomTextures_[1]);
+    glUniform2f(postUniforms_.blurDirection, 0.0f, 1.0f);
+    drawFullscreen();
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width_, height_);
+    glUseProgram(compositeProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sceneColorTexture_);
+    glUniform1i(postUniforms_.compositeScene, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, bloomTextures_[0]);
+    glUniform1i(postUniforms_.compositeBloom, 1);
+    drawFullscreen();
+    glActiveTexture(GL_TEXTURE0);
+    glEnable(GL_DEPTH_TEST);
+}
+
 void Renderer::initialize() {
     program_ = createProgram(kVertexShader, kFragmentShader);
     if (program_ == 0) {
@@ -656,6 +881,7 @@ void Renderer::initialize() {
 
     buildScene();
     initializeShadowMap();
+    initializePostProcessing();
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDisable(GL_CULL_FACE);
@@ -668,6 +894,7 @@ void Renderer::resize(int width, int height) {
     width_ = std::max(width, 1);
     height_ = std::max(height, 1);
     glViewport(0, 0, width_, height_);
+    resizePostProcessing();
 }
 
 void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& material) {
@@ -721,6 +948,14 @@ void Renderer::render(float deltaSeconds) {
             static_cast<float>(width_) / static_cast<float>(height_), 0.1f, 80.0f);
     viewProjection_ = multiply(projection, view);
 
+    if (postProcessingAvailable_) {
+        glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+        glViewport(0, 0, width_, height_);
+    } else {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, width_, height_);
+    }
+    glEnable(GL_DEPTH_TEST);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible) continue;
@@ -728,6 +963,7 @@ void Renderer::render(float deltaSeconds) {
         if (mesh == nullptr) continue;
         draw(*mesh, modelMatrix(entity.transform), entity.material);
     }
+    if (postProcessingAvailable_) renderBloom();
 }
 
 void Renderer::touch(int action, float x, float y) {

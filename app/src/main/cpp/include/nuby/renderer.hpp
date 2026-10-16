@@ -20,6 +20,7 @@ public:
     void render(float deltaSeconds);
     void touch(int action, float x, float y);
     bool shadowsEnabled() const { return shadowsAvailable_; }
+    bool postProcessingEnabled() const { return postProcessingAvailable_; }
 
     struct Vertex {
         float position[3];
@@ -31,6 +32,15 @@ private:
         GLuint vao = 0;
         GLuint vbo = 0;
         GLsizei vertexCount = 0;
+    };
+
+    struct PostUniforms {
+        GLint extractScene = -1;
+        GLint blurSource = -1;
+        GLint blurDirection = -1;
+        GLint blurTexelSize = -1;
+        GLint compositeScene = -1;
+        GLint compositeBloom = -1;
     };
 
     struct Uniforms {
@@ -61,12 +71,33 @@ private:
     void buildScene();
     void initializeShadowMap();
     void renderShadowMap(const std::array<float, 16>& lightViewProjection);
+    void initializePostProcessing();
+    void resizePostProcessing();
+    void releasePostProcessing();
+    void renderBloom();
+    void drawFullscreen();
 
     GLuint program_ = 0;
     GLuint shadowProgram_ = 0;
     GLuint shadowFramebuffer_ = 0;
     GLuint shadowDepthTexture_ = 0;
+    GLuint bloomExtractProgram_ = 0;
+    GLuint blurProgram_ = 0;
+    GLuint compositeProgram_ = 0;
+    GLuint sceneFramebuffer_ = 0;
+    GLuint sceneColorTexture_ = 0;
+    GLuint sceneDepthBuffer_ = 0;
+    std::array<GLuint, 2> bloomFramebuffers_{};
+    std::array<GLuint, 2> bloomTextures_{};
+    GLuint fullscreenVao_ = 0;
+    GLuint fullscreenVbo_ = 0;
     bool shadowsAvailable_ = false;
+    bool postProcessingAvailable_ = false;
+    int bloomWidth_ = 1;
+    int bloomHeight_ = 1;
+    int postWidth_ = 0;
+    int postHeight_ = 0;
+    PostUniforms postUniforms_{};
     GLint shadowProgramLightViewProjection_ = -1;
     GLint shadowProgramModel_ = -1;
     static constexpr int kShadowMapSize = 512;
