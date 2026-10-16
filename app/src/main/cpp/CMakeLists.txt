@@ -5,6 +5,7 @@ add_library(nuby-engine SHARED
     native_engine.cpp
     src/renderer.cpp
     src/scene.cpp
+    src/obj_loader.cpp
 )
 
 target_include_directories(nuby-engine PRIVATE
@@ -17,10 +18,12 @@ target_compile_options(nuby-engine PRIVATE
     -Wno-unused-parameter
 )
 
+find_library(android-lib android)
 find_library(android-log log)
 find_library(opengles-v3 GLESv3)
 
 target_link_libraries(nuby-engine PRIVATE
     ${opengles-v3}
     ${android-log}
+    ${android-lib}
 )

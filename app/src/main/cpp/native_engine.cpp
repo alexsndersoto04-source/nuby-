@@ -3,16 +3,19 @@
 #include <jni.h>
 #include <memory>
 
+#include <android/asset_manager_jni.h>
+
 namespace {
 std::unique_ptr<nuby::Renderer> gRenderer;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_nuby_engine_MainActivity_nativeCreate(JNIEnv*, jclass) {
+Java_com_nuby_engine_MainActivity_nativeCreate(JNIEnv* env, jclass, jobject javaAssets) {
     if (!gRenderer) {
         gRenderer = std::make_unique<nuby::Renderer>();
     }
-    gRenderer->initialize();
+    AAssetManager* assetManager = AAssetManager_fromJava(env, javaAssets);
+    gRenderer->initialize(assetManager);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -23,6 +26,11 @@ Java_com_nuby_engine_MainActivity_nativeShadowsEnabled(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_nuby_engine_MainActivity_nativePostProcessingEnabled(JNIEnv*, jclass) {
     return gRenderer && gRenderer->postProcessingEnabled() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeSampleMeshLoaded(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->sampleMeshLoaded() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

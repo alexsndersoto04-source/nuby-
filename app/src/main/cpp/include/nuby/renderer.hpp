@@ -2,10 +2,14 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <GLES3/gl3.h>
+#include <android/asset_manager.h>
 
+#include "nuby/obj_loader.hpp"
 #include "nuby/scene.hpp"
 
 namespace nuby {
@@ -15,17 +19,15 @@ public:
     Renderer() = default;
     ~Renderer() = default;
 
-    void initialize();
+    void initialize(AAssetManager* assetManager);
     void resize(int width, int height);
     void render(float deltaSeconds);
     void touch(int action, float x, float y);
     bool shadowsEnabled() const { return shadowsAvailable_; }
     bool postProcessingEnabled() const { return postProcessingAvailable_; }
-
-    struct Vertex {
-        float position[3];
-        float normal[3];
-    };
+    bool sampleMeshLoaded() const {
+        return importedMeshes_.find("meshes/orbital_shard.obj") != importedMeshes_.end();
+    }
 
 private:
     struct Mesh {
@@ -61,11 +63,12 @@ private:
 
     GLuint compileShader(GLenum type, const char* source);
     GLuint createProgram(const char* vertexSource, const char* fragmentSource);
-    Mesh uploadMesh(const std::vector<Vertex>& vertices);
+    Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
+    bool loadObjAsset(const std::string& assetPath, Mesh& mesh);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
     Mesh makeGround();
-    const Mesh* meshFor(Primitive primitive) const;
+    const Mesh* meshFor(const Entity& entity) const;
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
               const Material& material);
     void buildScene();
@@ -77,6 +80,8 @@ private:
     void renderBloom();
     void drawFullscreen();
 
+    AAssetManager* assetManager_ = nullptr;
+    std::unordered_map<std::string, Mesh> importedMeshes_;
     GLuint program_ = 0;
     GLuint shadowProgram_ = 0;
     GLuint shadowFramebuffer_ = 0;

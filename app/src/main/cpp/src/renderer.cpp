@@ -9,6 +9,8 @@
 #include <android/log.h>
 
 namespace nuby {
+using Vertex = MeshVertex;
+
 namespace {
 
 constexpr const char* kLogTag = "NubyEngine";
@@ -157,10 +159,10 @@ Mat4 modelMatrix(const Transform& transform) {
     return multiply(translationMatrix, multiply(rotationMatrix, scaleMatrix));
 }
 
-void appendTriangle(std::vector<Renderer::Vertex>& vertices,
-                    const Renderer::Vertex& a,
-                    const Renderer::Vertex& b,
-                    const Renderer::Vertex& c) {
+void appendTriangle(std::vector<MeshVertex>& vertices,
+                    const MeshVertex& a,
+                    const MeshVertex& b,
+                    const MeshVertex& c) {
     vertices.push_back(a);
     vertices.push_back(b);
     vertices.push_back(c);
@@ -171,16 +173,19 @@ constexpr const char* kVertexShader = R"(
 precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUv;
 uniform mat4 uViewProjection;
 uniform mat4 uLightViewProjection;
 uniform mat4 uModel;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
+out vec2 vUv;
 out vec4 vLightPosition;
 void main() {
     vec4 world = uModel * vec4(aPosition, 1.0);
     vWorldPosition = world.xyz;
     vWorldNormal = mat3(uModel) * aNormal;
+    vUv = aUv;
     vLightPosition = uLightViewProjection * world;
     gl_Position = uViewProjection * world;
 }
@@ -439,9 +444,63 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<const void*>(offsetof(Vertex, normal)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<const void*>(offsetof(Vertex, uv)));
     glBindVertexArray(0);
     mesh.vertexCount = static_cast<GLsizei>(vertices.size());
     return mesh;
+}
+
+bool Renderer::loadObjAsset(const std::string& assetPath, Mesh& mesh) {
+    if (assetManager_ == nullptr) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "Cannot load %s: Android asset manager is unavailable", assetPath.c_str());
+        return false;
+    }
+
+    AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
+    if (asset == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                            "OBJ asset not found: %s", assetPath.c_str());
+        return false;
+    }
+
+    constexpr off_t kMaximumAssetBytes = 16 * 1024 * 1024;
+    const off_t length = AAsset_getLength(asset);
+    if (length <= 0 || length > kMaximumAssetBytes) {
+        AAsset_close(asset);
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                            "OBJ asset has invalid size: %s", assetPath.c_str());
+        return false;
+    }
+
+    std::string source(static_cast<std::size_t>(length), '\0');
+    std::size_t bytesRead = 0;
+    while (bytesRead < source.size()) {
+        const int count = AAsset_read(asset, source.data() + bytesRead,
+                                      source.size() - bytesRead);
+        if (count <= 0) break;
+        bytesRead += static_cast<std::size_t>(count);
+    }
+    AAsset_close(asset);
+    if (bytesRead != source.size()) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                            "Could not read complete OBJ asset: %s", assetPath.c_str());
+        return false;
+    }
+
+    std::vector<MeshVertex> vertices;
+    std::string error;
+    if (!parseObj(source, vertices, error)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "OBJ parse failed for %s: %s", assetPath.c_str(), error.c_str());
+        return false;
+    }
+    mesh = uploadMesh(vertices);
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+            "Loaded OBJ %s (%zu triangle vertices)", assetPath.c_str(), vertices.size());
+    return mesh.vao != 0;
 }
 
 Renderer::Mesh Renderer::makeSphere(int latitudeSegments, int longitudeSegments) {
@@ -523,6 +582,11 @@ void Renderer::buildScene() {
     sphere_ = makeSphere(28, 40);
     torus_ = makeTorus(64, 14, 1.0f, 0.025f);
     ground_ = makeGround();
+    importedMeshes_.clear();
+    Mesh orbitalShard{};
+    if (loadObjAsset("meshes/orbital_shard.obj", orbitalShard)) {
+        importedMeshes_.emplace("meshes/orbital_shard.obj", orbitalShard);
+    }
 
     Entity& ground = scene_.create("Horizon Grid", Primitive::Ground);
     ground.material.color = {0.02f, 0.04f, 0.08f};
@@ -581,12 +645,12 @@ void Renderer::buildScene() {
     innerCore.material.roughness = 0.16f;
 
     for (int index = 0; index < 3; ++index) {
+        const bool useImportedMesh = index == 1;
         Entity& satellite = scene_.create("Orbiting Shard " + std::to_string(index + 1),
-                                          Primitive::Sphere);
-        const float orbit = 1.46f + 0.08f * static_cast<float>(index);
-        satellite.transform.scale = {0.075f + 0.018f * static_cast<float>(index),
-                                     0.075f + 0.018f * static_cast<float>(index),
-                                     0.075f + 0.018f * static_cast<float>(index)};
+                useImportedMesh ? Primitive::ImportedMesh : Primitive::Sphere);
+        if (useImportedMesh) satellite.meshAsset = "meshes/orbital_shard.obj";
+        const float size = useImportedMesh ? 0.13f : 0.075f + 0.018f * static_cast<float>(index);
+        satellite.transform.scale = {size, size, size};
         satellite.orbit.enabled = true;
         satellite.orbit.radius = orbit;
         satellite.orbit.angularSpeed = 0.48f + 0.08f * static_cast<float>(index);
@@ -606,11 +670,15 @@ void Renderer::buildScene() {
     }
 }
 
-const Renderer::Mesh* Renderer::meshFor(Primitive primitive) const {
-    switch (primitive) {
+const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
+    switch (entity.primitive) {
         case Primitive::Sphere: return &sphere_;
         case Primitive::Torus: return &torus_;
         case Primitive::Ground: return &ground_;
+        case Primitive::ImportedMesh: {
+            const auto found = importedMeshes_.find(entity.meshAsset);
+            return found == importedMeshes_.end() ? &sphere_ : &found->second;
+        }
     }
     return nullptr;
 }
@@ -677,7 +745,7 @@ void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
 
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible || entity.primitive == Primitive::Ground) continue;
-        const Mesh* mesh = meshFor(entity.primitive);
+        const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr || mesh->vao == 0) continue;
         const Mat4 model = modelMatrix(entity.transform);
         glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
@@ -858,7 +926,8 @@ void Renderer::renderBloom() {
     glEnable(GL_DEPTH_TEST);
 }
 
-void Renderer::initialize() {
+void Renderer::initialize(AAssetManager* assetManager) {
+    assetManager_ = assetManager;
     program_ = createProgram(kVertexShader, kFragmentShader);
     if (program_ == 0) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Renderer initialization failed: shader program unavailable");
@@ -959,7 +1028,7 @@ void Renderer::render(float deltaSeconds) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible) continue;
-        const Mesh* mesh = meshFor(entity.primitive);
+        const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr) continue;
         draw(*mesh, modelMatrix(entity.transform), entity.material);
     }

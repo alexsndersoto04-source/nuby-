@@ -33,10 +33,12 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private volatile String gpuName = "GPU";
     private volatile String shadowStatus = "SHADOWS CHECKING";
     private volatile String postStatus = "BLOOM CHECKING";
+    private volatile String meshStatus = "MESH CHECKING";
 
-    private static native void nativeCreate();
+    private static native void nativeCreate(android.content.res.AssetManager assets);
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
+    private static native boolean nativeSampleMeshLoaded();
     private static native void nativeResize(int width, int height);
     private static native void nativeFrame(float deltaSeconds);
     private static native void nativeTouch(int action, float x, float y);
@@ -132,7 +134,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-        nativeCreate();
+        nativeCreate(getAssets());
         String detected = gl.glGetString(GL10.GL_RENDERER);
         gpuName = detected == null ? "GPU desconocida" : detected.trim();
         if (gpuName.length() > 26) gpuName = gpuName.substring(0, 26);
@@ -143,6 +145,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         nativeResize(width, height);
         shadowStatus = nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
         postStatus = nativePostProcessingEnabled() ? "BLOOM ON" : "BLOOM OFF";
+        meshStatus = nativeSampleMeshLoaded() ? "MESH ON" : "MESH FALLBACK";
     }
 
     @Override
@@ -163,8 +166,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
             fpsWindowStartNanos = now;
             runOnUiThread(() -> {
                 if (telemetry != null) telemetry.setText(
-                        String.format(Locale.US, "%d FPS  ·  %s  ·  %s  ·  %s",
-                                fps, gpuName, shadowStatus, postStatus));
+                        String.format(Locale.US, "%d FPS  ·  %s  ·  %s  ·  %s  ·  %s",
+                                fps, gpuName, shadowStatus, postStatus, meshStatus));
             });
         }
     }

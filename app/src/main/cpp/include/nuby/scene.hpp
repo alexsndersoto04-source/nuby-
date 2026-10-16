@@ -10,7 +10,8 @@ namespace nuby {
 enum class Primitive : std::uint8_t {
     Sphere,
     Torus,
-    Ground
+    Ground,
+    ImportedMesh
 };
 
 struct Transform {
@@ -53,6 +54,7 @@ struct PulseComponent {
 struct Entity {
     std::uint32_t id = 0;
     std::string name;
+    std::string meshAsset;
     Primitive primitive = Primitive::Sphere;
     Transform transform;
     Material material;

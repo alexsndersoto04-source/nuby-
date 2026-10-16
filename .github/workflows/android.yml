@@ -26,6 +26,14 @@ jobs:
       - name: Run scene tests
         run: /tmp/nuby-scene-tests
 
+      - name: Compile and run OBJ asset tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/obj_loader.cpp tests/obj_loader_tests.cpp
+          -o /tmp/nuby-obj-tests
+          && /tmp/nuby-obj-tests
+
   build-debug-apk:
     name: Build native Android APK
     needs: scene-tests
