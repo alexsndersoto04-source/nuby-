@@ -143,8 +143,8 @@ struct SphereColliderComponent {
     bool trigger = false;
 };
 
-// World-axis-aligned box collider. Half-extents are scaled by the entity's
-// absolute scale; entity rotation is intentionally ignored in this solver.
+// Oriented box collider. Half-extents are scaled by the entity's absolute
+// scale and aligned by its world rotation; physics bodies remain root-only.
 struct BoxColliderComponent {
     bool enabled = false;
     std::array<float, 3> halfExtents{0.5f, 0.5f, 0.5f};

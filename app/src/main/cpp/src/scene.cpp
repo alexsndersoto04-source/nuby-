@@ -100,10 +100,25 @@ void applyAngularImpulse(RigidbodyComponent& body, float inverseInertia,
     }
 }
 
+Vec3 rotateVector(const Quaternion& rotation, const Vec3& vector) {
+    const Vec3 imaginary{rotation[0], rotation[1], rotation[2]};
+    const Vec3 firstCross = cross(imaginary, vector);
+    const Vec3 twiceCross{2.0f * firstCross[0], 2.0f * firstCross[1],
+                          2.0f * firstCross[2]};
+    const Vec3 secondCross = cross(imaginary, twiceCross);
+    return {vector[0] + rotation[3] * twiceCross[0] + secondCross[0],
+            vector[1] + rotation[3] * twiceCross[1] + secondCross[1],
+            vector[2] + rotation[3] * twiceCross[2] + secondCross[2]};
+}
+
 struct CollisionShape {
     bool sphere = false;
     Vec3 center{0.0f, 0.0f, 0.0f};
     Vec3 halfExtents{0.0f, 0.0f, 0.0f};
+    Vec3 worldHalfExtents{0.0f, 0.0f, 0.0f};
+    std::array<Vec3, 3> axes{{{1.0f, 0.0f, 0.0f},
+                              {0.0f, 1.0f, 0.0f},
+                              {0.0f, 0.0f, 1.0f}}};
     float radius = 0.0f;
     float restitution = 0.0f;
     float friction = 0.0f;
@@ -126,6 +141,9 @@ bool collisionShape(const Entity& entity, CollisionShape& shape) {
     for (float value : entity.transform.scale) {
         if (!std::isfinite(value)) return false;
     }
+    for (float value : entity.transform.rotation) {
+        if (!std::isfinite(value)) return false;
+    }
     shape.center = entity.transform.position;
     if (entity.sphereCollider.enabled) {
         const SphereColliderComponent& collider = entity.sphereCollider;
@@ -141,6 +159,7 @@ bool collisionShape(const Entity& entity, CollisionShape& shape) {
         shape.friction = collider.friction;
         shape.trigger = collider.trigger;
         shape.halfExtents = {shape.radius, shape.radius, shape.radius};
+        shape.worldHalfExtents = shape.halfExtents;
         return true;
     }
 
@@ -150,6 +169,17 @@ bool collisionShape(const Entity& entity, CollisionShape& shape) {
                 * std::fabs(entity.transform.scale[axis]);
         if (!std::isfinite(shape.halfExtents[axis]) || shape.halfExtents[axis] <= 0.0f) {
             return false;
+        }
+    }
+    const Quaternion orientation = quaternionFromEuler(entity.transform.rotation);
+    shape.axes = {{rotateVector(orientation, {1.0f, 0.0f, 0.0f}),
+                   rotateVector(orientation, {0.0f, 1.0f, 0.0f}),
+                   rotateVector(orientation, {0.0f, 0.0f, 1.0f})}};
+    for (std::size_t worldAxis = 0; worldAxis < 3; ++worldAxis) {
+        shape.worldHalfExtents[worldAxis] = 0.0f;
+        for (std::size_t localAxis = 0; localAxis < 3; ++localAxis) {
+            shape.worldHalfExtents[worldAxis] += shape.halfExtents[localAxis]
+                    * std::fabs(shape.axes[localAxis][worldAxis]);
         }
     }
     if (!std::isfinite(collider.restitution) || !std::isfinite(collider.friction)) return false;
@@ -166,11 +196,17 @@ bool collideShapes(const CollisionShape& first, const CollisionShape& second,
     if (first.sphere != second.sphere) {
         const CollisionShape& sphere = first.sphere ? first : second;
         const CollisionShape& box = first.sphere ? second : first;
-        Vec3 closest{};
+        const Vec3 relative{sphere.center[0] - box.center[0],
+                sphere.center[1] - box.center[1], sphere.center[2] - box.center[2]};
+        Vec3 local{};
+        Vec3 closest = box.center;
         for (std::size_t axis = 0; axis < 3; ++axis) {
-            closest[axis] = std::clamp(sphere.center[axis],
-                    box.center[axis] - box.halfExtents[axis],
-                    box.center[axis] + box.halfExtents[axis]);
+            local[axis] = dot(relative, box.axes[axis]);
+            const float coordinate = std::clamp(local[axis],
+                    -box.halfExtents[axis], box.halfExtents[axis]);
+            for (std::size_t component = 0; component < 3; ++component) {
+                closest[component] += box.axes[axis][component] * coordinate;
+            }
         }
         Vec3 sphereToBox{closest[0] - sphere.center[0], closest[1] - sphere.center[1],
                          closest[2] - sphere.center[2]};
@@ -186,21 +222,21 @@ bool collideShapes(const CollisionShape& first, const CollisionShape& second,
             std::size_t nearestAxis = 0;
             float nearestFaceDistance = std::numeric_limits<float>::max();
             for (std::size_t axis = 0; axis < 3; ++axis) {
-                const float faceDistance = box.halfExtents[axis]
-                        - std::fabs(sphere.center[axis] - box.center[axis]);
+                const float faceDistance = box.halfExtents[axis] - std::fabs(local[axis]);
                 if (faceDistance < nearestFaceDistance) {
                     nearestFaceDistance = faceDistance;
                     nearestAxis = axis;
                 }
             }
-            const float side = sphere.center[nearestAxis] >= box.center[nearestAxis]
-                    ? 1.0f : -1.0f;
-            contact.normal = {0.0f, 0.0f, 0.0f};
-            contact.normal[nearestAxis] = -side;
+            const float side = local[nearestAxis] >= 0.0f ? 1.0f : -1.0f;
+            for (std::size_t component = 0; component < 3; ++component) {
+                contact.normal[component] = -side * box.axes[nearestAxis][component];
+            }
             contact.penetration = sphere.radius + nearestFaceDistance;
-            closest = sphere.center;
-            closest[nearestAxis] = box.center[nearestAxis]
-                    + side * box.halfExtents[nearestAxis];
+            const float correction = side * box.halfExtents[nearestAxis] - local[nearestAxis];
+            for (std::size_t component = 0; component < 3; ++component) {
+                closest[component] += box.axes[nearestAxis][component] * correction;
+            }
         }
         const Vec3 sphereSurface{sphere.center[0] + contact.normal[0] * sphere.radius,
                 sphere.center[1] + contact.normal[1] * sphere.radius,
@@ -214,27 +250,65 @@ bool collideShapes(const CollisionShape& first, const CollisionShape& second,
         return contact.penetration > 0.0f;
     }
 
-    Vec3 overlap{};
-    std::size_t minimumAxis = 0;
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        overlap[axis] = first.halfExtents[axis] + second.halfExtents[axis]
-                - std::fabs(second.center[axis] - first.center[axis]);
-        if (overlap[axis] <= 0.0f) return false;
-        if (overlap[axis] < overlap[minimumAxis]) minimumAxis = axis;
+    const Vec3 centerDelta{second.center[0] - first.center[0],
+            second.center[1] - first.center[1], second.center[2] - first.center[2]};
+    float minimumOverlap = std::numeric_limits<float>::max();
+    Vec3 minimumAxis{1.0f, 0.0f, 0.0f};
+    const auto testAxis = [&](Vec3 axis) {
+        const float axisLengthSquared = dot(axis, axis);
+        if (axisLengthSquared <= 1.0e-10f) return true;
+        const float inverseLength = 1.0f / std::sqrt(axisLengthSquared);
+        for (float& component : axis) component *= inverseLength;
+        float firstRadius = 0.0f;
+        float secondRadius = 0.0f;
+        for (std::size_t localAxis = 0; localAxis < 3; ++localAxis) {
+            firstRadius += first.halfExtents[localAxis]
+                    * std::fabs(dot(axis, first.axes[localAxis]));
+            secondRadius += second.halfExtents[localAxis]
+                    * std::fabs(dot(axis, second.axes[localAxis]));
+        }
+        const float signedDistance = dot(centerDelta, axis);
+        const float overlap = firstRadius + secondRadius - std::fabs(signedDistance);
+        if (overlap <= 0.0f) return false;
+        if (overlap < minimumOverlap) {
+            minimumOverlap = overlap;
+            minimumAxis = signedDistance >= 0.0f
+                    ? axis : Vec3{-axis[0], -axis[1], -axis[2]};
+        }
+        return true;
+    };
+    for (const Vec3& axis : first.axes) {
+        if (!testAxis(axis)) return false;
     }
-    contact.normal = {0.0f, 0.0f, 0.0f};
-    contact.normal[minimumAxis] = second.center[minimumAxis] >= first.center[minimumAxis]
-            ? 1.0f : -1.0f;
-    contact.penetration = overlap[minimumAxis];
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        const float lower = std::max(first.center[axis] - first.halfExtents[axis],
-                                     second.center[axis] - second.halfExtents[axis]);
-        const float upper = std::min(first.center[axis] + first.halfExtents[axis],
-                                     second.center[axis] + second.halfExtents[axis]);
-        contact.point[axis] = (lower + upper) * 0.5f;
+    for (const Vec3& axis : second.axes) {
+        if (!testAxis(axis)) return false;
     }
-    contact.point[minimumAxis] = first.center[minimumAxis]
-            + contact.normal[minimumAxis] * first.halfExtents[minimumAxis];
+    for (const Vec3& firstAxis : first.axes) {
+        for (const Vec3& secondAxis : second.axes) {
+            if (!testAxis(cross(firstAxis, secondAxis))) return false;
+        }
+    }
+    contact.normal = minimumAxis;
+    contact.penetration = minimumOverlap;
+    const auto supportPoint = [](const CollisionShape& shape, const Vec3& direction) {
+        Vec3 point = shape.center;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const float projection = dot(shape.axes[axis], direction);
+            const float side = projection > 1.0e-6f ? 1.0f
+                    : projection < -1.0e-6f ? -1.0f : 0.0f;
+            for (std::size_t component = 0; component < 3; ++component) {
+                point[component] += shape.axes[axis][component]
+                        * shape.halfExtents[axis] * side;
+            }
+        }
+        return point;
+    };
+    const Vec3 firstPoint = supportPoint(first, contact.normal);
+    const Vec3 oppositeNormal{-contact.normal[0], -contact.normal[1], -contact.normal[2]};
+    const Vec3 secondPoint = supportPoint(second, oppositeNormal);
+    contact.point = {(firstPoint[0] + secondPoint[0]) * 0.5f,
+            (firstPoint[1] + secondPoint[1]) * 0.5f,
+            (firstPoint[2] + secondPoint[2]) * 0.5f};
     return true;
 }
 
@@ -246,7 +320,7 @@ Vec3 inverseInertiaTimes(const CollisionShape& shape, float inverseMass,
         return {torque[0] * inverseInertia, torque[1] * inverseInertia,
                 torque[2] * inverseInertia};
     }
-    Vec3 result{};
+    Vec3 localAngularDelta{};
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const std::size_t next = (axis + 1) % 3;
         const std::size_t last = (axis + 2) % 3;
@@ -254,9 +328,16 @@ Vec3 inverseInertiaTimes(const CollisionShape& shape, float inverseMass,
                 + shape.halfExtents[last] * shape.halfExtents[last];
         const float inverseInertia = denominator > 1.0e-12f
                 ? 3.0f * inverseMass / denominator : 0.0f;
-        result[axis] = torque[axis] * inverseInertia;
+        localAngularDelta[axis] = dot(torque, shape.axes[axis]) * inverseInertia;
     }
-    return result;
+    Vec3 worldAngularDelta{0.0f, 0.0f, 0.0f};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        for (std::size_t component = 0; component < 3; ++component) {
+            worldAngularDelta[component] += shape.axes[axis][component]
+                    * localAngularDelta[axis];
+        }
+    }
+    return worldAngularDelta;
 }
 
 float angularImpulseDenominator(const CollisionShape& shape, float inverseMass,
@@ -768,14 +849,23 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 if (!entity.boxCollider.enabled || !collisionShape(entity, shape)
                         || !entity.rigidbody.enabled || !std::isfinite(entity.rigidbody.mass)
                         || entity.rigidbody.mass < 1.0e-6f) continue;
-                const float halfHeight = shape.halfExtents[1];
+                const float halfHeight = shape.worldHalfExtents[1];
                 const float penetration = physicsSettings_.floorHeight + halfHeight
                         - entity.transform.position[1];
                 if (!std::isfinite(penetration) || penetration < -0.0001f) continue;
                 if (penetration > 0.0f) entity.transform.position[1] += penetration;
                 RigidbodyComponent& body = entity.rigidbody;
                 const float inverseMass = 1.0f / body.mass;
-                const Vec3 arm{0.0f, -halfHeight, 0.0f};
+                Vec3 arm{0.0f, 0.0f, 0.0f};
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const float vertical = shape.axes[axis][1];
+                    if (std::fabs(vertical) <= 1.0e-6f) continue;
+                    const float side = vertical > 0.0f ? -1.0f : 1.0f;
+                    for (std::size_t component = 0; component < 3; ++component) {
+                        arm[component] += shape.axes[axis][component]
+                                * shape.halfExtents[axis] * side;
+                    }
+                }
                 const Vec3 spin = cross(body.angularVelocity, arm);
                 const float normalVelocity = body.velocity[1] + spin[1];
                 const float normalDenominator = inverseMass
@@ -987,19 +1077,22 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 CollisionShape b;
                 collisionShape(entities_[left], a);
                 collisionShape(entities_[right], b);
-                return a.center[0] - a.halfExtents[0] < b.center[0] - b.halfExtents[0];
+                return a.center[0] - a.worldHalfExtents[0]
+                        < b.center[0] - b.worldHalfExtents[0];
             });
             for (std::size_t firstIndex = 0; firstIndex < colliderIndices.size(); ++firstIndex) {
                 Entity& first = entities_[colliderIndices[firstIndex]];
                 CollisionShape firstShape;
                 if (!collisionShape(first, firstShape)) continue;
-                const float firstMaximumX = firstShape.center[0] + firstShape.halfExtents[0];
+                const float firstMaximumX = firstShape.center[0]
+                        + firstShape.worldHalfExtents[0];
                 for (std::size_t secondIndex = firstIndex + 1;
                         secondIndex < colliderIndices.size(); ++secondIndex) {
                     Entity& second = entities_[colliderIndices[secondIndex]];
                     CollisionShape secondShape;
                     if (!collisionShape(second, secondShape)) continue;
-                    if (secondShape.center[0] - secondShape.halfExtents[0] > firstMaximumX) break;
+                    if (secondShape.center[0] - secondShape.worldHalfExtents[0]
+                            > firstMaximumX) break;
                     if (firstShape.sphere && secondShape.sphere) continue;
 
                     CollisionContact contact;

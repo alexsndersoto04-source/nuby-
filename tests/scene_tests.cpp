@@ -487,6 +487,47 @@ void testBoxCollidersHandleFloorAndMixedShapeContacts() {
            "dynamic box collides against a static box");
 }
 
+void testRotatedBoxCollidersUseOrientedGeometry() {
+    constexpr float kSqrtHalf = 0.70710678118f;
+    nuby::Scene contactScene;
+    contactScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    nuby::Entity& wall = contactScene.create("rotated wall", nuby::Primitive::None);
+    wall.transform.rotation[1] = 0.78539816339f;
+    wall.boxCollider.enabled = true;
+    wall.boxCollider.halfExtents = {1.0f, 0.5f, 0.1f};
+    const std::uint32_t ballId = contactScene.create("nearby ball", nuby::Primitive::Sphere).id;
+    nuby::Entity* ball = contactScene.find(ballId);
+    ball->transform.position = {0.3f * kSqrtHalf, 0.0f, 0.3f * kSqrtHalf};
+    ball->rigidbody.enabled = true;
+    ball->rigidbody.linearDamping = 0.0f;
+    ball->sphereCollider.enabled = true;
+    ball->sphereCollider.radius = 0.25f;
+    ball->sphereCollider.restitution = 0.0f;
+    contactScene.update(1.0f / 60.0f);
+    expect(ball->transform.position[0] + ball->transform.position[2]
+                   > 0.6f * kSqrtHalf + 0.02f,
+           "sphere contact follows the rotated box face normal");
+
+    nuby::Scene separationScene;
+    separationScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    nuby::Entity& sensor = separationScene.create("thin rotated sensor", nuby::Primitive::None);
+    sensor.transform.rotation[1] = 0.78539816339f;
+    sensor.boxCollider.enabled = true;
+    sensor.boxCollider.halfExtents = {1.0f, 0.1f, 0.1f};
+    sensor.boxCollider.trigger = true;
+    const std::uint32_t distantBallId = separationScene.create(
+            "outside sphere", nuby::Primitive::Sphere).id;
+    nuby::Entity* distantBall = separationScene.find(distantBallId);
+    distantBall->transform.position = {0.7f, 0.0f, 0.7f};
+    distantBall->sphereCollider.enabled = true;
+    distantBall->sphereCollider.radius = 0.25f;
+    separationScene.update(1.0f / 60.0f);
+    std::vector<nuby::PhysicsEvent> events;
+    separationScene.consumePhysicsEvents(events);
+    expect(events.empty(),
+           "OBB trigger rejects overlap that would be a false positive for its AABB");
+}
+
 void testMixedShapeTriggersReportTransitionsWithoutImpulses() {
     nuby::Scene scene;
     scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
@@ -624,6 +665,7 @@ int main() {
     testPhysicsSphereImpulseAndHierarchySafety();
     testTriggerEventsReportEnterExitWithoutApplyingImpulse();
     testBoxCollidersHandleFloorAndMixedShapeContacts();
+    testRotatedBoxCollidersUseOrientedGeometry();
     testMixedShapeTriggersReportTransitionsWithoutImpulses();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
