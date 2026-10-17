@@ -551,10 +551,12 @@ void Renderer::buildScene() {
     scene_.physicsSettings().floorHeight = -1.22f;
     scene_.physicsSettings().floorRestitution = 0.38f;
     scene_.physicsSettings().floorFriction = 0.48f;
-    sphere_ = makeSphere(28, 40);
-    torus_ = makeTorus(64, 14, 1.0f, 0.025f);
-    ground_ = makeGround();
-    importedMeshes_.clear();
+    if (!baseMeshesInitialized_) {
+        sphere_ = makeSphere(28, 40);
+        torus_ = makeTorus(64, 14, 1.0f, 0.025f);
+        ground_ = makeGround();
+        baseMeshesInitialized_ = true;
+    }
 
     Entity& camera = scene_.create("Main Camera", Primitive::None);
     camera.visible = false;
@@ -686,10 +688,30 @@ void Renderer::buildScene() {
     loadSceneAssets();
 }
 
+void Renderer::setGameMode(bool enabled) {
+    if (gameMode_ == enabled) return;
+    gameMode_ = enabled;
+    gameSwipeDistance_ = 0.0f;
+    if (gameMode_) sampleGame_.start(scene_);
+    else buildScene();
+}
+
+void Renderer::restartGame() {
+    if (gameMode_) {
+        gameSwipeDistance_ = 0.0f;
+        sampleGame_.start(scene_);
+    }
+}
+
+std::string Renderer::gameStatusText() const {
+    return gameMode_ ? sampleGame_.statusText() : std::string{};
+}
+
 void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> attempted;
     for (const Entity& entity : scene_.entities()) {
         if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()
+                || importedMeshes_.find(entity.meshAsset) != importedMeshes_.end()
                 || !attempted.insert(entity.meshAsset).second) {
             continue;
         }
@@ -959,6 +981,8 @@ void Renderer::renderBloom() {
 
 void Renderer::initialize(AAssetManager* assetManager) {
     assetManager_ = assetManager;
+    baseMeshesInitialized_ = false;
+    importedMeshes_.clear();
     program_ = createProgram(kVertexShader, kFragmentShader);
     if (program_ == 0) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Renderer initialization failed: shader program unavailable");
@@ -983,6 +1007,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.pointLightColorIntensity = glGetUniformLocation(program_, "uPointLightColorIntensity[0]");
 
     buildScene();
+    if (gameMode_) sampleGame_.start(scene_);
     initializeShadowMap();
     initializePostProcessing();
     glEnable(GL_DEPTH_TEST);
@@ -1038,7 +1063,8 @@ void Renderer::render(float deltaSeconds) {
     }
 
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
-    scene_.update(dt);
+    if (gameMode_) sampleGame_.update(scene_, dt);
+    else scene_.update(dt);
     scene_.collectPointLights(kMaxPointLights, pointLights_);
     pointLightPositionRanges_.fill(0.0f);
     pointLightColorIntensities_.fill(0.0f);
@@ -1126,6 +1152,7 @@ void Renderer::touch(int action, float x, float y, float pinchDistance, int poin
     if (action == kActionDown || action == kActionPointerDown) {
         lastTouchX_ = x;
         lastTouchY_ = y;
+        gameSwipeDistance_ = 0.0f;
         lastPinchDistance_ = pointerCount >= 2 && pinchDistance > 0.0f
                 ? pinchDistance : 0.0f;
         return;
@@ -1133,6 +1160,7 @@ void Renderer::touch(int action, float x, float y, float pinchDistance, int poin
     if (action == kActionUp || action == kActionCancel || action == kActionPointerUp) {
         lastTouchX_ = x;
         lastTouchY_ = y;
+        gameSwipeDistance_ = 0.0f;
         lastPinchDistance_ = 0.0f;
         return;
     }
@@ -1140,6 +1168,24 @@ void Renderer::touch(int action, float x, float y, float pinchDistance, int poin
 
     const float deltaX = x - lastTouchX_;
     const float deltaY = y - lastTouchY_;
+    if (gameMode_) {
+        if (pointerCount == 1) {
+            gameSwipeDistance_ += deltaX;
+            const float threshold = std::max(48.0f, static_cast<float>(width_) * 0.08f);
+            while (gameSwipeDistance_ >= threshold) {
+                sampleGame_.shiftLane(1);
+                gameSwipeDistance_ -= threshold;
+            }
+            while (gameSwipeDistance_ <= -threshold) {
+                sampleGame_.shiftLane(-1);
+                gameSwipeDistance_ += threshold;
+            }
+        }
+        lastTouchX_ = x;
+        lastTouchY_ = y;
+        lastPinchDistance_ = 0.0f;
+        return;
+    }
     if (pointerCount >= 2 && pinchDistance > 0.0f) {
         if (lastPinchDistance_ > 0.0f) {
             scene_.zoomActiveCamera(lastPinchDistance_ / pinchDistance);

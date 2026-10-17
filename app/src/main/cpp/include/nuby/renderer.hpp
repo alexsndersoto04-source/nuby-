@@ -10,6 +10,7 @@
 #include <android/asset_manager.h>
 
 #include "nuby/obj_loader.hpp"
+#include "nuby/sample_game.hpp"
 #include "nuby/scene.hpp"
 
 namespace nuby {
@@ -23,6 +24,9 @@ public:
     void resize(int width, int height);
     void render(float deltaSeconds);
     void touch(int action, float x, float y, float pinchDistance, int pointerCount);
+    void setGameMode(bool enabled);
+    void restartGame();
+    std::string gameStatusText() const;
     bool shadowsEnabled() const { return shadowsAvailable_; }
     bool postProcessingEnabled() const { return postProcessingAvailable_; }
     bool sampleMeshLoaded() const {
@@ -119,11 +123,15 @@ private:
     Mesh torus_{};
     Mesh ground_{};
     Scene scene_;
+    SampleGame sampleGame_;
+    bool gameMode_ = false;
+    bool baseMeshesInitialized_ = false;
     int width_ = 1;
     int height_ = 1;
     float lastTouchX_ = 0.0f;
     float lastTouchY_ = 0.0f;
     float lastPinchDistance_ = 0.0f;
+    float gameSwipeDistance_ = 0.0f;
     std::array<float, 16> viewProjection_{};
     std::array<float, 16> lightViewProjection_{};
     std::array<float, 3> cameraPosition_{};

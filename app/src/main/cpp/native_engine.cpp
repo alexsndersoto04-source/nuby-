@@ -34,6 +34,22 @@ Java_com_nuby_engine_MainActivity_nativeSampleMeshLoaded(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativeSetGameMode(JNIEnv*, jclass, jboolean enabled) {
+    if (gRenderer) gRenderer->setGameMode(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativeRestartGame(JNIEnv*, jclass) {
+    if (gRenderer) gRenderer->restartGame();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeGameStatus(JNIEnv* env, jclass) {
+    const std::string status = gRenderer ? gRenderer->gameStatusText() : std::string{};
+    return env->NewStringUTF(status.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeResize(JNIEnv*, jclass, jint width, jint height) {
     if (gRenderer) gRenderer->resize(width, height);
 }

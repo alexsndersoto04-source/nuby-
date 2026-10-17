@@ -5,6 +5,7 @@ add_library(nuby-engine SHARED
     native_engine.cpp
     src/renderer.cpp
     src/scene.cpp
+    src/sample_game.cpp
     src/scene_io.cpp
     src/obj_loader.cpp
 )

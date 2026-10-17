@@ -26,6 +26,12 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
 
     private GLSurfaceView surface;
     private TextView telemetry;
+    private TextView hint;
+    private TextView gameStatus;
+    private TextView modeButton;
+    private TextView restartButton;
+    private volatile boolean gameMode = false;
+    private volatile boolean gameFinished = false;
     private float density;
     private long lastFrameNanos = 0L;
     private long fpsWindowStartNanos = 0L;
@@ -39,6 +45,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
     private static native boolean nativeSampleMeshLoaded();
+    private static native void nativeSetGameMode(boolean enabled);
+    private static native void nativeRestartGame();
+    private static native String nativeGameStatus();
     private static native void nativeResize(int width, int height);
     private static native void nativeFrame(float deltaSeconds);
     private static native void nativeTouch(
@@ -129,16 +138,72 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         telemetryParams.setMargins(0, dp(18), dp(18), 0);
         root.addView(telemetry, telemetryParams);
 
-        TextView hint = label("DRAG TO ORBIT", 10, 0xFFD7E6F5, true);
+        gameStatus = label("AETHER RUN  0/6  45s", 11, 0xFFF1F8FF, true);
+        gameStatus.setGravity(Gravity.CENTER);
+        gameStatus.setPadding(dp(16), dp(9), dp(16), dp(9));
+        gameStatus.setBackground(pill(0xD8141B2D, dp(18)));
+        FrameLayout.LayoutParams gameStatusParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        gameStatusParams.topMargin = dp(88);
+        root.addView(gameStatus, gameStatusParams);
+        gameStatus.setVisibility(View.GONE);
+
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        controls.setPadding(dp(18), dp(4), dp(18), dp(4));
+        hint = label("DRAG TO ORBIT", 10, 0xFFD7E6F5, true);
         hint.setGravity(Gravity.CENTER);
         hint.setPadding(dp(15), dp(9), dp(15), dp(9));
         hint.setBackground(pill(0xB8141B2D, dp(18)));
-        FrameLayout.LayoutParams hintParams = new FrameLayout.LayoutParams(
+        controls.addView(hint, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        restartButton = label("RESTART RUN", 10, 0xFFD7E6F5, true);
+        restartButton.setGravity(Gravity.CENTER);
+        restartButton.setPadding(dp(15), dp(10), dp(15), dp(10));
+        restartButton.setBackground(pill(0xB8141B2D, dp(18)));
+        restartButton.setVisibility(View.GONE);
+        actions.addView(restartButton);
+
+        modeButton = label("START AETHER RUN", 10, 0xFFF2F5FF, true);
+        modeButton.setGravity(Gravity.CENTER);
+        modeButton.setPadding(dp(16), dp(10), dp(16), dp(10));
+        modeButton.setBackground(pill(0xD826746F, dp(18)));
+        LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        modeParams.leftMargin = dp(8);
+        actions.addView(modeButton, modeParams);
+        controls.addView(actions);
+
+        FrameLayout.LayoutParams controlsParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        hintParams.bottomMargin = dp(18);
-        root.addView(hint, hintParams);
+                Gravity.BOTTOM);
+        controlsParams.bottomMargin = dp(10);
+        root.addView(controls, controlsParams);
+
+        modeButton.setOnClickListener(view -> {
+            gameMode = !gameMode;
+            gameFinished = false;
+            final boolean startGame = gameMode;
+            surface.queueEvent(() -> nativeSetGameMode(startGame));
+            hint.setText(startGame ? "SWIPE LEFT / RIGHT TO MOVE" : "DRAG TO ORBIT");
+            modeButton.setText(startGame ? "ENGINE LAB" : "START AETHER RUN");
+            gameStatus.setVisibility(startGame ? View.VISIBLE : View.GONE);
+            restartButton.setVisibility(View.GONE);
+        });
+        restartButton.setOnClickListener(view -> {
+            gameFinished = false;
+            restartButton.setVisibility(View.GONE);
+            surface.queueEvent(MainActivity::nativeRestartGame);
+        });
 
         setContentView(root);
     }
@@ -198,10 +263,21 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
             final int fps = Math.round(framesInWindow * 1_000_000_000.0f / elapsed);
             framesInWindow = 0;
             fpsWindowStartNanos = now;
+            final String currentGameStatus = nativeGameStatus();
             runOnUiThread(() -> {
                 if (telemetry != null) telemetry.setText(
                         String.format(Locale.US, "%d FPS  ·  %s  ·  %s  ·  %s  ·  %s",
                                 fps, gpuName, shadowStatus, postStatus, meshStatus));
+                if (gameMode && gameStatus != null) {
+                    gameStatus.setText(currentGameStatus);
+                    gameStatus.setVisibility(View.VISIBLE);
+                    boolean finished = currentGameStatus.contains("RUN OVER")
+                            || currentGameStatus.contains("COMPLETE");
+                    if (finished != gameFinished) {
+                        gameFinished = finished;
+                        restartButton.setVisibility(finished ? View.VISIBLE : View.GONE);
+                    }
+                }
             });
         }
     }

@@ -42,6 +42,14 @@ jobs:
           tests/scene_io_tests.cpp -o /tmp/nuby-scene-io-tests
           && /tmp/nuby-scene-io-tests
 
+      - name: Compile and run sample game tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/sample_game.cpp
+          tests/sample_game_tests.cpp -o /tmp/nuby-sample-game-tests
+          && /tmp/nuby-sample-game-tests
+
   build-debug-apk:
     name: Build native Android APK
     needs: scene-tests
