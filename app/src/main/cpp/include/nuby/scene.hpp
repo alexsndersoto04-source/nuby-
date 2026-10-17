@@ -284,6 +284,7 @@ private:
     std::vector<std::uint64_t> activeTriggerPairs_;
     std::vector<std::uint64_t> triggerPairsScratch_;
     std::vector<std::size_t> colliderIndicesScratch_;
+    std::vector<std::size_t> dynamicColliderIndicesScratch_;
     std::vector<PhysicsEvent> physicsEvents_;
 };
 

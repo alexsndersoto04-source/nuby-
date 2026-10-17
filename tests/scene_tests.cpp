@@ -726,6 +726,59 @@ void testContinuousCollisionBetweenDynamicSpheres() {
     expect(sawExit, "dynamic sphere trigger emits exit after its swept crossing");
 }
 
+void testContinuousSphereCollisionWithMovingBox() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t sphereId = scene.create(
+            "static sphere", nuby::Primitive::Sphere).id;
+    const std::uint32_t boxId = scene.create("moving box", nuby::Primitive::None).id;
+    nuby::Entity* sphere = scene.find(sphereId);
+    nuby::Entity* box = scene.find(boxId);
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.25f;
+    box->transform.position = {-2.0f, 0.0f, 0.0f};
+    box->rigidbody.enabled = true;
+    box->rigidbody.velocity[0] = 300.0f;
+    box->rigidbody.linearDamping = 0.0f;
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.25f, 0.5f, 0.5f};
+    box->boxCollider.restitution = 0.0f;
+
+    scene.update(1.0f / 60.0f);
+    expect(box->transform.position[0] < -0.49f
+                   && std::fabs(box->rigidbody.velocity[0]) < 0.01f,
+           "continuous sphere-OBB sweep stops a fast moving box against a static sphere");
+
+    nuby::Scene dynamicScene;
+    dynamicScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t movingBoxId = dynamicScene.create(
+            "moving OBB", nuby::Primitive::None).id;
+    const std::uint32_t movingSphereId = dynamicScene.create(
+            "moving sphere", nuby::Primitive::Sphere).id;
+    nuby::Entity* movingBox = dynamicScene.find(movingBoxId);
+    nuby::Entity* movingSphere = dynamicScene.find(movingSphereId);
+    movingBox->transform.position = {2.0f, 0.0f, 0.0f};
+    movingBox->rigidbody.enabled = true;
+    movingBox->rigidbody.velocity[0] = -300.0f;
+    movingBox->rigidbody.linearDamping = 0.0f;
+    movingBox->boxCollider.enabled = true;
+    movingBox->boxCollider.halfExtents = {0.25f, 0.5f, 0.5f};
+    movingBox->boxCollider.restitution = 0.0f;
+    movingSphere->transform.position = {-2.0f, 0.0f, 0.0f};
+    movingSphere->rigidbody.enabled = true;
+    movingSphere->rigidbody.velocity[0] = 300.0f;
+    movingSphere->rigidbody.linearDamping = 0.0f;
+    movingSphere->sphereCollider.enabled = true;
+    movingSphere->sphereCollider.radius = 0.25f;
+    movingSphere->sphereCollider.restitution = 0.0f;
+    dynamicScene.update(1.0f / 60.0f);
+    expect(movingBox->transform.position[0] > 0.24f
+                   && movingSphere->transform.position[0] < -0.24f
+                   && std::fabs(movingBox->rigidbody.velocity[0]) < 0.01f
+                   && std::fabs(movingSphere->rigidbody.velocity[0]) < 0.01f,
+           "continuous sphere-OBB sweep resolves momentum between two moving bodies");
+}
+
 void testContinuousSphereCollisionWithFloor() {
     nuby::Scene scene;
     scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
@@ -853,6 +906,7 @@ int main() {
     testContinuousSphereCollisionPreventsTunneling();
     testContinuousSphereTriggerReportsTransientCrossing();
     testContinuousCollisionBetweenDynamicSpheres();
+    testContinuousSphereCollisionWithMovingBox();
     testContinuousSphereCollisionWithFloor();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
