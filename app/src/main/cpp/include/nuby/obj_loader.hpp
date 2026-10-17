@@ -24,8 +24,9 @@ struct ObjModel {
 };
 
 // Parses the supported OBJ geometry subset and preserves contiguous usemtl
-// ranges plus mtllib references. Faces are triangulated and missing normals
-// are generated. Material library paths are checked as project-relative paths.
+// ranges plus mtllib references. Ear clipping triangulates simple polygons;
+// missing normals honor OBJ smoothing groups. Material library paths are
+// checked as project-relative paths.
 bool parseObjModel(std::string_view source, ObjModel& model, std::string& error);
 
 // Compatibility convenience API for callers that only need concatenated geometry.

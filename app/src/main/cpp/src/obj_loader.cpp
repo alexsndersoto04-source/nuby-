@@ -5,9 +5,11 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -31,24 +33,47 @@ struct FaceIndex {
 };
 
 using Vec3 = std::array<float, 3>;
+using Vec3d = std::array<double, 3>;
+using TriangleCorners = std::array<std::size_t, 3>;
 
-Vec3 subtract(const Vec3& a, const Vec3& b) {
-    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-}
+struct ParsedFace {
+    std::vector<FaceIndex> corners;
+    std::vector<TriangleCorners> triangles;
+    Vec3d areaNormal{};
+    Vec3 flatNormal{0.0f, 1.0f, 0.0f};
+    std::uint32_t smoothingGroup = 0;
+};
 
-Vec3 cross(const Vec3& a, const Vec3& b) {
-    return {a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0]};
-}
+struct ParsedSubmesh {
+    std::string materialName;
+    std::vector<ParsedFace> faces;
+};
 
 Vec3 normalized(const Vec3& value) {
-    const float lengthSquared = value[0] * value[0]
-                              + value[1] * value[1]
-                              + value[2] * value[2];
-    if (lengthSquared < 1.0e-12f) return {0.0f, 1.0f, 0.0f};
-    const float inverseLength = 1.0f / std::sqrt(lengthSquared);
-    return {value[0] * inverseLength, value[1] * inverseLength, value[2] * inverseLength};
+    const double maximum = std::max({std::fabs(static_cast<double>(value[0])),
+                                     std::fabs(static_cast<double>(value[1])),
+                                     std::fabs(static_cast<double>(value[2]))});
+    if (maximum < 1.0e-12) return {0.0f, 1.0f, 0.0f};
+    const double x = value[0] / maximum;
+    const double y = value[1] / maximum;
+    const double z = value[2] / maximum;
+    const double inverseLength = 1.0 / std::sqrt(x * x + y * y + z * z);
+    return {static_cast<float>(x * inverseLength),
+            static_cast<float>(y * inverseLength),
+            static_cast<float>(z * inverseLength)};
+}
+
+Vec3 normalized(const Vec3d& value) {
+    const double maximum = std::max({std::fabs(value[0]), std::fabs(value[1]),
+                                     std::fabs(value[2])});
+    if (maximum < 1.0e-12) return {0.0f, 1.0f, 0.0f};
+    const double x = value[0] / maximum;
+    const double y = value[1] / maximum;
+    const double z = value[2] / maximum;
+    const double inverseLength = 1.0 / std::sqrt(x * x + y * y + z * z);
+    return {static_cast<float>(x * inverseLength),
+            static_cast<float>(y * inverseLength),
+            static_cast<float>(z * inverseLength)};
 }
 
 bool parseInteger(std::string_view text, int& value) {
@@ -125,8 +150,6 @@ bool safeProjectRelativePath(const std::string& path) {
     return true;
 }
 
-using TriangleCorners = std::array<std::size_t, 3>;
-
 struct ProjectedPoint {
     double x = 0.0;
     double y = 0.0;
@@ -164,8 +187,10 @@ bool segmentsIntersect(const ProjectedPoint& a, const ProjectedPoint& b,
 
 bool triangulateFace(const std::vector<FaceIndex>& face,
                      const std::vector<Vec3>& positions,
-                     std::vector<TriangleCorners>& triangles) {
+                     std::vector<TriangleCorners>& triangles,
+                     Vec3d& areaNormal) {
     triangles.clear();
+    areaNormal = {};
     if (face.size() < 3) return false;
 
     std::array<double, 3> newell{};
@@ -216,6 +241,7 @@ bool triangulateFace(const std::vector<FaceIndex>& face,
     const double normalLength = std::sqrt(newell[0] * newell[0]
             + newell[1] * newell[1] + newell[2] * newell[2]);
     if (normalLength <= 1.0e-12) return false;
+    areaNormal = newell;
     const Vec3& planeOrigin = positions[face.front().position];
     const double planarityTolerance = std::max(scale * 1.0e-4, 1.0e-6);
     for (const FaceIndex& corner : face) {
@@ -308,7 +334,9 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
     std::vector<Vec3> normals;
     std::vector<std::array<float, 2>> texcoords;
     std::unordered_set<std::string> materialLibrarySet;
+    std::vector<ParsedSubmesh> parsedSubmeshes;
     std::string activeMaterial;
+    std::uint32_t activeSmoothingGroup = 0;
     std::size_t expandedVertexCount = 0;
     std::istringstream input{std::string(source)};
     std::string line;
@@ -393,6 +421,28 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
                 model = {};
                 return false;
             }
+        } else if (record == "s") {
+            std::string group;
+            std::string extra;
+            if (!(fields >> group) || (fields >> extra)) {
+                error = "invalid smoothing group at line " + std::to_string(lineNumber);
+                model = {};
+                return false;
+            }
+            if (group == "off" || group == "0") {
+                activeSmoothingGroup = 0;
+            } else if (group == "on") {
+                activeSmoothingGroup = 1;
+            } else {
+                int groupId = 0;
+                if (!parseInteger(group, groupId) || groupId <= 0) {
+                    error = "smoothing group must be off or a positive integer at line "
+                          + std::to_string(lineNumber);
+                    model = {};
+                    return false;
+                }
+                activeSmoothingGroup = static_cast<std::uint32_t>(groupId);
+            }
         } else if (record == "f") {
             std::vector<FaceIndex> face;
             std::string token;
@@ -420,7 +470,8 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
             }
 
             std::vector<TriangleCorners> triangles;
-            if (!triangulateFace(face, positions, triangles)) {
+            Vec3d areaNormal{};
+            if (!triangulateFace(face, positions, triangles, areaNormal)) {
                 error = "face is degenerate, non-planar, self-intersecting or cannot be triangulated at line "
                       + std::to_string(lineNumber);
                 model = {};
@@ -434,50 +485,94 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
             }
             expandedVertexCount += verticesForFace;
 
-            if (model.submeshes.empty()
-                    || model.submeshes.back().materialName != activeMaterial) {
-                if (model.submeshes.size() >= kMaximumSubmeshes) {
+            if (parsedSubmeshes.empty()
+                    || parsedSubmeshes.back().materialName != activeMaterial) {
+                if (parsedSubmeshes.size() >= kMaximumSubmeshes) {
                     error = "OBJ contains too many material submeshes";
                     model = {};
                     return false;
                 }
-                model.submeshes.push_back(ObjSubmesh{});
-                model.submeshes.back().materialName = activeMaterial;
+                parsedSubmeshes.push_back(ParsedSubmesh{});
+                parsedSubmeshes.back().materialName = activeMaterial;
             }
-            std::vector<MeshVertex>& vertices = model.submeshes.back().vertices;
+            ParsedFace parsedFace;
+            parsedFace.corners = std::move(face);
+            parsedFace.triangles = std::move(triangles);
+            parsedFace.areaNormal = areaNormal;
+            parsedFace.flatNormal = normalized(areaNormal);
+            parsedFace.smoothingGroup = activeSmoothingGroup;
+            parsedSubmeshes.back().faces.push_back(std::move(parsedFace));
+        }
+    }
 
-            for (const TriangleCorners& corners : triangles) {
-                const std::array<FaceIndex, 3> triangle{
-                        face[corners[0]], face[corners[1]], face[corners[2]]};
-                const Vec3 edgeA = subtract(positions[triangle[1].position],
-                                            positions[triangle[0].position]);
-                const Vec3 edgeB = subtract(positions[triangle[2].position],
-                                            positions[triangle[0].position]);
-                const Vec3 generatedNormal = normalized(cross(edgeA, edgeB));
+    if (parsedSubmeshes.empty()) {
+        error = "OBJ contains no valid triangle faces";
+        return false;
+    }
 
-                for (const FaceIndex& index : triangle) {
-                    MeshVertex vertex{};
-                    const Vec3& position = positions[index.position];
-                    const Vec3& normal = index.hasNormal ? normals[index.normal] : generatedNormal;
-                    vertex.position[0] = position[0];
-                    vertex.position[1] = position[1];
-                    vertex.position[2] = position[2];
-                    vertex.normal[0] = normal[0];
-                    vertex.normal[1] = normal[1];
-                    vertex.normal[2] = normal[2];
-                    if (index.hasTexcoord) {
-                        vertex.uv[0] = texcoords[index.texcoord][0];
-                        vertex.uv[1] = texcoords[index.texcoord][1];
+    std::unordered_map<std::uint64_t, Vec3d> smoothNormals;
+    for (const ParsedSubmesh& submesh : parsedSubmeshes) {
+        for (const ParsedFace& face : submesh.faces) {
+            if (face.smoothingGroup == 0) continue;
+            for (std::size_t i = 0; i < face.corners.size(); ++i) {
+                const FaceIndex& corner = face.corners[i];
+                if (corner.hasNormal) continue;
+                bool alreadyAccumulated = false;
+                for (std::size_t previous = 0; previous < i; ++previous) {
+                    if (face.corners[previous].position == corner.position
+                            && !face.corners[previous].hasNormal) {
+                        alreadyAccumulated = true;
+                        break;
                     }
-                    vertices.push_back(vertex);
+                }
+                if (alreadyAccumulated) continue;
+                const std::uint64_t key = (static_cast<std::uint64_t>(corner.position) << 32U)
+                        | face.smoothingGroup;
+                Vec3d& sum = smoothNormals[key];
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    sum[axis] += face.areaNormal[axis];
                 }
             }
         }
     }
 
-    if (model.submeshes.empty()) {
-        error = "OBJ contains no valid triangle faces";
-        return false;
+    model.submeshes.reserve(parsedSubmeshes.size());
+    for (const ParsedSubmesh& parsedSubmesh : parsedSubmeshes) {
+        ObjSubmesh submesh;
+        submesh.materialName = parsedSubmesh.materialName;
+        for (const ParsedFace& face : parsedSubmesh.faces) {
+            for (const TriangleCorners& triangle : face.triangles) {
+                for (std::size_t cornerNumber : triangle) {
+                    const FaceIndex& index = face.corners[cornerNumber];
+                    MeshVertex vertex{};
+                    const Vec3& position = positions[index.position];
+                    Vec3 generatedNormal = face.flatNormal;
+                    if (index.hasNormal) {
+                        generatedNormal = normals[index.normal];
+                    } else if (face.smoothingGroup != 0) {
+                        const std::uint64_t key =
+                                (static_cast<std::uint64_t>(index.position) << 32U)
+                                | face.smoothingGroup;
+                        const auto found = smoothNormals.find(key);
+                        if (found != smoothNormals.end()) {
+                            generatedNormal = normalized(found->second);
+                        }
+                    }
+                    vertex.position[0] = position[0];
+                    vertex.position[1] = position[1];
+                    vertex.position[2] = position[2];
+                    vertex.normal[0] = generatedNormal[0];
+                    vertex.normal[1] = generatedNormal[1];
+                    vertex.normal[2] = generatedNormal[2];
+                    if (index.hasTexcoord) {
+                        vertex.uv[0] = texcoords[index.texcoord][0];
+                        vertex.uv[1] = texcoords[index.texcoord][1];
+                    }
+                    submesh.vertices.push_back(vertex);
+                }
+            }
+        }
+        model.submeshes.push_back(std::move(submesh));
     }
     return true;
 }

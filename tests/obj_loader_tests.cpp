@@ -115,6 +115,98 @@ void testConcavePolygonEarClippingAndWinding() {
            "triangulation preserves the original clockwise winding");
 }
 
+void testSmoothingGroupsGenerateAreaWeightedVertexNormals() {
+    constexpr char smooth[] = R"OBJ(
+        v 0 0 0
+        v 1 0 0
+        v 0 1 0
+        v 0 0 1
+        s on
+        f 1 2 3
+        s 01
+        f 1 4 2
+    )OBJ";
+    constexpr char flat[] = R"OBJ(
+        v 0 0 0
+        v 1 0 0
+        v 0 1 0
+        v 0 0 1
+        s off
+        f 1 2 3
+        s 0
+        f 1 4 2
+    )OBJ";
+    std::vector<nuby::MeshVertex> vertices;
+    std::string error;
+    expect(nuby::parseObj(smooth, vertices, error),
+           "on and numeric OBJ smoothing groups parse");
+    if (vertices.size() == 6) {
+        const float diagonal = std::sqrt(0.5f);
+        for (std::size_t index : {0U, 3U}) {
+            expect(near(vertices[index].normal[0], 0.0f)
+                           && near(vertices[index].normal[1], diagonal)
+                           && near(vertices[index].normal[2], diagonal),
+                   "shared positions in one smoothing group receive averaged normals");
+        }
+    }
+
+    expect(nuby::parseObj(flat, vertices, error), "s off and s 0 retain flat shading");
+    if (vertices.size() == 6) {
+        expect(near(vertices[0].normal[1], 0.0f) && near(vertices[0].normal[2], 1.0f)
+                       && near(vertices[3].normal[1], 1.0f)
+                       && near(vertices[3].normal[2], 0.0f),
+               "disabled smoothing uses independent per-face normals");
+    }
+
+    constexpr char separateGroups[] = R"OBJ(
+        v 0 0 0
+        v 1 0 0
+        v 0 1 0
+        v 0 0 1
+        s 1
+        f 1 2 3
+        s 2
+        f 1 4 2
+    )OBJ";
+    expect(nuby::parseObj(separateGroups, vertices, error),
+           "different smoothing groups remain independently generated");
+    if (vertices.size() == 6) {
+        expect(near(vertices[0].normal[2], 1.0f)
+                       && near(vertices[3].normal[1], 1.0f),
+               "separate group IDs do not blend neighboring face normals");
+    }
+
+    constexpr char explicitNormal[] = R"OBJ(
+        v 0 0 0
+        v 1 0 0
+        v 0 1 0
+        v 0 0 1
+        vn 1 0 0
+        s 1
+        f 1//1 2 3
+        f 1 4 2
+    )OBJ";
+    expect(nuby::parseObj(explicitNormal, vertices, error),
+           "authored normals coexist with generated smoothing normals");
+    if (vertices.size() == 6) {
+        expect(near(vertices[0].normal[0], 1.0f)
+                       && near(vertices[0].normal[1], 0.0f)
+                       && near(vertices[0].normal[2], 0.0f),
+               "explicit OBJ normal is preserved instead of smoothed over");
+    }
+}
+
+void testInvalidSmoothingGroupsAreRejected() {
+    std::vector<nuby::MeshVertex> vertices;
+    std::string error;
+    expect(!nuby::parseObj("s 0 extra\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+                           vertices, error),
+           "smoothing records with extra fields are rejected");
+    expect(!nuby::parseObj("s smooth\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+                           vertices, error),
+           "nonnumeric smoothing group identifiers are rejected");
+}
+
 void testInvalidPolygonBoundariesAreRejected() {
     constexpr char degenerate[] = "v 0 0 0\nv 1 1 0\nv 2 2 0\nf 1 2 3\n";
     constexpr char selfIntersecting[] =
@@ -223,6 +315,8 @@ int main() {
     testQuadTriangulationAndAttributes();
     testNegativeIndicesAndGeneratedNormals();
     testConcavePolygonEarClippingAndWinding();
+    testSmoothingGroupsGenerateAreaWeightedVertexNormals();
+    testInvalidSmoothingGroupsAreRejected();
     testInvalidPolygonBoundariesAreRejected();
     testInvalidIndexIsRejected();
     testMalformedNumbersAndUnsupportedLibraryPathsAreRejected();
