@@ -48,6 +48,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native void nativeCreate(android.content.res.AssetManager assets);
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
+    private static native boolean nativeUsingFallbackRenderer();
     private static native int nativeSampleAssetStatus();
     private static native void nativeSetDemoMode(int mode);
     private static native void nativeAdventureMove(float horizontal, float forward);
@@ -277,7 +278,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     @Override
     public void onSurfaceChanged(GL10 gl, int width, int height) {
         nativeResize(width, height);
-        shadowStatus = nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
+        shadowStatus = nativeUsingFallbackRenderer() ? "BASIC RENDERER"
+                : nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
         postStatus = nativePostProcessingEnabled() ? "BLOOM ON" : "BLOOM OFF";
         switch (nativeSampleAssetStatus()) {
             case 1: meshStatus = "MESH FALLBACK"; break;

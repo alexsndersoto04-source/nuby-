@@ -28,6 +28,11 @@ Java_com_nuby_engine_MainActivity_nativePostProcessingEnabled(JNIEnv*, jclass) {
     return gRenderer && gRenderer->postProcessingEnabled() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeUsingFallbackRenderer(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->usingFallbackRenderer() ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_nuby_engine_MainActivity_nativeSampleAssetStatus(JNIEnv*, jclass) {
     return gRenderer ? static_cast<jint>(gRenderer->sampleAssetStatus()) : 0;

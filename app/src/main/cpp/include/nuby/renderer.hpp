@@ -36,6 +36,7 @@ public:
     std::string gameStatusText() const;
     bool shadowsEnabled() const { return shadowsAvailable_; }
     bool postProcessingEnabled() const { return postProcessingAvailable_; }
+    bool usingFallbackRenderer() const { return fallbackRenderer_; }
     // 0 = sample OBJ is not referenced by the active scene, 1 = fallback,
     // 2 = mesh loaded, 3 = mesh, MTL material and referenced maps loaded.
     int sampleAssetStatus() const;
@@ -166,6 +167,7 @@ private:
     bool shadowsAvailable_ = false;
     bool shadowCascadesValid_ = false;
     bool postProcessingAvailable_ = false;
+    bool fallbackRenderer_ = false;
     int bloomWidth_ = 1;
     int bloomHeight_ = 1;
     int postWidth_ = 0;

@@ -264,7 +264,15 @@ float shadowAmount(vec3 normal, vec3 lightDirection) {
     if (uShadowsEnabled == 0 || vViewDepth > uCascadeFarSplits.z) return 0.0;
     int cascade = vViewDepth <= uCascadeFarSplits.x ? 0
             : (vViewDepth <= uCascadeFarSplits.y ? 1 : 2);
-    vec4 lightPosition = uLightViewProjection[cascade] * vec4(vWorldPosition, 1.0);
+    vec4 worldPosition = vec4(vWorldPosition, 1.0);
+    vec4 lightPosition;
+    if (cascade == 0) {
+        lightPosition = uLightViewProjection[0] * worldPosition;
+    } else if (cascade == 1) {
+        lightPosition = uLightViewProjection[1] * worldPosition;
+    } else {
+        lightPosition = uLightViewProjection[2] * worldPosition;
+    }
     vec3 projected = lightPosition.xyz / max(lightPosition.w, 0.0001);
     projected = projected * 0.5 + 0.5;
     if (projected.x < 0.0 || projected.x > 1.0 ||
@@ -449,6 +457,38 @@ void main() {
           / max(color * (2.43 * color + 0.59) + 0.14, vec3(0.001));
     color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
     fragmentColor = vec4(color, opacity);
+}
+)";
+
+// Keep the scene visible if a device driver rejects the advanced PBR/CSM shader.
+constexpr const char* kFallbackVertexShader = R"(
+#version 300 es
+precision highp float;
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aNormal;
+uniform mat4 uViewProjection;
+uniform mat4 uModel;
+out vec3 vFallbackNormal;
+void main() {
+    vec4 worldPosition = uModel * vec4(aPosition, 1.0);
+    vFallbackNormal = normalize(mat3(uModel) * aNormal);
+    gl_Position = uViewProjection * worldPosition;
+}
+)";
+
+constexpr const char* kFallbackFragmentShader = R"(
+#version 300 es
+precision highp float;
+in vec3 vFallbackNormal;
+uniform vec3 uColor;
+uniform vec3 uEmission;
+uniform float uOpacity;
+out vec4 fragmentColor;
+void main() {
+    vec3 normal = normalize(vFallbackNormal);
+    vec3 lightDirection = normalize(vec3(-0.45, 0.82, 0.34));
+    float diffuse = 0.28 + 0.72 * max(dot(normal, lightDirection), 0.0);
+    fragmentColor = vec4(uColor * diffuse + uEmission, clamp(uOpacity, 0.0, 1.0));
 }
 )";
 
@@ -1122,6 +1162,7 @@ const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
 }
 
 void Renderer::initializeShadowMap() {
+    if (fallbackRenderer_) return;
     shadowProgram_ = createProgram(kShadowVertexShader, kShadowFragmentShader);
     if (shadowProgram_ == 0) {
         __android_log_print(ANDROID_LOG_WARN, kLogTag,
@@ -1227,6 +1268,7 @@ void Renderer::renderShadowMaps() {
 }
 
 void Renderer::initializePostProcessing() {
+    if (fallbackRenderer_) return;
     bloomExtractProgram_ = createProgram(kFullscreenVertexShader, kBloomExtractFragmentShader);
     blurProgram_ = createProgram(kFullscreenVertexShader, kBlurFragmentShader);
     compositeProgram_ = createProgram(kFullscreenVertexShader, kCompositeFragmentShader);
@@ -1403,9 +1445,20 @@ void Renderer::initialize(AAssetManager* assetManager) {
     baseMeshesInitialized_ = false;
     importedMeshes_.clear();
     textures_.clear();
+    fallbackRenderer_ = false;
+    shadowsAvailable_ = false;
+    shadowCascadesValid_ = false;
+    postProcessingAvailable_ = false;
     program_ = createProgram(kVertexShader, kFragmentShader);
     if (program_ == 0) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Renderer initialization failed: shader program unavailable");
+        fallbackRenderer_ = true;
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "Advanced PBR shader unavailable; trying compatibility renderer");
+        program_ = createProgram(kFallbackVertexShader, kFallbackFragmentShader);
+    }
+    if (program_ == 0) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "Renderer initialization failed: no compatible shader program");
         return;
     }
 
