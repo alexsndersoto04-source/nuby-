@@ -22,6 +22,10 @@ El workflow `.github/workflows/android.yml` ejecuta las pruebas nativas y compil
 
 La compilación está configurada para `arm64-v8a` y `armeabi-v7a`, con Android API mínima 24 y OpenGL ES 3.0.
 
+## Proyectos de juego independientes (base del formato)
+
+El motor ya incluye un lector/escritor nativo de manifiestos `NUBY_PROJECT 1`: guarda nombre visible, identificador Android y escena inicial; el cargador resuelve la escena mediante un lector de recursos inyectable, verifica rutas relativas para impedir salir del paquete y reemplaza proyecto/escena de forma transaccional. Tiene pruebas nativas. **Esto todavía no es el editor ni genera APKs separados**: falta conectarlo al arranque del runtime, al empaquetado de recursos y al workflow de compilación por proyecto. La intención es que cada APK final contenga el runtime necesario y solo el contenido del juego elegido, no el laboratorio ni los prototipos incluidos en esta app de desarrollo.
+
 ## Compilación local (si hay un entorno Android disponible)
 
 Se requiere JDK 17, Android SDK, NDK `27.2.12479018`, CMake `3.22.1` y Gradle `8.9`:

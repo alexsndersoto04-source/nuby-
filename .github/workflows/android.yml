@@ -58,6 +58,14 @@ jobs:
           tests/adventure_game_tests.cpp -o /tmp/nuby-adventure-game-tests
           && /tmp/nuby-adventure-game-tests
 
+      - name: Compile and run standalone project tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/scene_io.cpp
+          app/src/main/cpp/src/game_project.cpp tests/game_project_tests.cpp
+          -o /tmp/nuby-game-project-tests && /tmp/nuby-game-project-tests
+
   build-debug-apk:
     name: Build native Android APK
     needs: scene-tests
