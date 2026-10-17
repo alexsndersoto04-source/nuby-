@@ -39,6 +39,22 @@ Java_com_nuby_engine_MainActivity_nativeSetGameMode(JNIEnv*, jclass, jboolean en
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativeSetDemoMode(JNIEnv*, jclass, jint mode) {
+    if (gRenderer) gRenderer->setDemoMode(mode);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativeAdventureMove(
+        JNIEnv*, jclass, jfloat horizontal, jfloat forward) {
+    if (gRenderer) gRenderer->setAdventureMoveInput(horizontal, forward);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativeAdventureJump(JNIEnv*, jclass) {
+    if (gRenderer) gRenderer->jumpAdventureCharacter();
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeRestartGame(JNIEnv*, jclass) {
     if (gRenderer) gRenderer->restartGame();
 }

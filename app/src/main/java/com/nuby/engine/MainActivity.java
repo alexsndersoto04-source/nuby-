@@ -30,7 +30,11 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private TextView gameStatus;
     private TextView modeButton;
     private TextView restartButton;
+    private TextView jumpButton;
+    private AdventureJoystickView adventureJoystick;
     private volatile boolean gameMode = false;
+    private volatile boolean adventureMode = false;
+    private volatile int activeDemoMode = 0;
     private volatile boolean gameFinished = false;
     private float density;
     private long lastFrameNanos = 0L;
@@ -45,7 +49,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
     private static native boolean nativeSampleMeshLoaded();
-    private static native void nativeSetGameMode(boolean enabled);
+    private static native void nativeSetDemoMode(int mode);
+    private static native void nativeAdventureMove(float horizontal, float forward);
+    private static native void nativeAdventureJump();
     private static native void nativeRestartGame();
     private static native String nativeGameStatus();
     private static native void nativeResize(int width, int height);
@@ -171,7 +177,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         restartButton.setVisibility(View.GONE);
         actions.addView(restartButton);
 
-        modeButton = label("START AETHER RUN", 10, 0xFFF2F5FF, true);
+        modeButton = label("START ADVENTURE", 10, 0xFFF2F5FF, true);
         modeButton.setGravity(Gravity.CENTER);
         modeButton.setPadding(dp(16), dp(10), dp(16), dp(10));
         modeButton.setBackground(pill(0xD826746F, dp(18)));
@@ -189,14 +195,42 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         controlsParams.bottomMargin = dp(10);
         root.addView(controls, controlsParams);
 
+        adventureJoystick = new AdventureJoystickView(this, (horizontal, forward) ->
+                surface.queueEvent(() -> nativeAdventureMove(horizontal, forward)));
+        adventureJoystick.setVisibility(View.GONE);
+        FrameLayout.LayoutParams joystickParams = new FrameLayout.LayoutParams(
+                dp(148), dp(148), Gravity.BOTTOM | Gravity.START);
+        joystickParams.setMargins(dp(18), 0, 0, dp(70));
+        root.addView(adventureJoystick, joystickParams);
+
+        jumpButton = label("JUMP", 11, 0xFFFFF4D5, true);
+        jumpButton.setGravity(Gravity.CENTER);
+        jumpButton.setPadding(dp(19), dp(16), dp(19), dp(16));
+        jumpButton.setBackground(pill(0xD8A85E28, dp(30)));
+        jumpButton.setContentDescription("Saltar");
+        jumpButton.setVisibility(View.GONE);
+        FrameLayout.LayoutParams jumpParams = new FrameLayout.LayoutParams(
+                dp(88), dp(64), Gravity.BOTTOM | Gravity.END);
+        jumpParams.setMargins(0, 0, dp(22), dp(112));
+        root.addView(jumpButton, jumpParams);
+        jumpButton.setOnClickListener(view ->
+                surface.queueEvent(MainActivity::nativeAdventureJump));
+
         modeButton.setOnClickListener(view -> {
-            gameMode = !gameMode;
+            activeDemoMode = activeDemoMode == 0 ? 2 : activeDemoMode == 2 ? 1 : 0;
+            gameMode = activeDemoMode != 0;
+            adventureMode = activeDemoMode == 2;
             gameFinished = false;
-            final boolean startGame = gameMode;
-            surface.queueEvent(() -> nativeSetGameMode(startGame));
-            hint.setText(startGame ? "SWIPE LEFT / RIGHT TO MOVE" : "DRAG TO ORBIT");
-            modeButton.setText(startGame ? "ENGINE LAB" : "START AETHER RUN");
-            gameStatus.setVisibility(startGame ? View.VISIBLE : View.GONE);
+            final int selectedMode = activeDemoMode;
+            surface.queueEvent(() -> nativeSetDemoMode(selectedMode));
+            hint.setText(activeDemoMode == 0 ? "DRAG TO ORBIT"
+                    : activeDemoMode == 1 ? "SWIPE LEFT / RIGHT TO MOVE"
+                    : "LEFT: MOVE  ·  RIGHT: LOOK");
+            modeButton.setText(activeDemoMode == 0 ? "START ADVENTURE"
+                    : activeDemoMode == 1 ? "ENGINE LAB" : "AETHER RUN");
+            gameStatus.setVisibility(gameMode ? View.VISIBLE : View.GONE);
+            adventureJoystick.setVisibility(adventureMode ? View.VISIBLE : View.GONE);
+            jumpButton.setVisibility(adventureMode ? View.VISIBLE : View.GONE);
             restartButton.setVisibility(View.GONE);
         });
         restartButton.setOnClickListener(view -> {
@@ -272,9 +306,10 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                     gameStatus.setText(currentGameStatus);
                     gameStatus.setVisibility(View.VISIBLE);
                     boolean finished = currentGameStatus.contains("RUN OVER")
-                            || currentGameStatus.contains("COMPLETE");
+                            || currentGameStatus.contains("COMPLET");
                     if (finished != gameFinished) {
                         gameFinished = finished;
+                        restartButton.setText(adventureMode ? "RESTART ADVENTURE" : "RESTART RUN");
                         restartButton.setVisibility(finished ? View.VISIBLE : View.GONE);
                     }
                 }

@@ -689,22 +689,43 @@ void Renderer::buildScene() {
 }
 
 void Renderer::setGameMode(bool enabled) {
-    if (gameMode_ == enabled) return;
-    gameMode_ = enabled;
-    gameSwipeDistance_ = 0.0f;
-    if (gameMode_) sampleGame_.start(scene_);
-    else buildScene();
+    setDemoMode(enabled ? 1 : 0);
 }
 
-void Renderer::restartGame() {
+void Renderer::setDemoMode(int mode) {
+    const int safeMode = std::clamp(mode, 0, 2);
+    if (demoMode_ == safeMode) return;
+    demoMode_ = safeMode;
+    gameMode_ = demoMode_ == 1;
+    adventureMode_ = demoMode_ == 2;
+    gameSwipeDistance_ = 0.0f;
     if (gameMode_) {
-        gameSwipeDistance_ = 0.0f;
         sampleGame_.start(scene_);
+    } else if (adventureMode_) {
+        adventureGame_.start(scene_);
+    } else {
+        buildScene();
     }
 }
 
+void Renderer::setAdventureMoveInput(float horizontal, float forward) {
+    if (adventureMode_) adventureGame_.setMoveInput(scene_, horizontal, forward);
+}
+
+void Renderer::jumpAdventureCharacter() {
+    if (adventureMode_) adventureGame_.jump(scene_);
+}
+
+void Renderer::restartGame() {
+    gameSwipeDistance_ = 0.0f;
+    if (gameMode_) sampleGame_.start(scene_);
+    else if (adventureMode_) adventureGame_.start(scene_);
+}
+
 std::string Renderer::gameStatusText() const {
-    return gameMode_ ? sampleGame_.statusText() : std::string{};
+    if (gameMode_) return sampleGame_.statusText();
+    if (adventureMode_) return adventureGame_.statusText();
+    return {};
 }
 
 void Renderer::loadSceneAssets() {
@@ -1064,6 +1085,7 @@ void Renderer::render(float deltaSeconds) {
 
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
     if (gameMode_) sampleGame_.update(scene_, dt);
+    else if (adventureMode_) adventureGame_.update(scene_, dt);
     else scene_.update(dt);
     scene_.collectPointLights(kMaxPointLights, pointLights_);
     pointLightPositionRanges_.fill(0.0f);

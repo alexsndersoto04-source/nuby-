@@ -50,6 +50,14 @@ jobs:
           tests/sample_game_tests.cpp -o /tmp/nuby-sample-game-tests
           && /tmp/nuby-sample-game-tests
 
+      - name: Compile and run adventure game tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/adventure_game.cpp
+          tests/adventure_game_tests.cpp -o /tmp/nuby-adventure-game-tests
+          && /tmp/nuby-adventure-game-tests
+
   build-debug-apk:
     name: Build native Android APK
     needs: scene-tests

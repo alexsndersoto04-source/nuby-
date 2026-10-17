@@ -9,6 +9,7 @@
 #include <GLES3/gl3.h>
 #include <android/asset_manager.h>
 
+#include "nuby/adventure_game.hpp"
 #include "nuby/obj_loader.hpp"
 #include "nuby/sample_game.hpp"
 #include "nuby/scene.hpp"
@@ -25,6 +26,9 @@ public:
     void render(float deltaSeconds);
     void touch(int action, float x, float y, float pinchDistance, int pointerCount);
     void setGameMode(bool enabled);
+    void setDemoMode(int mode);
+    void setAdventureMoveInput(float horizontal, float forward);
+    void jumpAdventureCharacter();
     void restartGame();
     std::string gameStatusText() const;
     bool shadowsEnabled() const { return shadowsAvailable_; }
@@ -124,7 +128,10 @@ private:
     Mesh ground_{};
     Scene scene_;
     SampleGame sampleGame_;
+    AdventureGame adventureGame_;
+    int demoMode_ = 0;
     bool gameMode_ = false;
+    bool adventureMode_ = false;
     bool baseMeshesInitialized_ = false;
     int width_ = 1;
     int height_ = 1;
