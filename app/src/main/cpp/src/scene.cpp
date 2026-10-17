@@ -862,8 +862,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
         }
 
         // Continuous collision detection for moving spheres against static
-        // sphere/OBB colliders and the world floor. Discrete contacts remain the
-        // general path for slower motion and for pairs of moving bodies.
+        // sphere/OBB colliders and for fast sphere pairs. Discrete contacts remain
+        // the general path for slower motion and for boxes.
         for (std::size_t movingIndex = 0; movingIndex < entities_.size(); ++movingIndex) {
             Entity& moving = entities_[movingIndex];
             const float movingInverseMass = moving.rigidbody.enabled
@@ -962,6 +962,100 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 const float remainingTime = dt * (1.0f - earliestTime);
                 for (std::size_t axis = 0; axis < 3; ++axis) {
                     moving.transform.position[axis] += moving.rigidbody.velocity[axis]
+                            * remainingTime;
+                }
+            }
+        }
+
+        for (std::size_t firstIndex = 0; firstIndex < entities_.size(); ++firstIndex) {
+            Entity& first = entities_[firstIndex];
+            CollisionShape firstShape;
+            if (!collisionShape(first, firstShape) || !firstShape.sphere
+                    || !first.rigidbody.enabled || !std::isfinite(first.rigidbody.mass)
+                    || first.rigidbody.mass < 1.0e-6f) continue;
+            const float firstInverseMass = 1.0f / first.rigidbody.mass;
+            const Vec3 firstStart = previousPositions[firstIndex];
+            Vec3 firstDisplacement{first.transform.position[0] - firstStart[0],
+                    first.transform.position[1] - firstStart[1],
+                    first.transform.position[2] - firstStart[2]};
+            for (std::size_t secondIndex = firstIndex + 1;
+                    secondIndex < entities_.size(); ++secondIndex) {
+                Entity& second = entities_[secondIndex];
+                CollisionShape secondShape;
+                if (!collisionShape(second, secondShape) || !secondShape.sphere
+                        || !second.rigidbody.enabled || !std::isfinite(second.rigidbody.mass)
+                        || second.rigidbody.mass < 1.0e-6f) continue;
+                const float secondInverseMass = 1.0f / second.rigidbody.mass;
+                firstDisplacement = {first.transform.position[0] - firstStart[0],
+                        first.transform.position[1] - firstStart[1],
+                        first.transform.position[2] - firstStart[2]};
+                const Vec3 secondStart = previousPositions[secondIndex];
+                const Vec3 secondDisplacement{second.transform.position[0] - secondStart[0],
+                        second.transform.position[1] - secondStart[1],
+                        second.transform.position[2] - secondStart[2]};
+                const Vec3 relativeDisplacement{
+                        firstDisplacement[0] - secondDisplacement[0],
+                        firstDisplacement[1] - secondDisplacement[1],
+                        firstDisplacement[2] - secondDisplacement[2]};
+                const float combinedRadius = firstShape.radius + secondShape.radius;
+                const float relativeTravelSquared = dot(relativeDisplacement,
+                        relativeDisplacement);
+                if (!std::isfinite(relativeTravelSquared)
+                        || relativeTravelSquared <= combinedRadius * combinedRadius * 0.25f) {
+                    continue;
+                }
+                const Vec3 relativeStart{firstStart[0] - secondStart[0],
+                        firstStart[1] - secondStart[1], firstStart[2] - secondStart[2]};
+                const Vec3 relativeEnd{
+                        first.transform.position[0] - second.transform.position[0],
+                        first.transform.position[1] - second.transform.position[1],
+                        first.transform.position[2] - second.transform.position[2]};
+                bool sweptBoundsOverlap = true;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    if (std::min(relativeStart[axis], relativeEnd[axis]) > combinedRadius
+                            || std::max(relativeStart[axis], relativeEnd[axis]) < -combinedRadius) {
+                        sweptBoundsOverlap = false;
+                        break;
+                    }
+                }
+                if (!sweptBoundsOverlap) continue;
+                CollisionShape target = secondShape;
+                target.center = secondStart;
+                float timeOfImpact = 0.0f;
+                Vec3 normal{0.0f, 0.0f, 0.0f};
+                if (!sweepSphereAgainstShape(firstStart, relativeDisplacement,
+                        firstShape.radius, target, timeOfImpact, normal)) continue;
+                if (firstShape.trigger || secondShape.trigger) {
+                    currentTriggerPairs.push_back(triggerPairKey(first.id, second.id));
+                    continue;
+                }
+                const float inverseMassSum = firstInverseMass + secondInverseMass;
+                const float normalSpeed =
+                        (second.rigidbody.velocity[0] - first.rigidbody.velocity[0]) * normal[0]
+                        + (second.rigidbody.velocity[1] - first.rigidbody.velocity[1]) * normal[1]
+                        + (second.rigidbody.velocity[2] - first.rigidbody.velocity[2]) * normal[2];
+                if (normalSpeed >= 0.0f || inverseMassSum <= 0.0f) continue;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    first.transform.position[axis] = firstStart[axis]
+                            + firstDisplacement[axis] * timeOfImpact;
+                    second.transform.position[axis] = secondStart[axis]
+                            + secondDisplacement[axis] * timeOfImpact;
+                }
+                const float restitution = std::clamp(std::min(firstShape.restitution,
+                        secondShape.restitution), 0.0f, 1.0f);
+                const float impulseMagnitude = -(1.0f + restitution) * normalSpeed
+                        / inverseMassSum;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    first.rigidbody.velocity[axis] -= normal[axis]
+                            * impulseMagnitude * firstInverseMass;
+                    second.rigidbody.velocity[axis] += normal[axis]
+                            * impulseMagnitude * secondInverseMass;
+                }
+                const float remainingTime = dt * (1.0f - timeOfImpact);
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    first.transform.position[axis] += first.rigidbody.velocity[axis]
+                            * remainingTime;
+                    second.transform.position[axis] += second.rigidbody.velocity[axis]
                             * remainingTime;
                 }
             }

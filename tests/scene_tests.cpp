@@ -657,6 +657,75 @@ void testContinuousSphereTriggerReportsTransientCrossing() {
     expect(sawExit, "transient swept trigger overlap emits its exit on the following step");
 }
 
+void testContinuousCollisionBetweenDynamicSpheres() {
+    nuby::Scene collisionScene;
+    collisionScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t firstId = collisionScene.create(
+            "fast sphere A", nuby::Primitive::Sphere).id;
+    const std::uint32_t secondId = collisionScene.create(
+            "fast sphere B", nuby::Primitive::Sphere).id;
+    nuby::Entity* first = collisionScene.find(firstId);
+    nuby::Entity* second = collisionScene.find(secondId);
+    first->transform.position = {-2.0f, 0.0f, 0.0f};
+    first->rigidbody.enabled = true;
+    first->rigidbody.velocity[0] = 300.0f;
+    first->rigidbody.linearDamping = 0.0f;
+    first->sphereCollider.enabled = true;
+    first->sphereCollider.radius = 0.25f;
+    first->sphereCollider.restitution = 0.0f;
+    second->transform.position = {2.0f, 0.0f, 0.0f};
+    second->rigidbody.enabled = true;
+    second->rigidbody.velocity[0] = -300.0f;
+    second->rigidbody.linearDamping = 0.0f;
+    second->sphereCollider.enabled = true;
+    second->sphereCollider.radius = 0.25f;
+    second->sphereCollider.restitution = 0.0f;
+
+    collisionScene.update(1.0f / 60.0f);
+    expect(first->transform.position[0] < -0.24f
+                   && second->transform.position[0] > 0.24f
+                   && std::fabs(first->rigidbody.velocity[0]) < 0.01f
+                   && std::fabs(second->rigidbody.velocity[0]) < 0.01f,
+           "continuous sphere-sphere collision prevents two dynamic bodies tunneling");
+
+    nuby::Scene triggerScene;
+    triggerScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t sensorId = triggerScene.create(
+            "moving sensor", nuby::Primitive::Sphere).id;
+    const std::uint32_t moverId = triggerScene.create(
+            "moving projectile", nuby::Primitive::Sphere).id;
+    nuby::Entity* sensor = triggerScene.find(sensorId);
+    nuby::Entity* mover = triggerScene.find(moverId);
+    sensor->rigidbody.enabled = true;
+    sensor->rigidbody.linearDamping = 0.0f;
+    sensor->sphereCollider.enabled = true;
+    sensor->sphereCollider.radius = 0.25f;
+    sensor->sphereCollider.trigger = true;
+    mover->transform.position = {-2.0f, 0.0f, 0.0f};
+    mover->rigidbody.enabled = true;
+    mover->rigidbody.velocity[0] = 300.0f;
+    mover->rigidbody.linearDamping = 0.0f;
+    mover->sphereCollider.enabled = true;
+    mover->sphereCollider.radius = 0.25f;
+
+    std::vector<nuby::PhysicsEvent> events;
+    triggerScene.update(1.0f / 60.0f);
+    triggerScene.consumePhysicsEvents(events);
+    bool sawEnter = false;
+    for (const nuby::PhysicsEvent& event : events) {
+        if (event.type == nuby::PhysicsEventType::TriggerEnter) sawEnter = true;
+    }
+    expect(sawEnter && near(mover->transform.position[0], 3.0f, 0.01f),
+           "continuous moving-sphere trigger detects a transient crossing");
+    triggerScene.update(1.0f / 60.0f);
+    triggerScene.consumePhysicsEvents(events);
+    bool sawExit = false;
+    for (const nuby::PhysicsEvent& event : events) {
+        if (event.type == nuby::PhysicsEventType::TriggerExit) sawExit = true;
+    }
+    expect(sawExit, "dynamic sphere trigger emits exit after its swept crossing");
+}
+
 void testContinuousSphereCollisionWithFloor() {
     nuby::Scene scene;
     scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
@@ -783,6 +852,7 @@ int main() {
     testMixedShapeTriggersReportTransitionsWithoutImpulses();
     testContinuousSphereCollisionPreventsTunneling();
     testContinuousSphereTriggerReportsTransientCrossing();
+    testContinuousCollisionBetweenDynamicSpheres();
     testContinuousSphereCollisionWithFloor();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
