@@ -35,10 +35,9 @@ public:
     std::string gameStatusText() const;
     bool shadowsEnabled() const { return shadowsAvailable_; }
     bool postProcessingEnabled() const { return postProcessingAvailable_; }
-    bool sampleMeshLoaded() const {
-        return importedMeshes_.find("meshes/orbital_shard.obj") != importedMeshes_.end();
-    }
-    bool sampleMaterialLoaded() const;
+    // 0 = sample OBJ is not referenced by the active scene, 1 = fallback,
+    // 2 = mesh loaded, 3 = mesh, MTL material and referenced maps loaded.
+    int sampleAssetStatus() const;
 
 private:
     struct Mesh {

@@ -995,9 +995,19 @@ void Renderer::loadSceneAssets() {
     }
 }
 
-bool Renderer::sampleMaterialLoaded() const {
+int Renderer::sampleAssetStatus() const {
+    bool sampleReferenced = false;
+    for (const Entity& entity : scene_.entities()) {
+        if (entity.visible && entity.primitive == Primitive::ImportedMesh
+                && entity.meshAsset == "meshes/orbital_shard.obj") {
+            sampleReferenced = true;
+            break;
+        }
+    }
+    if (!sampleReferenced) return 0;
+
     const auto imported = importedMeshes_.find("meshes/orbital_shard.obj");
-    if (imported == importedMeshes_.end()) return false;
+    if (imported == importedMeshes_.end() || imported->second.parts.empty()) return 1;
     for (const ImportedPart& part : imported->second.parts) {
         if (!part.hasMaterial) continue;
         const std::array<const std::string*, 6> paths{{
@@ -1015,9 +1025,9 @@ bool Renderer::sampleMaterialLoaded() const {
                 break;
             }
         }
-        if (texturesAvailable) return true;
+        if (texturesAvailable) return 3;
     }
-    return false;
+    return 2;
 }
 
 const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {

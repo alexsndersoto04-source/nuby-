@@ -48,8 +48,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native void nativeCreate(android.content.res.AssetManager assets);
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
-    private static native boolean nativeSampleMeshLoaded();
-    private static native boolean nativeSampleMaterialLoaded();
+    private static native int nativeSampleAssetStatus();
     private static native void nativeSetDemoMode(int mode);
     private static native void nativeAdventureMove(float horizontal, float forward);
     private static native void nativeAdventureJump();
@@ -280,9 +279,12 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         nativeResize(width, height);
         shadowStatus = nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
         postStatus = nativePostProcessingEnabled() ? "BLOOM ON" : "BLOOM OFF";
-        boolean sampleMeshLoaded = nativeSampleMeshLoaded();
-        meshStatus = !sampleMeshLoaded ? "MESH FALLBACK"
-                : nativeSampleMaterialLoaded() ? "OBJ+MTL ON" : "MESH ON";
+        switch (nativeSampleAssetStatus()) {
+            case 1: meshStatus = "MESH FALLBACK"; break;
+            case 2: meshStatus = "MESH ON"; break;
+            case 3: meshStatus = "OBJ+MTL ON"; break;
+            default: meshStatus = "OBJ N/A"; break;
+        }
     }
 
     @Override
