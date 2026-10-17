@@ -181,7 +181,8 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
         }
         if (current == nullptr) {
             if (record == "Kd" || record == "Ke" || record == "Ns" || record == "Pm"
-                    || record == "Pr" || record == "map_Kd" || record == "map_Kn"
+                    || record == "Pr" || record == "d" || record == "Tr"
+                    || record == "map_d" || record == "map_Kd" || record == "map_Kn"
                     || record == "norm" || record == "map_Pr" || record == "map_Pm"
                     || record == "map_AO") {
                 return fail(error, "MTL material property appears before newmtl");
@@ -215,6 +216,14 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
                 return fail(error, "MTL roughness factor is invalid");
             }
             currentHasExplicitRoughness = true;
+        } else if (record == "d" || record == "Tr") {
+            float transparency = 0.0f;
+            if (!readScalar(fields, transparency, 0.0f, 1.0f)) {
+                return fail(error, "MTL dissolve or transparency factor is invalid");
+            }
+            current->material.opacity = record == "d" ? transparency : 1.0f - transparency;
+        } else if (record == "map_d") {
+            return fail(error, "MTL opacity maps are not supported yet");
         } else if (record == "map_Kd" || record == "map_Kn" || record == "norm"
                 || record == "map_Pr" || record == "map_Pm" || record == "map_AO") {
             std::string rawPath;

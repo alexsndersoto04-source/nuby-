@@ -142,7 +142,9 @@ bool validEntity(const Entity& entity) {
     if (!finite3(entity.transform.position) || !finite3(entity.transform.rotation)
             || !finite3(entity.transform.scale) || !finite3(entity.material.color)
             || !finite3(entity.material.emission) || !finite(entity.material.metallic)
-            || !finite(entity.material.roughness) || !finite(entity.material.ambientOcclusion)
+            || !finite(entity.material.roughness) || !finite(entity.material.opacity)
+            || entity.material.opacity < 0.0f || entity.material.opacity > 1.0f
+            || !finite(entity.material.ambientOcclusion)
             || !finite3(entity.spin.radiansPerSecond) || !finite3(entity.orbit.center)
             || !finite(entity.orbit.radius) || !finite(entity.orbit.angularSpeed)
             || !finite(entity.orbit.phase) || !finite(entity.orbit.verticalAmplitude)
@@ -305,6 +307,7 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     output << ' ' << entity.material.metallic << ' ' << entity.material.roughness
            << ' ' << entity.material.ambientOcclusion << ' '
            << (entity.material.proceduralGrid ? 1 : 0) << ' '
+           << entity.material.opacity << ' '
            << std::quoted(entity.material.albedoTexture) << ' '
            << std::quoted(entity.material.normalTexture) << ' '
            << std::quoted(entity.material.metallicRoughnessTexture) << ' '
@@ -431,6 +434,12 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
         return fail(error, "Entity material is invalid");
     }
     entity.material.proceduralGrid = grid != 0;
+    if (version >= 9
+            && (!(input >> entity.material.opacity)
+                || !std::isfinite(entity.material.opacity)
+                || entity.material.opacity < 0.0f || entity.material.opacity > 1.0f)) {
+        return fail(error, "Entity material opacity is invalid");
+    }
     if (version >= 4
             && (!(input >> std::quoted(entity.material.albedoTexture)
                          >> std::quoted(entity.material.normalTexture)

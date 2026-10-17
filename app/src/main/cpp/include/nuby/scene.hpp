@@ -33,6 +33,7 @@ struct Material {
     std::array<float, 3> emission{0.0f, 0.0f, 0.0f};
     float metallic = 0.0f;
     float roughness = 0.58f;
+    float opacity = 1.0f;
     float ambientOcclusion = 1.0f;
     bool proceduralGrid = false;
     std::string albedoTexture;

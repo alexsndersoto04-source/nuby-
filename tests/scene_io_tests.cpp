@@ -29,7 +29,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 8") {
+        if (line == "NUBY_SCENE 9") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
             if (targetVersion < 7) continue;
@@ -60,6 +60,9 @@ std::string downgradeTextureSchema(const std::string& encoded,
                 material >> field;
                 legacy << ' ' << field;
             }
+            std::string opacity;
+            material >> opacity;
+            if (targetVersion >= 9) legacy << ' ' << opacity;
             for (unsigned int map = 0; map < textureMapsToKeep; ++map) {
                 std::string path;
                 material >> std::quoted(path);
@@ -102,6 +105,7 @@ nuby::Scene makeScene() {
     mesh.transform.rotation = {0.1f, 0.2f, 0.3f};
     mesh.transform.scale = {0.5f, 0.6f, 0.7f};
     mesh.material.roughness = 0.3f;
+    mesh.material.opacity = 0.42f;
     mesh.material.albedoTexture = "textures/hero diffuse.tga";
     mesh.material.normalTexture = "textures/hero normal.tga";
     mesh.material.metallicRoughnessTexture = "textures/hero metal-rough.tga";
@@ -223,7 +227,9 @@ void testRoundTripAllSceneData() {
         expect(mesh->primitive == nuby::Primitive::ImportedMesh,
                "primitive type is restored");
         expect(near(mesh->transform.rotation[1], 0.2f), "transform rotation is restored");
-        expect(near(mesh->material.roughness, 0.3f), "material is restored");
+        expect(near(mesh->material.roughness, 0.3f)
+                       && near(mesh->material.opacity, 0.42f),
+               "roughness and opacity are restored");
         expect(mesh->material.albedoTexture == "textures/hero diffuse.tga"
                        && mesh->material.normalTexture == "textures/hero normal.tga"
                        && mesh->material.metallicRoughnessTexture
@@ -344,6 +350,20 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "version-two physics scenes remain readable after adding character controllers");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
            "version-two scenes receive default character controller state");
+    const std::string versionEightText = downgradeTextureSchema(valid.str(), 8, 6);
+    std::stringstream legacyV8(versionEightText);
+    expect(nuby::SceneSerializer::load(target, legacyV8, error),
+           "version-eight scenes remain readable after adding material opacity");
+    const nuby::Entity* legacyV8Mesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyV8Mesh = &entity;
+    }
+    expect(legacyV8Mesh != nullptr
+                   && near(legacyV8Mesh->material.opacity, 1.0f)
+                   && near(legacyV8Mesh->material.albedoMapTransform.uvScale[0], 0.5f)
+                   && legacyV8Mesh->material.albedoMapTransform.clampToEdge,
+           "version-eight UV and edge-clamp data load while opacity defaults opaque");
+
     const std::string versionSevenText = downgradeTextureSchema(valid.str(), 7, 6);
     std::stringstream legacyV7(versionSevenText);
     expect(nuby::SceneSerializer::load(target, legacyV7, error),
@@ -431,6 +451,12 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream invalidUvOutput;
     expect(!nuby::SceneSerializer::save(invalidUvTransform, invalidUvOutput, error),
            "scene serialization rejects unbounded material UV transforms");
+
+    nuby::Scene invalidOpacity;
+    invalidOpacity.create("invalid opacity", nuby::Primitive::Sphere).material.opacity = 1.1f;
+    std::stringstream invalidOpacityOutput;
+    expect(!nuby::SceneSerializer::save(invalidOpacity, invalidOpacityOutput, error),
+           "scene serialization rejects opacity outside the normalized range");
 }
 }  // namespace
 

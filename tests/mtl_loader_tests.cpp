@@ -60,6 +60,7 @@ Ke 0.02 0.01 0.0
 Ns 198.0
 Pm 0.72
 Pr 0.31
+d 0.65
 map_Kd -s 0.5 0.75 1 -o 0.1 0.2 0 textures/sun albedo.tga
 norm -s 2 2 textures/sun normal.tga
 map_Pr -o -0.2 0.25 textures/roughness.tga
@@ -69,6 +70,7 @@ map_AO -clamp off textures/occlusion.tga
 newmtl Stone
 Kd 0.34 0.31 0.27
 Ns 18
+Tr 0.2
 illum 2
 )MTL";
     std::vector<nuby::WavefrontMaterial> materials;
@@ -82,8 +84,10 @@ illum 2
         const nuby::Material& relic = materials[0].material;
         expect(near(relic.color[0], 0.8f) && near(relic.color[1], 0.55f)
                        && near(relic.emission[0], 0.02f)
-                       && near(relic.metallic, 0.72f) && near(relic.roughness, 0.31f),
-               "diffuse, emissive, metallic and explicit roughness factors are parsed");
+                       && near(relic.metallic, 0.72f) && near(relic.roughness, 0.31f)
+                       && near(relic.opacity, 0.65f)
+                       && near(materials[1].material.opacity, 0.8f),
+               "diffuse, emissive, PBR and dissolve/transparency factors are parsed");
         expect(relic.albedoTexture
                        == "characters/wayfarer/textures/sun albedo.tga"
                        && relic.normalTexture
@@ -120,6 +124,9 @@ void testInvalidMaterialsAndTraversalAreRejectedTransactionally() {
     const std::string invalidLibraries[] = {
         "newmtl Bad\nmap_Kd ../outside.tga\n",
         "newmtl Bad\nPr nan\n",
+        "newmtl Bad\nd nan\n",
+        "newmtl Bad\nTr 1.1\n",
+        "newmtl Bad\nmap_d opacity.tga\n",
         "newmtl Duplicate\nnewmtl Duplicate\n",
         "newmtl Bad\nmap_Kd -blendu on texture.tga\n",
         "newmtl Bad\nmap_Kd -clamp sideways texture.tga\n",

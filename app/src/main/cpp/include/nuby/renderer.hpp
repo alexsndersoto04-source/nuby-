@@ -58,6 +58,13 @@ private:
         std::vector<ImportedPart> parts;
     };
 
+    struct DrawItem {
+        const Mesh* mesh = nullptr;
+        std::array<float, 16> model{};
+        const Material* material = nullptr;
+        float cameraDistanceSquared = 0.0f;
+    };
+
     struct PostUniforms {
         GLint extractScene = -1;
         GLint blurSource = -1;
@@ -74,6 +81,7 @@ private:
         GLint emission = -1;
         GLint metallic = -1;
         GLint roughness = -1;
+        GLint opacity = -1;
         GLint ambientOcclusion = -1;
         GLint albedoTexture = -1;
         GLint normalTexture = -1;
@@ -124,6 +132,8 @@ private:
     AAssetManager* assetManager_ = nullptr;
     std::unordered_map<std::string, ImportedModel> importedMeshes_;
     std::unordered_map<std::string, GLuint> textures_;
+    std::vector<DrawItem> opaqueDrawItems_;
+    std::vector<DrawItem> transparentDrawItems_;
     GLuint program_ = 0;
     GLuint repeatSampler_ = 0;
     GLuint clampSampler_ = 0;

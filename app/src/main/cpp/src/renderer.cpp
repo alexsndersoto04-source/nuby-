@@ -203,6 +203,7 @@ uniform vec3 uColor;
 uniform vec3 uEmission;
 uniform float uMetallic;
 uniform float uRoughness;
+uniform float uOpacity;
 uniform float uAmbientOcclusion;
 uniform sampler2D uAlbedoTexture;
 uniform sampler2D uNormalTexture;
@@ -319,7 +320,7 @@ void main() {
         vec3 base = vec3(0.012, 0.019, 0.043) * (0.48 + gridVisibility * 0.52);
         vec3 gridColor = vec3(0.12, 0.67, 0.72)
                 * (line * fade * 0.48 * (0.38 + gridVisibility * 0.62) + centerGlow * 0.12);
-        fragmentColor = vec4(base + gridColor, 1.0);
+        fragmentColor = vec4(base + gridColor, clamp(uOpacity, 0.0, 1.0));
         return;
     }
 
@@ -400,7 +401,7 @@ void main() {
     color = (color * (2.51 * color + 0.03))
           / max(color * (2.43 * color + 0.59) + 0.14, vec3(0.001));
     color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
-    fragmentColor = vec4(color, 1.0);
+    fragmentColor = vec4(color, clamp(uOpacity, 0.0, 1.0));
 }
 )";
 
@@ -857,6 +858,7 @@ void Renderer::buildScene() {
     core.material.emission = {0.035f, 0.025f, 0.16f};
     core.material.metallic = 0.18f;
     core.material.roughness = 0.31f;
+    core.material.opacity = 0.82f;
     const std::uint32_t coreId = core.id;
 
     Entity& innerCore = scene_.create("Core Light", Primitive::Sphere);
@@ -1134,13 +1136,16 @@ void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
             const auto imported = importedMeshes_.find(entity.meshAsset);
             if (imported != importedMeshes_.end()) {
                 for (const ImportedPart& part : imported->second.parts) {
-                    if (part.mesh.vao == 0) continue;
+                    const Material& material = part.hasMaterial && !entity.overrideMtlMaterials
+                            ? part.material : entity.material;
+                    if (part.mesh.vao == 0 || material.opacity < 1.0f) continue;
                     glBindVertexArray(part.mesh.vao);
                     glDrawArrays(GL_TRIANGLES, 0, part.mesh.vertexCount);
                 }
                 continue;
             }
         }
+        if (entity.material.opacity < 1.0f) continue;
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr || mesh->vao == 0) continue;
         glBindVertexArray(mesh->vao);
@@ -1362,6 +1367,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.emission = glGetUniformLocation(program_, "uEmission");
     uniforms_.metallic = glGetUniformLocation(program_, "uMetallic");
     uniforms_.roughness = glGetUniformLocation(program_, "uRoughness");
+    uniforms_.opacity = glGetUniformLocation(program_, "uOpacity");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.albedoTexture = glGetUniformLocation(program_, "uAlbedoTexture");
     uniforms_.normalTexture = glGetUniformLocation(program_, "uNormalTexture");
@@ -1426,6 +1432,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform3fv(uniforms_.emission, 1, material.emission.data());
     glUniform1f(uniforms_.metallic, material.metallic);
     glUniform1f(uniforms_.roughness, material.roughness);
+    glUniform1f(uniforms_.opacity, material.opacity);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     const auto textureFor = [this](const std::string& path) -> GLuint {
         const auto found = textures_.find(path);
@@ -1579,7 +1586,21 @@ void Renderer::render(float deltaSeconds) {
         glViewport(0, 0, width_, height_);
     }
     glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    opaqueDrawItems_.clear();
+    transparentDrawItems_.clear();
+    const auto queueDraw = [this](const Mesh& mesh, const Mat4& model,
+                                  const Material& material) {
+        if (material.opacity <= 0.0f) return;
+        const float dx = model[12] - cameraPosition_[0];
+        const float dy = model[13] - cameraPosition_[1];
+        const float dz = model[14] - cameraPosition_[2];
+        DrawItem item{&mesh, model, &material, dx * dx + dy * dy + dz * dz};
+        if (material.opacity < 1.0f) transparentDrawItems_.push_back(item);
+        else opaqueDrawItems_.push_back(item);
+    };
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible) continue;
         const Mat4 model = scene_.worldMatrix(entity.id);
@@ -1588,16 +1609,33 @@ void Renderer::render(float deltaSeconds) {
             if (imported != importedMeshes_.end()) {
                 for (const ImportedPart& part : imported->second.parts) {
                     if (part.mesh.vao == 0) continue;
-                    draw(part.mesh, model,
-                         part.hasMaterial && !entity.overrideMtlMaterials
-                                 ? part.material : entity.material);
+                    const Material& material = part.hasMaterial && !entity.overrideMtlMaterials
+                            ? part.material : entity.material;
+                    queueDraw(part.mesh, model, material);
                 }
                 continue;
             }
         }
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr) continue;
-        draw(*mesh, model, entity.material);
+        queueDraw(*mesh, model, entity.material);
+    }
+    for (const DrawItem& item : opaqueDrawItems_) {
+        draw(*item.mesh, item.model, *item.material);
+    }
+    if (!transparentDrawItems_.empty()) {
+        std::stable_sort(transparentDrawItems_.begin(), transparentDrawItems_.end(),
+                [](const DrawItem& left, const DrawItem& right) {
+                    return left.cameraDistanceSquared > right.cameraDistanceSquared;
+                });
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        for (const DrawItem& item : transparentDrawItems_) {
+            draw(*item.mesh, item.model, *item.material);
+        }
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
     }
     if (postProcessingAvailable_) renderBloom();
 }
