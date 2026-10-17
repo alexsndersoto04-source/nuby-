@@ -5,6 +5,7 @@ add_library(nuby-engine SHARED
     native_engine.cpp
     src/adventure_game.cpp
     src/game_project.cpp
+    src/game_project_runtime.cpp
     src/image_loader.cpp
     src/mtl_loader.cpp
     src/renderer.cpp

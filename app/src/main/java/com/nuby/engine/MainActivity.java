@@ -50,6 +50,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativePostProcessingEnabled();
     private static native int nativeRendererTier();
     private static native int nativeSampleAssetStatus();
+    private static native String nativeLoadProject(String descriptorAssetPath);
+    private static native boolean nativeUnloadProject();
     private static native void nativeSetDemoMode(int mode);
     private static native void nativeAdventureMove(float horizontal, float forward);
     private static native void nativeAdventureJump();
@@ -241,6 +243,43 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         });
 
         setContentView(root);
+    }
+
+    /** Loads a standalone Nuby project packaged under Android assets. */
+    public void loadProjectFromAssets(String descriptorAssetPath) {
+        if (surface == null || descriptorAssetPath == null) return;
+        surface.queueEvent(() -> {
+            final String status = nativeLoadProject(descriptorAssetPath);
+            runOnUiThread(() -> {
+                if (status != null && status.startsWith("Loaded project")) {
+                    resetDemoControls(status);
+                } else if (hint != null) {
+                    hint.setText(status);
+                }
+            });
+        });
+    }
+
+    /** Unloads the active project and returns the renderer to its engine scene. */
+    public void unloadProject() {
+        if (surface == null) return;
+        surface.queueEvent(() -> {
+            final boolean unloaded = nativeUnloadProject();
+            if (unloaded) runOnUiThread(() -> resetDemoControls("DRAG TO ORBIT"));
+        });
+    }
+
+    private void resetDemoControls(String hintText) {
+        activeDemoMode = 0;
+        gameMode = false;
+        adventureMode = false;
+        gameFinished = false;
+        if (hint != null) hint.setText(hintText);
+        if (modeButton != null) modeButton.setText("START ADVENTURE");
+        if (gameStatus != null) gameStatus.setVisibility(View.GONE);
+        if (restartButton != null) restartButton.setVisibility(View.GONE);
+        if (adventureJoystick != null) adventureJoystick.setVisibility(View.GONE);
+        if (jumpButton != null) jumpButton.setVisibility(View.GONE);
     }
 
     private TextView label(String text, float sizeSp, int color, boolean bold) {

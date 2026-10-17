@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -1028,13 +1029,109 @@ void Renderer::buildScene() {
     loadSceneAssets();
 }
 
+Scene& Renderer::activeScene() {
+    Scene* const loadedScene = projectRuntime_.scene();
+    return loadedScene != nullptr ? *loadedScene : scene_;
+}
+
+const Scene& Renderer::activeScene() const {
+    const Scene* const loadedScene = projectRuntime_.scene();
+    return loadedScene != nullptr ? *loadedScene : scene_;
+}
+
+std::string Renderer::projectAssetPath(const std::string& relativePath) const {
+    if (!safeRelativeAssetPath(relativePath)) return {};
+    if (projectAssetPrefix_.empty()
+            || relativePath.compare(0, projectAssetPrefix_.size(), projectAssetPrefix_) == 0) {
+        return relativePath;
+    }
+    const std::string resolved = projectAssetPrefix_ + relativePath;
+    return safeRelativeAssetPath(resolved) ? resolved : std::string{};
+}
+
+bool Renderer::loadProject(const std::string& descriptorAssetPath) {
+    constexpr std::size_t kMaximumProjectDescriptorBytes = 64U * 1024U;
+    std::string descriptorText;
+    if (!safeRelativeAssetPath(descriptorAssetPath)
+            || !readTextAsset(assetManager_, descriptorAssetPath,
+                              kMaximumProjectDescriptorBytes, descriptorText)) {
+        projectLoadError_ = "Project descriptor is unsafe, missing, or too large";
+        return false;
+    }
+
+    const std::size_t directoryEnd = descriptorAssetPath.find_last_of('/');
+    const std::string candidatePrefix = directoryEnd == std::string::npos
+            ? std::string{} : descriptorAssetPath.substr(0, directoryEnd + 1);
+    std::istringstream descriptor(descriptorText);
+    const ProjectAssetReader readProjectAsset = [this, &candidatePrefix](
+            const std::string& relativePath, std::string& contents, std::string& error) {
+        if (!safeRelativeAssetPath(relativePath)) {
+            error = "Project asset path is unsafe";
+            return false;
+        }
+        const std::string assetPath = candidatePrefix + relativePath;
+        if (!safeRelativeAssetPath(assetPath)
+                || !readTextAsset(assetManager_, assetPath, 16U * 1024U * 1024U, contents)) {
+            error = "Project asset is missing or exceeds the size limit";
+            return false;
+        }
+        return true;
+    };
+    std::string error;
+    if (!projectRuntime_.load(descriptor, readProjectAsset, error)) {
+        projectLoadError_ = error.empty() ? "Project could not be loaded" : std::move(error);
+        return false;
+    }
+
+    projectAssetPrefix_ = candidatePrefix;
+    projectLoadError_.clear();
+    demoMode_ = 0;
+    gameMode_ = false;
+    adventureMode_ = false;
+    gameSwipeDistance_ = 0.0f;
+    releaseSceneAssets();
+    loadSceneAssets();
+    return true;
+}
+
+void Renderer::unloadProject() {
+    if (!projectRuntime_.loaded()) {
+        projectLoadError_.clear();
+        return;
+    }
+    projectRuntime_.unload();
+    projectAssetPrefix_.clear();
+    projectLoadError_.clear();
+    releaseSceneAssets();
+    demoMode_ = 0;
+    gameMode_ = false;
+    adventureMode_ = false;
+    buildScene();
+}
+
+std::string Renderer::projectStatusText() const {
+    if (!projectLoadError_.empty()) return "Project load failed: " + projectLoadError_;
+    const GameProject* const project = projectRuntime_.project();
+    return project == nullptr ? "No project loaded" : project->displayName;
+}
+
 void Renderer::setGameMode(bool enabled) {
     setDemoMode(enabled ? 1 : 0);
 }
 
 void Renderer::setDemoMode(int mode) {
     const int safeMode = std::clamp(mode, 0, 2);
-    if (demoMode_ == safeMode) return;
+    const bool leavingProject = projectRuntime_.loaded();
+    if (leavingProject) {
+        projectRuntime_.unload();
+        projectAssetPrefix_.clear();
+        projectLoadError_.clear();
+        releaseSceneAssets();
+        demoMode_ = 0;
+        gameMode_ = false;
+        adventureMode_ = false;
+    }
+    if (demoMode_ == safeMode && !leavingProject) return;
     demoMode_ = safeMode;
     gameMode_ = demoMode_ == 1;
     adventureMode_ = demoMode_ == 2;
@@ -1069,10 +1166,26 @@ std::string Renderer::gameStatusText() const {
     return {};
 }
 
+void Renderer::releaseSceneAssets() {
+    for (auto& entry : importedMeshes_) {
+        for (ImportedPart& part : entry.second.parts) {
+            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+        }
+    }
+    importedMeshes_.clear();
+    for (const auto& entry : textures_) {
+        if (entry.second != 0) glDeleteTextures(1, &entry.second);
+    }
+    textures_.clear();
+    opaqueDrawItems_.clear();
+    transparentDrawItems_.clear();
+}
+
 void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> attemptedMeshes;
     std::unordered_set<std::string> attemptedTextures;
-    for (const Entity& entity : scene_.entities()) {
+    for (const Entity& entity : activeScene().entities()) {
         const std::array<const std::string*, 8> materialTextures{{
                 &entity.material.albedoTexture,
                 &entity.material.normalTexture,
@@ -1084,22 +1197,25 @@ void Renderer::loadSceneAssets() {
                 &entity.material.emissiveTexture
         }};
         for (const std::string* path : materialTextures) {
-            if (path->empty() || textures_.find(*path) != textures_.end()
-                    || !attemptedTextures.insert(*path).second) {
+            if (path->empty()) continue;
+            const std::string assetPath = projectAssetPath(*path);
+            if (assetPath.empty() || textures_.find(assetPath) != textures_.end()
+                    || !attemptedTextures.insert(assetPath).second) {
                 continue;
             }
             GLuint texture = 0;
-            if (loadTgaAsset(*path, texture)) textures_.emplace(*path, texture);
+            if (loadTgaAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
         }
 
-        if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()
-                || importedMeshes_.find(entity.meshAsset) != importedMeshes_.end()
-                || !attemptedMeshes.insert(entity.meshAsset).second) {
+        if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()) continue;
+        const std::string meshPath = projectAssetPath(entity.meshAsset);
+        if (meshPath.empty() || importedMeshes_.find(meshPath) != importedMeshes_.end()
+                || !attemptedMeshes.insert(meshPath).second) {
             continue;
         }
         ImportedModel model{};
-        if (loadObjAsset(entity.meshAsset, model)) {
-            importedMeshes_.emplace(entity.meshAsset, std::move(model));
+        if (loadObjAsset(meshPath, model)) {
+            importedMeshes_.emplace(meshPath, std::move(model));
         }
     }
 
@@ -1117,27 +1233,30 @@ void Renderer::loadSceneAssets() {
                     &part.material.emissiveTexture
             }};
             for (const std::string* path : materialTextures) {
-                if (path->empty() || textures_.find(*path) != textures_.end()
-                        || !attemptedTextures.insert(*path).second) continue;
+                if (path->empty()) continue;
+                const std::string assetPath = projectAssetPath(*path);
+                if (assetPath.empty() || textures_.find(assetPath) != textures_.end()
+                        || !attemptedTextures.insert(assetPath).second) continue;
                 GLuint texture = 0;
-                if (loadTgaAsset(*path, texture)) textures_.emplace(*path, texture);
+                if (loadTgaAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
             }
         }
     }
 }
 
 int Renderer::sampleAssetStatus() const {
+    if (projectRuntime_.loaded()) return 0;
     bool sampleReferenced = false;
-    for (const Entity& entity : scene_.entities()) {
+    for (const Entity& entity : activeScene().entities()) {
         if (entity.visible && entity.primitive == Primitive::ImportedMesh
-                && entity.meshAsset == "meshes/orbital_shard.obj") {
+                && projectAssetPath(entity.meshAsset) == "meshes/orbital_shard.obj") {
             sampleReferenced = true;
             break;
         }
     }
     if (!sampleReferenced) return 0;
 
-    const auto imported = importedMeshes_.find("meshes/orbital_shard.obj");
+    const auto imported = importedMeshes_.find(projectAssetPath("meshes/orbital_shard.obj"));
     if (imported == importedMeshes_.end() || imported->second.parts.empty()) return 1;
     for (const ImportedPart& part : imported->second.parts) {
         if (!part.hasMaterial) continue;
@@ -1169,7 +1288,8 @@ const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
         case Primitive::Torus: return &torus_;
         case Primitive::Ground: return &ground_;
         case Primitive::ImportedMesh: {
-            const auto found = importedMeshes_.find(entity.meshAsset);
+            const std::string meshPath = projectAssetPath(entity.meshAsset);
+            const auto found = importedMeshes_.find(meshPath);
             if (found == importedMeshes_.end() || found->second.parts.empty()) return &sphere_;
             return &found->second.parts.front().mesh;
         }
@@ -1251,12 +1371,13 @@ void Renderer::renderShadowMaps() {
         glUniformMatrix4fv(shadowProgramLightViewProjection_, 1, GL_FALSE,
                            shadowViewProjections_[cascade].data());
 
-        for (const Entity& entity : scene_.entities()) {
+        for (const Entity& entity : activeScene().entities()) {
             if (!entity.visible || entity.primitive == Primitive::Ground) continue;
-            const Mat4 model = scene_.worldMatrix(entity.id);
+            const Mat4 model = activeScene().worldMatrix(entity.id);
             glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
             if (entity.primitive == Primitive::ImportedMesh) {
-                const auto imported = importedMeshes_.find(entity.meshAsset);
+                const std::string meshPath = projectAssetPath(entity.meshAsset);
+                const auto imported = importedMeshes_.find(meshPath);
                 if (imported != importedMeshes_.end()) {
                     for (const ImportedPart& part : imported->second.parts) {
                         const Material& material = part.hasMaterial
@@ -1619,8 +1740,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.opacity, material.opacity);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     const auto textureFor = [this](const std::string& path) -> GLuint {
-        const auto found = textures_.find(path);
-        return path.empty() || found == textures_.end() ? 0U : found->second;
+        if (path.empty()) return 0U;
+        const std::string assetPath = projectAssetPath(path);
+        const auto found = textures_.find(assetPath);
+        return assetPath.empty() || found == textures_.end() ? 0U : found->second;
     };
     const GLuint albedoTexture = textureFor(material.albedoTexture);
     const GLuint normalTexture = textureFor(material.normalTexture);
@@ -1737,10 +1860,12 @@ void Renderer::render(float deltaSeconds) {
     }
 
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
-    if (gameMode_) sampleGame_.update(scene_, dt);
+    if (projectRuntime_.loaded()) projectRuntime_.update(dt);
+    else if (gameMode_) sampleGame_.update(scene_, dt);
     else if (adventureMode_) adventureGame_.update(scene_, dt);
     else scene_.update(dt);
-    scene_.collectPointLights(kMaxPointLights, pointLights_);
+    Scene& frameScene = activeScene();
+    frameScene.collectPointLights(kMaxPointLights, pointLights_);
     pointLightPositionRanges_.fill(0.0f);
     pointLightColorIntensities_.fill(0.0f);
     for (std::size_t index = 0; index < pointLights_.size(); ++index) {
@@ -1756,7 +1881,7 @@ void Renderer::render(float deltaSeconds) {
         pointLightColorIntensities_[offset + 3] = light.intensity;
     }
 
-    const Entity* cameraEntity = scene_.activeCamera();
+    const Entity* cameraEntity = frameScene.activeCamera();
     const CameraComponent camera = cameraEntity == nullptr
             ? CameraComponent{} : cameraEntity->camera;
     Mat4 view{};
@@ -1770,7 +1895,7 @@ void Renderer::render(float deltaSeconds) {
                            target[2] + std::cos(orbit.yaw) * horizontal};
         view = lookAt(cameraPosition_, target, {0.0f, 1.0f, 0.0f});
     } else if (cameraEntity != nullptr) {
-        const Mat4 cameraWorld = scene_.worldMatrix(cameraEntity->id);
+        const Mat4 cameraWorld = frameScene.worldMatrix(cameraEntity->id);
         cameraPosition_ = {cameraWorld[12], cameraWorld[13], cameraWorld[14]};
         const Vec3 forward{-cameraWorld[8], -cameraWorld[9], -cameraWorld[10]};
         const Vec3 target{cameraPosition_[0] + forward[0],
@@ -1841,11 +1966,12 @@ void Renderer::render(float deltaSeconds) {
             opaqueDrawItems_.push_back(item);
         }
     };
-    for (const Entity& entity : scene_.entities()) {
+    for (const Entity& entity : frameScene.entities()) {
         if (!entity.visible) continue;
-        const Mat4 model = scene_.worldMatrix(entity.id);
+        const Mat4 model = frameScene.worldMatrix(entity.id);
         if (entity.primitive == Primitive::ImportedMesh) {
-            const auto imported = importedMeshes_.find(entity.meshAsset);
+            const std::string meshPath = projectAssetPath(entity.meshAsset);
+            const auto imported = importedMeshes_.find(meshPath);
             if (imported != importedMeshes_.end()) {
                 for (const ImportedPart& part : imported->second.parts) {
                     if (part.mesh.vao == 0) continue;
@@ -1927,12 +2053,12 @@ void Renderer::touch(int action, float x, float y, float pinchDistance, int poin
     }
     if (pointerCount >= 2 && pinchDistance > 0.0f) {
         if (lastPinchDistance_ > 0.0f) {
-            scene_.zoomActiveCamera(lastPinchDistance_ / pinchDistance);
+            activeScene().zoomActiveCamera(lastPinchDistance_ / pinchDistance);
         }
         lastPinchDistance_ = pinchDistance;
     } else {
         lastPinchDistance_ = 0.0f;
-        scene_.orbitActiveCamera(deltaX, deltaY);
+        activeScene().orbitActiveCamera(deltaX, deltaY);
     }
     lastTouchX_ = x;
     lastTouchY_ = y;

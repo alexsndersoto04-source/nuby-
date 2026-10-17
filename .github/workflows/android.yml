@@ -89,6 +89,17 @@ jobs:
           app/src/main/cpp/src/game_project.cpp tests/game_project_tests.cpp
           -o /tmp/nuby-game-project-tests && /tmp/nuby-game-project-tests
 
+      - name: Compile and run project runtime lifecycle tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/scene_io.cpp
+          app/src/main/cpp/src/game_project.cpp
+          app/src/main/cpp/src/game_project_runtime.cpp
+          tests/game_project_runtime_tests.cpp
+          -o /tmp/nuby-game-project-runtime-tests
+          && /tmp/nuby-game-project-runtime-tests
+
   build-debug-apk:
     name: Build native Android APK
     needs: scene-tests

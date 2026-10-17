@@ -10,6 +10,7 @@
 #include <android/asset_manager.h>
 
 #include "nuby/adventure_game.hpp"
+#include "nuby/game_project_runtime.hpp"
 #include "nuby/image_loader.hpp"
 #include "nuby/mtl_loader.hpp"
 #include "nuby/obj_loader.hpp"
@@ -33,6 +34,10 @@ public:
     void setAdventureMoveInput(float horizontal, float forward);
     void jumpAdventureCharacter();
     void restartGame();
+    bool loadProject(const std::string& descriptorAssetPath);
+    void unloadProject();
+    bool projectLoaded() const { return projectRuntime_.loaded(); }
+    std::string projectStatusText() const;
     std::string gameStatusText() const;
     bool shadowsEnabled() const { return shadowsAvailable_; }
     bool postProcessingEnabled() const { return postProcessingAvailable_; }
@@ -137,6 +142,10 @@ private:
               const Material& material);
     void buildScene();
     void loadSceneAssets();
+    void releaseSceneAssets();
+    Scene& activeScene();
+    const Scene& activeScene() const;
+    std::string projectAssetPath(const std::string& relativePath) const;
     void initializeShadowMap();
     void renderShadowMaps();
     void initializePostProcessing();
@@ -188,6 +197,9 @@ private:
     Mesh torus_{};
     Mesh ground_{};
     Scene scene_;
+    GameProjectRuntime projectRuntime_;
+    std::string projectAssetPrefix_;
+    std::string projectLoadError_;
     SampleGame sampleGame_;
     AdventureGame adventureGame_;
     int demoMode_ = 0;

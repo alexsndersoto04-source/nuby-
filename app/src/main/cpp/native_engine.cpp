@@ -48,6 +48,31 @@ Java_com_nuby_engine_MainActivity_nativeSetDemoMode(JNIEnv*, jclass, jint mode) 
     if (gRenderer) gRenderer->setDemoMode(mode);
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeLoadProject(
+        JNIEnv* env, jclass, jstring descriptorAssetPath) {
+    if (!gRenderer) return env->NewStringUTF("Renderer is not initialized");
+    if (descriptorAssetPath == nullptr) {
+        return env->NewStringUTF("Project descriptor path is empty");
+    }
+    const char* pathChars = env->GetStringUTFChars(descriptorAssetPath, nullptr);
+    if (pathChars == nullptr) return nullptr;
+    const std::string path(pathChars);
+    env->ReleaseStringUTFChars(descriptorAssetPath, pathChars);
+    const bool loaded = gRenderer->loadProject(path);
+    const std::string status = loaded
+            ? "Loaded project"
+            : gRenderer->projectStatusText();
+    return env->NewStringUTF(status.c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeUnloadProject(JNIEnv*, jclass) {
+    if (!gRenderer || !gRenderer->projectLoaded()) return JNI_FALSE;
+    gRenderer->unloadProject();
+    return JNI_TRUE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeAdventureMove(
         JNIEnv*, jclass, jfloat horizontal, jfloat forward) {
