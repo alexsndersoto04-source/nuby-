@@ -94,6 +94,11 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.sphereCollider.radius)
             || !finite(entity.sphereCollider.restitution)
             || !finite(entity.sphereCollider.friction)
+            || !finite(entity.characterController.moveInput[0])
+            || !finite(entity.characterController.moveInput[1])
+            || !finite(entity.characterController.maximumSpeed)
+            || !finite(entity.characterController.acceleration)
+            || !finite(entity.characterController.jumpSpeed)
             || !finite3(entity.pointLight.color) || !finite(entity.pointLight.intensity)
             || !finite(entity.pointLight.range) || !finite(entity.camera.verticalFovRadians)
             || !finite(entity.camera.nearPlane) || !finite(entity.camera.farPlane)
@@ -109,7 +114,18 @@ bool validEntity(const Entity& entity) {
             || entity.rigidbody.linearDamping < 0.0f
             || (entity.sphereCollider.enabled && entity.sphereCollider.radius <= 0.0f)
             || entity.sphereCollider.restitution < 0.0f || entity.sphereCollider.restitution > 1.0f
-            || entity.sphereCollider.friction < 0.0f || entity.sphereCollider.friction > 1.0f) {
+            || entity.sphereCollider.friction < 0.0f || entity.sphereCollider.friction > 1.0f
+            || (entity.characterController.enabled
+                && (entity.characterController.maximumSpeed <= 0.0f
+                    || entity.characterController.acceleration <= 0.0f
+                    || entity.characterController.jumpSpeed <= 0.0f))
+            || entity.characterController.moveInput[0] < -1.0f
+            || entity.characterController.moveInput[0] > 1.0f
+            || entity.characterController.moveInput[1] < -1.0f
+            || entity.characterController.moveInput[1] > 1.0f
+            || entity.characterController.maximumSpeed < 0.0f
+            || entity.characterController.acceleration < 0.0f
+            || entity.characterController.jumpSpeed < 0.0f) {
         return false;
     }
     return validTrack(entity.animation.position) && validTrack(entity.animation.rotation)
@@ -279,6 +295,14 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << entity.sphereCollider.friction << ' '
            << (entity.sphereCollider.trigger ? 1 : 0) << '\n';
 
+    output << "CHARACTER_CONTROLLER " << (entity.characterController.enabled ? 1 : 0)
+           << ' ' << entity.characterController.moveInput[0]
+           << ' ' << entity.characterController.moveInput[1]
+           << ' ' << entity.characterController.maximumSpeed
+           << ' ' << entity.characterController.acceleration
+           << ' ' << entity.characterController.jumpSpeed
+           << ' ' << (entity.characterController.grounded ? 1 : 0) << '\n';
+
     output << "END_ENTITY\n";
 }
 
@@ -434,6 +458,23 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.sphereCollider.restitution)
                 || !std::isfinite(entity.sphereCollider.friction)) {
             return fail(error, "Entity sphere collider component is invalid");
+        }
+    }
+    if (version >= 3) {
+        if (!readTag(input, "CHARACTER_CONTROLLER", error)
+                || !readBool(input, entity.characterController.enabled)
+                || !(input >> entity.characterController.moveInput[0]
+                            >> entity.characterController.moveInput[1]
+                            >> entity.characterController.maximumSpeed
+                            >> entity.characterController.acceleration
+                            >> entity.characterController.jumpSpeed)
+                || !readBool(input, entity.characterController.grounded)
+                || !std::isfinite(entity.characterController.moveInput[0])
+                || !std::isfinite(entity.characterController.moveInput[1])
+                || !std::isfinite(entity.characterController.maximumSpeed)
+                || !std::isfinite(entity.characterController.acceleration)
+                || !std::isfinite(entity.characterController.jumpSpeed)) {
+            return fail(error, "Entity character controller component is invalid");
         }
     }
     if (!readTag(input, "END_ENTITY", error)) return false;

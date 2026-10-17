@@ -351,6 +351,64 @@ void testTriggerEventsReportEnterExitWithoutApplyingImpulse() {
            "destroying an overlapping trigger emits an exit event for cleanup");
 }
 
+void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
+    nuby::Scene scene;
+    scene.physicsSettings().floorEnabled = true;
+    scene.physicsSettings().floorHeight = 0.0f;
+    scene.physicsSettings().floorRestitution = 0.0f;
+    scene.physicsSettings().floorFriction = 0.0f;
+    const std::uint32_t runnerId = scene.create("runner", nuby::Primitive::Sphere).id;
+    nuby::Entity* runner = scene.find(runnerId);
+    runner->transform.position[1] = 0.5f;
+    runner->transform.scale = {0.5f, 0.5f, 0.5f};
+    runner->rigidbody.enabled = true;
+    runner->rigidbody.linearDamping = 0.0f;
+    runner->sphereCollider.enabled = true;
+    runner->sphereCollider.radius = 1.0f;
+    runner->sphereCollider.restitution = 0.0f;
+    runner->sphereCollider.friction = 0.0f;
+    runner->characterController.enabled = true;
+    runner->characterController.maximumSpeed = 4.0f;
+    runner->characterController.acceleration = 20.0f;
+    runner->characterController.jumpSpeed = 5.5f;
+
+    expect(!scene.setCharacterMoveInput(9999, 1.0f, 0.0f),
+           "character input rejects missing entity IDs");
+    expect(!scene.setCharacterMoveInput(runnerId,
+                   std::numeric_limits<float>::quiet_NaN(), 0.0f),
+           "character input rejects non-finite stick values");
+    expect(scene.setCharacterMoveInput(runnerId, 3.0f, 4.0f),
+           "character input accepts and normalizes a diagonal stick vector");
+
+    scene.update(1.0f / 60.0f);
+    expect(runner->characterController.grounded,
+           "sphere character controller becomes grounded on the floor");
+    for (int frame = 0; frame < 60; ++frame) scene.update(1.0f / 60.0f);
+    const float horizontalSpeed = std::hypot(runner->rigidbody.velocity[0],
+                                              runner->rigidbody.velocity[2]);
+    expect(near(horizontalSpeed, 4.0f, 0.03f),
+           "diagonal character movement is normalized to its maximum speed");
+
+    expect(scene.jumpCharacter(runnerId), "grounded character can jump");
+    expect(!runner->characterController.grounded
+                   && near(runner->rigidbody.velocity[1], 5.5f),
+           "jump applies vertical impulse and clears grounded state");
+    expect(!scene.jumpCharacter(runnerId), "character cannot double-jump in this controller");
+    const float jumpStartY = runner->transform.position[1];
+    scene.update(1.0f / 60.0f);
+    expect(runner->transform.position[1] > jumpStartY,
+           "jump impulse moves the character upward under gravity");
+
+    scene.setCharacterMoveInput(runnerId, 0.0f, 0.0f);
+    for (int frame = 0; frame < 100; ++frame) scene.update(1.0f / 60.0f);
+    expect(runner->characterController.grounded,
+           "character lands and regains grounded state");
+    expect(std::fabs(runner->rigidbody.velocity[0]) < 0.03f
+                   && std::fabs(runner->rigidbody.velocity[2]) < 0.03f,
+           "released movement input decelerates the grounded character to rest");
+    expect(scene.jumpCharacter(runnerId), "landed character can jump again");
+}
+
 void testPhysicsSubstepCapKeepsSimulationBounded() {
     nuby::Scene scene;
     scene.physicsSettings().maximumSubsteps = 2;
@@ -393,6 +451,7 @@ int main() {
     testPhysicsFixedStepGravityAndFloorContact();
     testPhysicsSphereImpulseAndHierarchySafety();
     testTriggerEventsReportEnterExitWithoutApplyingImpulse();
+    testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {

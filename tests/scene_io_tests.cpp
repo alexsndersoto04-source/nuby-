@@ -96,6 +96,12 @@ nuby::Scene makeScene() {
     camera.orbitCamera.maximumPitch = 0.8f;
     camera.orbitCamera.yawPerPixel = 0.01f;
     camera.orbitCamera.pitchPerPixel = 0.02f;
+    camera.characterController.enabled = true;
+    camera.characterController.moveInput = {0.6f, -0.8f};
+    camera.characterController.maximumSpeed = 5.2f;
+    camera.characterController.acceleration = 14.0f;
+    camera.characterController.jumpSpeed = 6.1f;
+    camera.characterController.grounded = true;
     expect(scene.setParent(cameraId, rootId), "camera attaches to root");
     expect(scene.setActiveCamera(cameraId), "sample camera is activated");
 
@@ -165,6 +171,14 @@ void testRoundTripAllSceneData() {
                    && near(camera->camera.farPlane, 120.0f)
                    && near(camera->orbitCamera.pitch, -0.3f),
            "camera projection and orbit controls are restored");
+    expect(camera != nullptr && camera->characterController.enabled
+                   && near(camera->characterController.moveInput[0], 0.6f)
+                   && near(camera->characterController.moveInput[1], -0.8f)
+                   && near(camera->characterController.maximumSpeed, 5.2f)
+                   && near(camera->characterController.acceleration, 14.0f)
+                   && near(camera->characterController.jumpSpeed, 6.1f)
+                   && camera->characterController.grounded,
+           "character controller settings and grounded state are restored");
 
     std::stringstream reencoded;
     expect(nuby::SceneSerializer::save(loaded, reencoded, error), "loaded scene can be saved again");
@@ -210,7 +224,13 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(nuby::SceneSerializer::load(target, legacyV1, error),
            "version-one scenes remain readable after the physics schema upgrade");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
-           "legacy scene loads receive safe default physics settings");
+           "version-one scenes receive safe default physics settings");
+    std::stringstream legacyV2("NUBY_SCENE 2\nSCENE 2.5 0 1 0\n"
+            "PHYSICS 0 -9.81 0 0.0166666675 4 0 0 0.2 0.35\nEND_SCENE\n");
+    expect(nuby::SceneSerializer::load(target, legacyV2, error),
+           "version-two physics scenes remain readable after adding character controllers");
+    expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
+           "version-two scenes receive default character controller state");
 
     nuby::Scene invalidPhysics;
     invalidPhysics.physicsSettings().fixedTimeStep = 0.0f;

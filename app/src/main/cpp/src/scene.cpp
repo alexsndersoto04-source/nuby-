@@ -244,6 +244,34 @@ bool Scene::setActiveCamera(std::uint32_t id) {
     return true;
 }
 
+bool Scene::setCharacterMoveInput(std::uint32_t id, float horizontal, float forward) {
+    Entity* entity = find(id);
+    if (entity == nullptr || !entity->characterController.enabled
+            || !std::isfinite(horizontal) || !std::isfinite(forward)) {
+        return false;
+    }
+    const float magnitude = std::hypot(horizontal, forward);
+    if (magnitude > 1.0f) {
+        horizontal /= magnitude;
+        forward /= magnitude;
+    }
+    entity->characterController.moveInput = {horizontal, forward};
+    return true;
+}
+
+bool Scene::jumpCharacter(std::uint32_t id) {
+    Entity* entity = find(id);
+    if (entity == nullptr) return false;
+    CharacterControllerComponent& controller = entity->characterController;
+    if (!controller.enabled || !controller.grounded || !entity->rigidbody.enabled
+            || !std::isfinite(controller.jumpSpeed) || controller.jumpSpeed <= 0.0f) {
+        return false;
+    }
+    entity->rigidbody.velocity[1] = controller.jumpSpeed;
+    controller.grounded = false;
+    return true;
+}
+
 Entity* Scene::activeCamera() {
     Entity* candidate = find(activeCameraId_);
     return candidate != nullptr && candidate->camera.enabled ? candidate : nullptr;
@@ -379,6 +407,31 @@ void Scene::simulatePhysics(float deltaSeconds) {
                     || !std::isfinite(entity.transform.position[2])) {
                 continue;
             }
+            CharacterControllerComponent& controller = entity.characterController;
+            if (controller.enabled) {
+                const bool wasGrounded = controller.grounded;
+                controller.grounded = false;
+                if (std::isfinite(controller.maximumSpeed) && controller.maximumSpeed > 0.0f
+                        && std::isfinite(controller.acceleration) && controller.acceleration > 0.0f
+                        && std::isfinite(controller.moveInput[0])
+                        && std::isfinite(controller.moveInput[1])) {
+                    const float airControl = wasGrounded ? 1.0f : 0.4f;
+                    const float maximumChange = controller.acceleration * airControl * dt;
+                    float inputX = std::clamp(controller.moveInput[0], -1.0f, 1.0f);
+                    float inputZ = std::clamp(controller.moveInput[1], -1.0f, 1.0f);
+                    const float inputLength = std::hypot(inputX, inputZ);
+                    if (inputLength > 1.0f) {
+                        inputX /= inputLength;
+                        inputZ /= inputLength;
+                    }
+                    const float horizontal = inputX * controller.maximumSpeed;
+                    const float forward = inputZ * controller.maximumSpeed;
+                    const float horizontalDelta = horizontal - body.velocity[0];
+                    const float forwardDelta = forward - body.velocity[2];
+                    body.velocity[0] += std::clamp(horizontalDelta, -maximumChange, maximumChange);
+                    body.velocity[2] += std::clamp(forwardDelta, -maximumChange, maximumChange);
+                }
+            }
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 if (!std::isfinite(body.velocity[axis])) body.velocity[axis] = 0.0f;
                 body.velocity[axis] += physicsSettings_.gravity[axis] * body.gravityScale * dt;
@@ -417,6 +470,9 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 const float restitution = std::clamp(std::min(collider.restitution,
                         physicsSettings_.floorRestitution), 0.0f, 1.0f);
                 if (body.velocity[1] < 0.0f) body.velocity[1] = -body.velocity[1] * restitution;
+                if (entity.characterController.enabled && body.velocity[1] <= 0.0f) {
+                    entity.characterController.grounded = true;
+                }
                 const float friction = std::max(0.0f, std::min(collider.friction,
                         physicsSettings_.floorFriction));
                 const float frictionFactor = std::max(0.0f, 1.0f - friction * dt * 9.81f);

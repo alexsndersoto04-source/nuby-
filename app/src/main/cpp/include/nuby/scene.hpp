@@ -94,6 +94,15 @@ struct SphereColliderComponent {
     bool trigger = false;
 };
 
+struct CharacterControllerComponent {
+    bool enabled = false;
+    std::array<float, 2> moveInput{0.0f, 0.0f};
+    float maximumSpeed = 4.0f;
+    float acceleration = 24.0f;
+    float jumpSpeed = 5.5f;
+    bool grounded = false;
+};
+
 struct PhysicsSettings {
     std::array<float, 3> gravity{0.0f, -9.81f, 0.0f};
     float fixedTimeStep = 1.0f / 60.0f;
@@ -166,6 +175,7 @@ struct Entity {
     AnimationComponent animation;
     RigidbodyComponent rigidbody;
     SphereColliderComponent sphereCollider;
+    CharacterControllerComponent characterController;
     PointLightComponent pointLight;
     CameraComponent camera;
     OrbitCameraController orbitCamera;
@@ -182,6 +192,8 @@ public:
     const Entity* find(std::uint32_t id) const;
     bool setParent(std::uint32_t childId, std::uint32_t parentId);
     bool setActiveCamera(std::uint32_t id);
+    bool setCharacterMoveInput(std::uint32_t id, float horizontal, float forward);
+    bool jumpCharacter(std::uint32_t id);
     Entity* activeCamera();
     const Entity* activeCamera() const;
     bool orbitActiveCamera(float deltaX, float deltaY);
