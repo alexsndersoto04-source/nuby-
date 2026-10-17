@@ -23,6 +23,28 @@ bool fail(std::string& error, const char* message) {
     return false;
 }
 
+bool validTexturePath(const std::string& path) {
+    if (path.empty()) return true;
+    if (path.size() > kMaximumTextLength || path.front() == '/' || path.front() == '\\'
+            || path.find(':') != std::string::npos || path.find('\\') != std::string::npos) {
+        return false;
+    }
+    std::size_t segmentStart = 0;
+    while (segmentStart < path.size()) {
+        const std::size_t separator = path.find('/', segmentStart);
+        const std::size_t segmentEnd = separator == std::string::npos ? path.size() : separator;
+        if (segmentEnd == segmentStart) return false;
+        const std::string segment = path.substr(segmentStart, segmentEnd - segmentStart);
+        if (segment == "." || segment == "..") return false;
+        for (unsigned char character : segment) {
+            if (character < 0x20U || character == 0x7FU) return false;
+        }
+        if (separator == std::string::npos) break;
+        segmentStart = separator + 1;
+    }
+    return true;
+}
+
 bool readTag(std::istream& input, const char* expected, std::string& error) {
     std::string actual;
     if (!(input >> actual) || actual != expected) {
@@ -70,6 +92,10 @@ bool validTrack(const Vector3Track& track) {
 bool validEntity(const Entity& entity) {
     if (entity.id == 0 || entity.name.size() > kMaximumTextLength
             || entity.meshAsset.size() > kMaximumTextLength
+            || !validTexturePath(entity.material.albedoTexture)
+            || !validTexturePath(entity.material.normalTexture)
+            || !validTexturePath(entity.material.metallicRoughnessTexture)
+            || !validTexturePath(entity.material.occlusionTexture)
             || static_cast<unsigned int>(entity.primitive)
                     > static_cast<unsigned int>(Primitive::None)) {
         return false;
@@ -243,7 +269,11 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeFloatArray(output, entity.material.emission);
     output << ' ' << entity.material.metallic << ' ' << entity.material.roughness
            << ' ' << entity.material.ambientOcclusion << ' '
-           << (entity.material.proceduralGrid ? 1 : 0) << '\n';
+           << (entity.material.proceduralGrid ? 1 : 0) << ' '
+           << std::quoted(entity.material.albedoTexture) << ' '
+           << std::quoted(entity.material.normalTexture) << ' '
+           << std::quoted(entity.material.metallicRoughnessTexture) << ' '
+           << std::quoted(entity.material.occlusionTexture) << '\n';
 
     output << "SPIN";
     writeFloatArray(output, entity.spin.radiansPerSecond);
@@ -354,6 +384,17 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
         return fail(error, "Entity material is invalid");
     }
     entity.material.proceduralGrid = grid != 0;
+    if (version >= 4
+            && (!(input >> std::quoted(entity.material.albedoTexture)
+                         >> std::quoted(entity.material.normalTexture)
+                         >> std::quoted(entity.material.metallicRoughnessTexture)
+                         >> std::quoted(entity.material.occlusionTexture))
+                || !validTexturePath(entity.material.albedoTexture)
+                || !validTexturePath(entity.material.normalTexture)
+                || !validTexturePath(entity.material.metallicRoughnessTexture)
+                || !validTexturePath(entity.material.occlusionTexture))) {
+        return fail(error, "Entity material texture path is invalid");
+    }
 
     if (!readTag(input, "SPIN", error)
             || !readFloatArray(input, entity.spin.radiansPerSecond)) {

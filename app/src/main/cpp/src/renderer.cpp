@@ -138,12 +138,21 @@ constexpr const char* kFragmentShader = R"(
 precision highp float;
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
+in vec2 vUv;
 in vec4 vLightPosition;
 uniform vec3 uColor;
 uniform vec3 uEmission;
 uniform float uMetallic;
 uniform float uRoughness;
 uniform float uAmbientOcclusion;
+uniform sampler2D uAlbedoTexture;
+uniform sampler2D uNormalTexture;
+uniform sampler2D uMetallicRoughnessTexture;
+uniform sampler2D uOcclusionTexture;
+uniform int uHasAlbedoTexture;
+uniform int uHasNormalTexture;
+uniform int uHasMetallicRoughnessTexture;
+uniform int uHasOcclusionTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 uniform sampler2D uShadowMap;
@@ -153,6 +162,12 @@ uniform int uPointLightCount;
 uniform vec4 uPointLightPositionRange[4];
 uniform vec4 uPointLightColorIntensity[4];
 out vec4 fragmentColor;
+
+vec3 srgbToLinear(vec3 color) {
+    vec3 low = color / 12.92;
+    vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+    return mix(low, high, step(vec3(0.04045), color));
+}
 
 float shadowAmount(vec3 normal, vec3 lightDirection) {
     if (uShadowsEnabled == 0) return 0.0;
@@ -217,28 +232,58 @@ vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
 void main() {
     vec3 normal = normalize(vWorldNormal);
     vec3 lightDirection = normalize(-uLightDirection);
-    float shadow = shadowAmount(normal, lightDirection);
-    float visibility = 1.0 - shadow * 0.82;
 
     if (uGrid == 1) {
+        float gridVisibility = 1.0 - shadowAmount(normal, lightDirection) * 0.82;
         vec2 coordinate = vWorldPosition.xz * 0.5;
         vec2 derivative = max(fwidth(coordinate), vec2(0.0001));
         vec2 gridDistance = abs(fract(coordinate - 0.5) - 0.5) / derivative;
         float line = 1.0 - min(min(gridDistance.x, gridDistance.y), 1.0);
         float fade = 1.0 - smoothstep(2.0, 15.0, length(vWorldPosition.xz));
         float centerGlow = exp(-length(vWorldPosition.xz) * 0.48);
-        vec3 base = vec3(0.012, 0.019, 0.043) * (0.48 + visibility * 0.52);
+        vec3 base = vec3(0.012, 0.019, 0.043) * (0.48 + gridVisibility * 0.52);
         vec3 gridColor = vec3(0.12, 0.67, 0.72)
-                * (line * fade * 0.48 * (0.38 + visibility * 0.62) + centerGlow * 0.12);
+                * (line * fade * 0.48 * (0.38 + gridVisibility * 0.62) + centerGlow * 0.12);
         fragmentColor = vec4(base + gridColor, 1.0);
         return;
     }
 
-    vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
+    vec3 baseColor = uColor;
+    if (uHasAlbedoTexture != 0) {
+        baseColor *= srgbToLinear(texture(uAlbedoTexture, vUv).rgb);
+    }
+    if (uHasNormalTexture != 0) {
+        vec3 tangentNormal = texture(uNormalTexture, vUv).rgb * 2.0 - 1.0;
+        vec3 positionDx = dFdx(vWorldPosition);
+        vec3 positionDy = dFdy(vWorldPosition);
+        vec2 uvDx = dFdx(vUv);
+        vec2 uvDy = dFdy(vUv);
+        float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+        if (abs(determinant) > 0.00001) {
+            vec3 tangent = normalize((positionDx * uvDy.y - positionDy * uvDx.y)
+                    / determinant);
+            vec3 bitangent = normalize((-positionDx * uvDy.x + positionDy * uvDx.x)
+                    / determinant);
+            normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
+        }
+    }
+
     float roughness = clamp(uRoughness, 0.06, 1.0);
     float metallic = clamp(uMetallic, 0.0, 1.0);
+    if (uHasMetallicRoughnessTexture != 0) {
+        vec4 materialSample = texture(uMetallicRoughnessTexture, vUv);
+        roughness = clamp(roughness * materialSample.g, 0.06, 1.0);
+        metallic = clamp(metallic * materialSample.b, 0.0, 1.0);
+    }
+    float occlusion = uAmbientOcclusion;
+    if (uHasOcclusionTexture != 0) {
+        occlusion *= texture(uOcclusionTexture, vUv).r;
+    }
+
+    float visibility = 1.0 - shadowAmount(normal, lightDirection) * 0.82;
+    vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
     vec3 directLight = evaluateDirectLight(normal, viewDirection, lightDirection,
-            uColor, metallic, roughness, vec3(2.3, 2.15, 1.88)) * visibility;
+            baseColor, metallic, roughness, vec3(2.3, 2.15, 1.88)) * visibility;
 
     for (int index = 0; index < 4; ++index) {
         if (index >= uPointLightCount) break;
@@ -253,14 +298,14 @@ void main() {
         vec4 colorIntensity = uPointLightColorIntensity[index];
         vec3 pointRadiance = colorIntensity.rgb * colorIntensity.a * attenuation;
         directLight += evaluateDirectLight(normal, viewDirection,
-                toLight / max(distanceToLight, 0.001), uColor, metallic, roughness,
+                toLight / max(distanceToLight, 0.001), baseColor, metallic, roughness,
                 pointRadiance);
     }
 
     float skyAmount = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 ambientLight = mix(vec3(0.075, 0.085, 0.14),
                             vec3(0.22, 0.29, 0.46), skyAmount);
-    vec3 ambient = uColor * ambientLight * uAmbientOcclusion * (1.0 - metallic * 0.55);
+    vec3 ambient = baseColor * ambientLight * occlusion * (1.0 - metallic * 0.55);
     vec3 color = ambient + directLight + uEmission;
     color = (color * (2.51 * color + 0.03))
           / max(color * (2.43 * color + 0.59) + 0.14, vec3(0.001));
@@ -471,28 +516,98 @@ bool Renderer::loadObjAsset(const std::string& assetPath, Mesh& mesh) {
     return mesh.vao != 0;
 }
 
+bool Renderer::loadTgaAsset(const std::string& assetPath, GLuint& texture) {
+    texture = 0;
+    if (assetManager_ == nullptr) return false;
+    AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
+    if (asset == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "Texture asset not found: %s", assetPath.c_str());
+        return false;
+    }
+    constexpr off_t kMaximumAssetBytes = 64 * 1024 * 1024;
+    const off_t length = AAsset_getLength(asset);
+    if (length <= 0 || length > kMaximumAssetBytes) {
+        AAsset_close(asset);
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "Texture asset has invalid size: %s", assetPath.c_str());
+        return false;
+    }
+    std::string encoded(static_cast<std::size_t>(length), '\\0');
+    std::size_t bytesRead = 0;
+    while (bytesRead < encoded.size()) {
+        const int count = AAsset_read(asset, encoded.data() + bytesRead,
+                                      encoded.size() - bytesRead);
+        if (count <= 0) break;
+        bytesRead += static_cast<std::size_t>(count);
+    }
+    AAsset_close(asset);
+    if (bytesRead != encoded.size()) return false;
+
+    ImageRgba8 image;
+    std::string error;
+    if (!decodeTga(encoded, image, error)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "TGA decode failed for %s: %s", assetPath.c_str(), error.c_str());
+        return false;
+    }
+    GLint maximumTextureSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumTextureSize);
+    if (maximumTextureSize <= 0 || image.width > static_cast<std::uint32_t>(maximumTextureSize)
+            || image.height > static_cast<std::uint32_t>(maximumTextureSize)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "Texture %s exceeds device texture limits", assetPath.c_str());
+        return false;
+    }
+
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+            static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), 0,
+            GL_RGBA, GL_UNSIGNED_BYTE, image.pixels.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    if (glGetError() != GL_NO_ERROR) {
+        glDeleteTextures(1, &texture);
+        texture = 0;
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "GPU upload failed for texture %s", assetPath.c_str());
+        return false;
+    }
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+            "Loaded TGA %s (%u x %u)", assetPath.c_str(), image.width, image.height);
+    return true;
+}
+
 Renderer::Mesh Renderer::makeSphere(int latitudeSegments, int longitudeSegments) {
     std::vector<Vertex> vertices;
     vertices.reserve(static_cast<std::size_t>(latitudeSegments * longitudeSegments * 6));
 
-    const auto vertexAt = [](float latitude, float longitude) {
+    const auto vertexAt = [](float latitude, float longitude, float u, float v) {
         const float sinLatitude = std::sin(latitude);
         const float x = sinLatitude * std::cos(longitude);
         const float y = std::cos(latitude);
         const float z = sinLatitude * std::sin(longitude);
-        return Vertex{{x, y, z}, {x, y, z}};
+        return Vertex{{x, y, z}, {x, y, z}, {u, v}};
     };
 
     for (int lat = 0; lat < latitudeSegments; ++lat) {
         const float lat0 = kPi * static_cast<float>(lat) / static_cast<float>(latitudeSegments);
         const float lat1 = kPi * static_cast<float>(lat + 1) / static_cast<float>(latitudeSegments);
+        const float v0 = 1.0f - static_cast<float>(lat) / static_cast<float>(latitudeSegments);
+        const float v1 = 1.0f - static_cast<float>(lat + 1) / static_cast<float>(latitudeSegments);
         for (int lon = 0; lon < longitudeSegments; ++lon) {
             const float lon0 = 2.0f * kPi * static_cast<float>(lon) / static_cast<float>(longitudeSegments);
             const float lon1 = 2.0f * kPi * static_cast<float>(lon + 1) / static_cast<float>(longitudeSegments);
-            const Vertex a = vertexAt(lat0, lon0);
-            const Vertex b = vertexAt(lat1, lon0);
-            const Vertex c = vertexAt(lat1, lon1);
-            const Vertex d = vertexAt(lat0, lon1);
+            const float u0 = static_cast<float>(lon) / static_cast<float>(longitudeSegments);
+            const float u1 = static_cast<float>(lon + 1) / static_cast<float>(longitudeSegments);
+            const Vertex a = vertexAt(lat0, lon0, u0, v0);
+            const Vertex b = vertexAt(lat1, lon0, u0, v1);
+            const Vertex c = vertexAt(lat1, lon1, u1, v1);
+            const Vertex d = vertexAt(lat0, lon1, u1, v0);
             appendTriangle(vertices, a, b, c);
             appendTriangle(vertices, a, c, d);
         }
@@ -505,26 +620,31 @@ Renderer::Mesh Renderer::makeTorus(int ringSegments, int tubeSegments,
     std::vector<Vertex> vertices;
     vertices.reserve(static_cast<std::size_t>(ringSegments * tubeSegments * 6));
 
-    const auto vertexAt = [majorRadius, minorRadius](float ring, float tube) {
+    const auto vertexAt = [majorRadius, minorRadius](float ring, float tube,
+                                                       float u, float v) {
         const float cosTube = std::cos(tube);
         const float sinTube = std::sin(tube);
         const float cosRing = std::cos(ring);
         const float sinRing = std::sin(ring);
         const float radial = majorRadius + minorRadius * cosTube;
         return Vertex{{radial * cosRing, minorRadius * sinTube, radial * sinRing},
-                      {cosTube * cosRing, sinTube, cosTube * sinRing}};
+                      {cosTube * cosRing, sinTube, cosTube * sinRing}, {u, v}};
     };
 
     for (int ring = 0; ring < ringSegments; ++ring) {
         const float ring0 = 2.0f * kPi * static_cast<float>(ring) / static_cast<float>(ringSegments);
         const float ring1 = 2.0f * kPi * static_cast<float>(ring + 1) / static_cast<float>(ringSegments);
+        const float u0 = static_cast<float>(ring) / static_cast<float>(ringSegments);
+        const float u1 = static_cast<float>(ring + 1) / static_cast<float>(ringSegments);
         for (int tube = 0; tube < tubeSegments; ++tube) {
             const float tube0 = 2.0f * kPi * static_cast<float>(tube) / static_cast<float>(tubeSegments);
             const float tube1 = 2.0f * kPi * static_cast<float>(tube + 1) / static_cast<float>(tubeSegments);
-            const Vertex a = vertexAt(ring0, tube0);
-            const Vertex b = vertexAt(ring1, tube0);
-            const Vertex c = vertexAt(ring1, tube1);
-            const Vertex d = vertexAt(ring0, tube1);
+            const float v0 = static_cast<float>(tube) / static_cast<float>(tubeSegments);
+            const float v1 = static_cast<float>(tube + 1) / static_cast<float>(tubeSegments);
+            const Vertex a = vertexAt(ring0, tube0, u0, v0);
+            const Vertex b = vertexAt(ring1, tube0, u1, v0);
+            const Vertex c = vertexAt(ring1, tube1, u1, v1);
+            const Vertex d = vertexAt(ring0, tube1, u0, v1);
             appendTriangle(vertices, a, b, c);
             appendTriangle(vertices, a, c, d);
         }
@@ -534,10 +654,10 @@ Renderer::Mesh Renderer::makeTorus(int ringSegments, int tubeSegments,
 
 Renderer::Mesh Renderer::makeGround() {
     const float extent = 32.0f;
-    const Vertex a{{-extent, -1.22f, -extent}, {0.0f, 1.0f, 0.0f}};
-    const Vertex b{{ extent, -1.22f, -extent}, {0.0f, 1.0f, 0.0f}};
-    const Vertex c{{ extent, -1.22f,  extent}, {0.0f, 1.0f, 0.0f}};
-    const Vertex d{{-extent, -1.22f,  extent}, {0.0f, 1.0f, 0.0f}};
+    const Vertex a{{-extent, -1.22f, -extent}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}};
+    const Vertex b{{ extent, -1.22f, -extent}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}};
+    const Vertex c{{ extent, -1.22f,  extent}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}};
+    const Vertex d{{-extent, -1.22f,  extent}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}};
     std::vector<Vertex> vertices;
     vertices.reserve(6);
     appendTriangle(vertices, a, c, b);
@@ -706,6 +826,7 @@ void Renderer::setDemoMode(int mode) {
     } else {
         buildScene();
     }
+    loadSceneAssets();
 }
 
 void Renderer::setAdventureMoveInput(float horizontal, float forward) {
@@ -729,11 +850,27 @@ std::string Renderer::gameStatusText() const {
 }
 
 void Renderer::loadSceneAssets() {
-    std::unordered_set<std::string> attempted;
+    std::unordered_set<std::string> attemptedMeshes;
+    std::unordered_set<std::string> attemptedTextures;
     for (const Entity& entity : scene_.entities()) {
+        const std::array<const std::string*, 4> materialTextures{{
+                &entity.material.albedoTexture,
+                &entity.material.normalTexture,
+                &entity.material.metallicRoughnessTexture,
+                &entity.material.occlusionTexture
+        }};
+        for (const std::string* path : materialTextures) {
+            if (path->empty() || textures_.find(*path) != textures_.end()
+                    || !attemptedTextures.insert(*path).second) {
+                continue;
+            }
+            GLuint texture = 0;
+            if (loadTgaAsset(*path, texture)) textures_.emplace(*path, texture);
+        }
+
         if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()
                 || importedMeshes_.find(entity.meshAsset) != importedMeshes_.end()
-                || !attempted.insert(entity.meshAsset).second) {
+                || !attemptedMeshes.insert(entity.meshAsset).second) {
             continue;
         }
         Mesh mesh{};
@@ -1002,8 +1139,12 @@ void Renderer::renderBloom() {
 
 void Renderer::initialize(AAssetManager* assetManager) {
     assetManager_ = assetManager;
+    demoMode_ = 0;
+    gameMode_ = false;
+    adventureMode_ = false;
     baseMeshesInitialized_ = false;
     importedMeshes_.clear();
+    textures_.clear();
     program_ = createProgram(kVertexShader, kFragmentShader);
     if (program_ == 0) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Renderer initialization failed: shader program unavailable");
@@ -1017,6 +1158,14 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.metallic = glGetUniformLocation(program_, "uMetallic");
     uniforms_.roughness = glGetUniformLocation(program_, "uRoughness");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
+    uniforms_.albedoTexture = glGetUniformLocation(program_, "uAlbedoTexture");
+    uniforms_.normalTexture = glGetUniformLocation(program_, "uNormalTexture");
+    uniforms_.metallicRoughnessTexture = glGetUniformLocation(program_, "uMetallicRoughnessTexture");
+    uniforms_.occlusionTexture = glGetUniformLocation(program_, "uOcclusionTexture");
+    uniforms_.hasAlbedoTexture = glGetUniformLocation(program_, "uHasAlbedoTexture");
+    uniforms_.hasNormalTexture = glGetUniformLocation(program_, "uHasNormalTexture");
+    uniforms_.hasMetallicRoughnessTexture = glGetUniformLocation(program_, "uHasMetallicRoughnessTexture");
+    uniforms_.hasOcclusionTexture = glGetUniformLocation(program_, "uHasOcclusionTexture");
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
     uniforms_.lightViewProjection = glGetUniformLocation(program_, "uLightViewProjection");
@@ -1059,6 +1208,23 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.metallic, material.metallic);
     glUniform1f(uniforms_.roughness, material.roughness);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
+    const auto textureFor = [this](const std::string& path) -> GLuint {
+        const auto found = textures_.find(path);
+        return path.empty() || found == textures_.end() ? 0U : found->second;
+    };
+    const GLuint albedoTexture = textureFor(material.albedoTexture);
+    const GLuint normalTexture = textureFor(material.normalTexture);
+    const GLuint metallicRoughnessTexture = textureFor(material.metallicRoughnessTexture);
+    const GLuint occlusionTexture = textureFor(material.occlusionTexture);
+    glUniform1i(uniforms_.albedoTexture, 1);
+    glUniform1i(uniforms_.normalTexture, 2);
+    glUniform1i(uniforms_.metallicRoughnessTexture, 3);
+    glUniform1i(uniforms_.occlusionTexture, 4);
+    glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasMetallicRoughnessTexture,
+                metallicRoughnessTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
     glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
     glUniform1i(uniforms_.shadowMap, 0);
@@ -1071,6 +1237,14 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                  pointLightColorIntensities_.data());
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, albedoTexture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, normalTexture);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, metallicRoughnessTexture);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, occlusionTexture);
 
     glBindVertexArray(mesh.vao);
     glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);

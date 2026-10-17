@@ -10,6 +10,7 @@
 #include <android/asset_manager.h>
 
 #include "nuby/adventure_game.hpp"
+#include "nuby/image_loader.hpp"
 #include "nuby/obj_loader.hpp"
 #include "nuby/sample_game.hpp"
 #include "nuby/scene.hpp"
@@ -61,6 +62,14 @@ private:
         GLint metallic = -1;
         GLint roughness = -1;
         GLint ambientOcclusion = -1;
+        GLint albedoTexture = -1;
+        GLint normalTexture = -1;
+        GLint metallicRoughnessTexture = -1;
+        GLint occlusionTexture = -1;
+        GLint hasAlbedoTexture = -1;
+        GLint hasNormalTexture = -1;
+        GLint hasMetallicRoughnessTexture = -1;
+        GLint hasOcclusionTexture = -1;
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
         GLint lightViewProjection = -1;
@@ -76,6 +85,7 @@ private:
     GLuint createProgram(const char* vertexSource, const char* fragmentSource);
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
     bool loadObjAsset(const std::string& assetPath, Mesh& mesh);
+    bool loadTgaAsset(const std::string& assetPath, GLuint& texture);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
     Mesh makeGround();
@@ -94,6 +104,7 @@ private:
 
     AAssetManager* assetManager_ = nullptr;
     std::unordered_map<std::string, Mesh> importedMeshes_;
+    std::unordered_map<std::string, GLuint> textures_;
     GLuint program_ = 0;
     GLuint shadowProgram_ = 0;
     GLuint shadowFramebuffer_ = 0;

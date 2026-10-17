@@ -81,10 +81,13 @@ void AdventureGame::buildScene(Scene& scene) {
         relic.sphereCollider.enabled = true;
         relic.sphereCollider.radius = 1.0f;
         relic.sphereCollider.trigger = true;
-        relic.material.color = {0.96f, 0.66f, 0.2f};
-        relic.material.emission = {0.45f, 0.2f, 0.025f};
-        relic.material.metallic = 0.52f;
-        relic.material.roughness = 0.2f;
+        relic.material.color = {1.0f, 1.0f, 1.0f};
+        relic.material.emission = {0.055f, 0.025f, 0.003f};
+        relic.material.metallic = 0.72f;
+        relic.material.roughness = 0.42f;
+        relic.material.albedoTexture = "textures/sun_relic_albedo.tga";
+        relic.material.normalTexture = "textures/sun_relic_normal.tga";
+        relic.material.metallicRoughnessTexture = "textures/sun_relic_metal_rough.tga";
         relicIds_.push_back(relic.id);
     }
 

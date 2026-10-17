@@ -34,6 +34,14 @@ jobs:
           -o /tmp/nuby-obj-tests
           && /tmp/nuby-obj-tests
 
+      - name: Compile and run TGA image asset tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/image_loader.cpp tests/image_loader_tests.cpp
+          -o /tmp/nuby-image-tests
+          && /tmp/nuby-image-tests
+
       - name: Compile and run scene serialization tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic

@@ -268,6 +268,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         nativeCreate(getAssets());
+        if (activeDemoMode != 0) nativeSetDemoMode(activeDemoMode);
         String detected = gl.glGetString(GL10.GL_RENDERER);
         gpuName = detected == null ? "GPU desconocida" : detected.trim();
         if (gpuName.length() > 26) gpuName = gpuName.substring(0, 26);

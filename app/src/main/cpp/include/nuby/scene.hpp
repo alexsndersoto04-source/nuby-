@@ -29,6 +29,10 @@ struct Material {
     float roughness = 0.58f;
     float ambientOcclusion = 1.0f;
     bool proceduralGrid = false;
+    std::string albedoTexture;
+    std::string normalTexture;
+    std::string metallicRoughnessTexture;
+    std::string occlusionTexture;
 };
 
 struct SpinComponent {

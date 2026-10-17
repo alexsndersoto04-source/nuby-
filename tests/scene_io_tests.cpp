@@ -21,6 +21,31 @@ bool near(float actual, float expected, float epsilon = 0.00001f) {
     return std::fabs(actual - expected) <= epsilon;
 }
 
+std::string stripVersionFourTextureFields(const std::string& encoded) {
+    std::istringstream input(encoded);
+    std::ostringstream legacy;
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line == "NUBY_SCENE 4") {
+            legacy << "NUBY_SCENE 3\n";
+        } else if (line.rfind("MATERIAL ", 0) == 0) {
+            std::istringstream material(line);
+            std::string tag;
+            material >> tag;
+            legacy << tag;
+            for (int value = 0; value < 10; ++value) {
+                std::string field;
+                material >> field;
+                legacy << ' ' << field;
+            }
+            legacy << '\n';
+        } else {
+            legacy << line << '\n';
+        }
+    }
+    return legacy.str();
+}
+
 nuby::Scene makeScene() {
     nuby::Scene scene;
     nuby::Entity& root = scene.create("root \"quoted\" \\ node", nuby::Primitive::None);
@@ -49,6 +74,10 @@ nuby::Scene makeScene() {
     mesh.transform.rotation = {0.1f, 0.2f, 0.3f};
     mesh.transform.scale = {0.5f, 0.6f, 0.7f};
     mesh.material.roughness = 0.3f;
+    mesh.material.albedoTexture = "textures/hero diffuse.tga";
+    mesh.material.normalTexture = "textures/hero normal.tga";
+    mesh.material.metallicRoughnessTexture = "textures/hero metal-rough.tga";
+    mesh.material.occlusionTexture = "textures/hero ao.tga";
     mesh.spin.radiansPerSecond = {0.2f, 0.3f, 0.4f};
     mesh.orbit.enabled = true;
     mesh.orbit.center = {1.0f, 2.0f, 3.0f};
@@ -159,6 +188,12 @@ void testRoundTripAllSceneData() {
                "primitive type is restored");
         expect(near(mesh->transform.rotation[1], 0.2f), "transform rotation is restored");
         expect(near(mesh->material.roughness, 0.3f), "material is restored");
+        expect(mesh->material.albedoTexture == "textures/hero diffuse.tga"
+                       && mesh->material.normalTexture == "textures/hero normal.tga"
+                       && mesh->material.metallicRoughnessTexture
+                               == "textures/hero metal-rough.tga"
+                       && mesh->material.occlusionTexture == "textures/hero ao.tga",
+               "PBR texture-map asset references are restored");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
         expect(mesh->animation.position.keyframes.size() == 2
@@ -231,6 +266,24 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "version-two physics scenes remain readable after adding character controllers");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
            "version-two scenes receive default character controller state");
+    const std::string versionThreeText = stripVersionFourTextureFields(valid.str());
+    std::stringstream legacyV3(versionThreeText);
+    expect(nuby::SceneSerializer::load(target, legacyV3, error),
+           "version-three scenes remain readable after PBR texture references are added");
+    const nuby::Entity* legacyMesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyMesh = &entity;
+    }
+    expect(legacyMesh != nullptr && legacyMesh->material.albedoTexture.empty()
+                   && legacyMesh->material.normalTexture.empty(),
+           "legacy version-three materials receive empty texture-map defaults");
+
+    nuby::Scene invalidTexture;
+    invalidTexture.create("invalid texture", nuby::Primitive::Sphere)
+            .material.albedoTexture = "../outside.tga";
+    std::stringstream invalidTextureOutput;
+    expect(!nuby::SceneSerializer::save(invalidTexture, invalidTextureOutput, error),
+           "scene serialization rejects texture paths that escape the project assets");
 
     nuby::Scene invalidPhysics;
     invalidPhysics.physicsSettings().fixedTimeStep = 0.0f;
