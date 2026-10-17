@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -24,6 +25,10 @@ Vec3 cross(const Vec3& a, const Vec3& b) {
     return {a[1] * b[2] - a[2] * b[1],
             a[2] * b[0] - a[0] * b[2],
             a[0] * b[1] - a[1] * b[0]};
+}
+
+float dot(const Vec3& a, const Vec3& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
 Quaternion multiply(const Quaternion& a, const Quaternion& b) {
@@ -93,6 +98,177 @@ void applyAngularImpulse(RigidbodyComponent& body, float inverseInertia,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         body.angularVelocity[axis] += torque[axis] * inverseInertia;
     }
+}
+
+struct CollisionShape {
+    bool sphere = false;
+    Vec3 center{0.0f, 0.0f, 0.0f};
+    Vec3 halfExtents{0.0f, 0.0f, 0.0f};
+    float radius = 0.0f;
+    float restitution = 0.0f;
+    float friction = 0.0f;
+    bool trigger = false;
+};
+
+struct CollisionContact {
+    Vec3 normal{1.0f, 0.0f, 0.0f};  // From first shape toward second.
+    Vec3 point{0.0f, 0.0f, 0.0f};
+    float penetration = 0.0f;
+};
+
+bool collisionShape(const Entity& entity, CollisionShape& shape) {
+    if (entity.sphereCollider.enabled == entity.boxCollider.enabled || entity.parentId != 0) {
+        return false;
+    }
+    for (float value : entity.transform.position) {
+        if (!std::isfinite(value)) return false;
+    }
+    for (float value : entity.transform.scale) {
+        if (!std::isfinite(value)) return false;
+    }
+    shape.center = entity.transform.position;
+    if (entity.sphereCollider.enabled) {
+        const SphereColliderComponent& collider = entity.sphereCollider;
+        const float scale = std::max({std::fabs(entity.transform.scale[0]),
+                std::fabs(entity.transform.scale[1]), std::fabs(entity.transform.scale[2])});
+        shape.radius = collider.radius * scale;
+        if (!std::isfinite(shape.radius) || shape.radius <= 0.0f
+                || !std::isfinite(collider.restitution) || !std::isfinite(collider.friction)) {
+            return false;
+        }
+        shape.sphere = true;
+        shape.restitution = collider.restitution;
+        shape.friction = collider.friction;
+        shape.trigger = collider.trigger;
+        shape.halfExtents = {shape.radius, shape.radius, shape.radius};
+        return true;
+    }
+
+    const BoxColliderComponent& collider = entity.boxCollider;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        shape.halfExtents[axis] = collider.halfExtents[axis]
+                * std::fabs(entity.transform.scale[axis]);
+        if (!std::isfinite(shape.halfExtents[axis]) || shape.halfExtents[axis] <= 0.0f) {
+            return false;
+        }
+    }
+    if (!std::isfinite(collider.restitution) || !std::isfinite(collider.friction)) return false;
+    shape.sphere = false;
+    shape.restitution = collider.restitution;
+    shape.friction = collider.friction;
+    shape.trigger = collider.trigger;
+    return true;
+}
+
+bool collideShapes(const CollisionShape& first, const CollisionShape& second,
+                   CollisionContact& contact) {
+    if (first.sphere && second.sphere) return false;
+    if (first.sphere != second.sphere) {
+        const CollisionShape& sphere = first.sphere ? first : second;
+        const CollisionShape& box = first.sphere ? second : first;
+        Vec3 closest{};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            closest[axis] = std::clamp(sphere.center[axis],
+                    box.center[axis] - box.halfExtents[axis],
+                    box.center[axis] + box.halfExtents[axis]);
+        }
+        Vec3 sphereToBox{closest[0] - sphere.center[0], closest[1] - sphere.center[1],
+                         closest[2] - sphere.center[2]};
+        const float distanceSquared = dot(sphereToBox, sphereToBox);
+        if (!std::isfinite(distanceSquared)) return false;
+        if (distanceSquared > 1.0e-12f) {
+            const float distance = std::sqrt(distanceSquared);
+            if (distance >= sphere.radius) return false;
+            for (float& component : sphereToBox) component /= distance;
+            contact.normal = sphereToBox;
+            contact.penetration = sphere.radius - distance;
+        } else {
+            std::size_t nearestAxis = 0;
+            float nearestFaceDistance = std::numeric_limits<float>::max();
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                const float faceDistance = box.halfExtents[axis]
+                        - std::fabs(sphere.center[axis] - box.center[axis]);
+                if (faceDistance < nearestFaceDistance) {
+                    nearestFaceDistance = faceDistance;
+                    nearestAxis = axis;
+                }
+            }
+            const float side = sphere.center[nearestAxis] >= box.center[nearestAxis]
+                    ? 1.0f : -1.0f;
+            contact.normal = {0.0f, 0.0f, 0.0f};
+            contact.normal[nearestAxis] = -side;
+            contact.penetration = sphere.radius + nearestFaceDistance;
+            closest = sphere.center;
+            closest[nearestAxis] = box.center[nearestAxis]
+                    + side * box.halfExtents[nearestAxis];
+        }
+        const Vec3 sphereSurface{sphere.center[0] + contact.normal[0] * sphere.radius,
+                sphere.center[1] + contact.normal[1] * sphere.radius,
+                sphere.center[2] + contact.normal[2] * sphere.radius};
+        contact.point = {(sphereSurface[0] + closest[0]) * 0.5f,
+                (sphereSurface[1] + closest[1]) * 0.5f,
+                (sphereSurface[2] + closest[2]) * 0.5f};
+        if (!first.sphere) {
+            for (float& component : contact.normal) component = -component;
+        }
+        return contact.penetration > 0.0f;
+    }
+
+    Vec3 overlap{};
+    std::size_t minimumAxis = 0;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        overlap[axis] = first.halfExtents[axis] + second.halfExtents[axis]
+                - std::fabs(second.center[axis] - first.center[axis]);
+        if (overlap[axis] <= 0.0f) return false;
+        if (overlap[axis] < overlap[minimumAxis]) minimumAxis = axis;
+    }
+    contact.normal = {0.0f, 0.0f, 0.0f};
+    contact.normal[minimumAxis] = second.center[minimumAxis] >= first.center[minimumAxis]
+            ? 1.0f : -1.0f;
+    contact.penetration = overlap[minimumAxis];
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const float lower = std::max(first.center[axis] - first.halfExtents[axis],
+                                     second.center[axis] - second.halfExtents[axis]);
+        const float upper = std::min(first.center[axis] + first.halfExtents[axis],
+                                     second.center[axis] + second.halfExtents[axis]);
+        contact.point[axis] = (lower + upper) * 0.5f;
+    }
+    contact.point[minimumAxis] = first.center[minimumAxis]
+            + contact.normal[minimumAxis] * first.halfExtents[minimumAxis];
+    return true;
+}
+
+Vec3 inverseInertiaTimes(const CollisionShape& shape, float inverseMass,
+                         const Vec3& torque) {
+    if (inverseMass <= 0.0f) return {0.0f, 0.0f, 0.0f};
+    if (shape.sphere) {
+        const float inverseInertia = inverseSphereInertia(inverseMass, shape.radius);
+        return {torque[0] * inverseInertia, torque[1] * inverseInertia,
+                torque[2] * inverseInertia};
+    }
+    Vec3 result{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const std::size_t next = (axis + 1) % 3;
+        const std::size_t last = (axis + 2) % 3;
+        const float denominator = shape.halfExtents[next] * shape.halfExtents[next]
+                + shape.halfExtents[last] * shape.halfExtents[last];
+        const float inverseInertia = denominator > 1.0e-12f
+                ? 3.0f * inverseMass / denominator : 0.0f;
+        result[axis] = torque[axis] * inverseInertia;
+    }
+    return result;
+}
+
+float angularImpulseDenominator(const CollisionShape& shape, float inverseMass,
+                                const Vec3& arm, const Vec3& axis) {
+    const Vec3 inverseInertia = inverseInertiaTimes(shape, inverseMass, cross(arm, axis));
+    return std::max(0.0f, dot(cross(inverseInertia, arm), axis));
+}
+
+void applyShapeAngularImpulse(RigidbodyComponent& body, const CollisionShape& shape,
+                              float inverseMass, const Vec3& arm, const Vec3& impulse) {
+    const Vec3 angularDelta = inverseInertiaTimes(shape, inverseMass, cross(arm, impulse));
+    for (std::size_t axis = 0; axis < 3; ++axis) body.angularVelocity[axis] += angularDelta[axis];
 }
 
 void queuePhysicsEvent(std::vector<PhysicsEvent>& events, PhysicsEventType type,
@@ -535,7 +711,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 RigidbodyComponent& body = entity.rigidbody;
                 const SphereColliderComponent& collider = entity.sphereCollider;
                 if (!body.enabled || !std::isfinite(body.mass) || body.mass < 1.0e-6f
-                        || entity.parentId != 0 || !collider.enabled || !std::isfinite(collider.radius)
+                        || entity.parentId != 0 || entity.boxCollider.enabled
+                        || !collider.enabled || !std::isfinite(collider.radius)
                         || collider.radius <= 0.0f || !std::isfinite(collider.restitution)
                         || !std::isfinite(collider.friction)
                         || !std::isfinite(entity.transform.scale[0])
@@ -585,13 +762,67 @@ void Scene::simulatePhysics(float deltaSeconds) {
                     applyAngularImpulse(body, inverseInertia, contactArm, impulse);
                 }
             }
+            const Vec3 up{0.0f, 1.0f, 0.0f};
+            for (Entity& entity : entities_) {
+                CollisionShape shape;
+                if (!entity.boxCollider.enabled || !collisionShape(entity, shape)
+                        || !entity.rigidbody.enabled || !std::isfinite(entity.rigidbody.mass)
+                        || entity.rigidbody.mass < 1.0e-6f) continue;
+                const float halfHeight = shape.halfExtents[1];
+                const float penetration = physicsSettings_.floorHeight + halfHeight
+                        - entity.transform.position[1];
+                if (!std::isfinite(penetration) || penetration < -0.0001f) continue;
+                if (penetration > 0.0f) entity.transform.position[1] += penetration;
+                RigidbodyComponent& body = entity.rigidbody;
+                const float inverseMass = 1.0f / body.mass;
+                const Vec3 arm{0.0f, -halfHeight, 0.0f};
+                const Vec3 spin = cross(body.angularVelocity, arm);
+                const float normalVelocity = body.velocity[1] + spin[1];
+                const float normalDenominator = inverseMass
+                        + angularImpulseDenominator(shape, inverseMass, arm, up);
+                float normalImpulse = 0.0f;
+                if (normalVelocity < 0.0f && normalDenominator > 0.0f) {
+                    normalImpulse = -(1.0f + std::clamp(std::min(
+                            entity.boxCollider.restitution, physicsSettings_.floorRestitution),
+                            0.0f, 1.0f)) * normalVelocity / normalDenominator;
+                    const Vec3 impulse{0.0f, normalImpulse, 0.0f};
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        body.velocity[axis] += impulse[axis] * inverseMass;
+                    }
+                    applyShapeAngularImpulse(body, shape, inverseMass, arm, impulse);
+                }
+                if (entity.characterController.enabled && body.velocity[1] <= 0.0f) {
+                    entity.characterController.grounded = true;
+                }
+                const Vec3 contactVelocity{body.velocity[0] + spin[0],
+                        body.velocity[1] + spin[1], body.velocity[2] + spin[2]};
+                const Vec3 tangent{contactVelocity[0], 0.0f, contactVelocity[2]};
+                const float tangentSpeed = std::hypot(tangent[0], tangent[2]);
+                if (tangentSpeed > 1.0e-6f && normalImpulse > 0.0f) {
+                    const Vec3 direction{-tangent[0] / tangentSpeed, 0.0f,
+                                         -tangent[2] / tangentSpeed};
+                    const float tangentDenominator = inverseMass
+                            + angularImpulseDenominator(shape, inverseMass, arm, direction);
+                    const float friction = std::clamp(std::min(
+                            entity.boxCollider.friction, physicsSettings_.floorFriction),
+                            0.0f, 1.0f);
+                    const float tangentImpulse = std::min(tangentSpeed
+                            / std::max(tangentDenominator, 1.0e-8f), normalImpulse * friction);
+                    const Vec3 impulse{direction[0] * tangentImpulse, 0.0f,
+                                       direction[2] * tangentImpulse};
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        body.velocity[axis] += impulse[axis] * inverseMass;
+                    }
+                    applyShapeAngularImpulse(body, shape, inverseMass, arm, impulse);
+                }
+            }
         }
 
         colliderIndices.clear();
         for (std::size_t index = 0; index < entities_.size(); ++index) {
             const Entity& entity = entities_[index];
             const SphereColliderComponent& collider = entity.sphereCollider;
-            if (!collider.enabled || entity.parentId != 0
+            if (!collider.enabled || entity.boxCollider.enabled || entity.parentId != 0
                     || !std::isfinite(collider.radius) || collider.radius <= 0.0f
                     || !std::isfinite(collider.restitution) || !std::isfinite(collider.friction)
                     || !std::isfinite(entity.transform.scale[0])
@@ -742,6 +973,134 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 }
             }
         }
+        const bool hasBoxCollider = std::any_of(entities_.begin(), entities_.end(),
+                [](const Entity& entity) { return entity.boxCollider.enabled; });
+        if (hasBoxCollider) {
+            colliderIndices.clear();
+            for (std::size_t index = 0; index < entities_.size(); ++index) {
+                CollisionShape shape;
+                if (collisionShape(entities_[index], shape)) colliderIndices.push_back(index);
+            }
+            std::sort(colliderIndices.begin(), colliderIndices.end(), [this](
+                    std::size_t left, std::size_t right) {
+                CollisionShape a;
+                CollisionShape b;
+                collisionShape(entities_[left], a);
+                collisionShape(entities_[right], b);
+                return a.center[0] - a.halfExtents[0] < b.center[0] - b.halfExtents[0];
+            });
+            for (std::size_t firstIndex = 0; firstIndex < colliderIndices.size(); ++firstIndex) {
+                Entity& first = entities_[colliderIndices[firstIndex]];
+                CollisionShape firstShape;
+                if (!collisionShape(first, firstShape)) continue;
+                const float firstMaximumX = firstShape.center[0] + firstShape.halfExtents[0];
+                for (std::size_t secondIndex = firstIndex + 1;
+                        secondIndex < colliderIndices.size(); ++secondIndex) {
+                    Entity& second = entities_[colliderIndices[secondIndex]];
+                    CollisionShape secondShape;
+                    if (!collisionShape(second, secondShape)) continue;
+                    if (secondShape.center[0] - secondShape.halfExtents[0] > firstMaximumX) break;
+                    if (firstShape.sphere && secondShape.sphere) continue;
+
+                    CollisionContact contact;
+                    if (!collideShapes(firstShape, secondShape, contact)) continue;
+                    if (firstShape.trigger || secondShape.trigger) {
+                        currentTriggerPairs.push_back(triggerPairKey(first.id, second.id));
+                        continue;
+                    }
+                    RigidbodyComponent& firstBody = first.rigidbody;
+                    RigidbodyComponent& secondBody = second.rigidbody;
+                    const float firstInverseMass = firstBody.enabled && std::isfinite(firstBody.mass)
+                            && firstBody.mass >= 1.0e-6f ? 1.0f / firstBody.mass : 0.0f;
+                    const float secondInverseMass = secondBody.enabled && std::isfinite(secondBody.mass)
+                            && secondBody.mass >= 1.0e-6f ? 1.0f / secondBody.mass : 0.0f;
+                    const float inverseMassSum = firstInverseMass + secondInverseMass;
+                    if (inverseMassSum <= 0.0f) continue;
+                    const float correction = std::max(contact.penetration - 0.001f, 0.0f)
+                            * 0.8f / inverseMassSum;
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        first.transform.position[axis] -= contact.normal[axis]
+                                * correction * firstInverseMass;
+                        second.transform.position[axis] += contact.normal[axis]
+                                * correction * secondInverseMass;
+                    }
+                    const Vec3 firstArm{contact.point[0] - first.transform.position[0],
+                            contact.point[1] - first.transform.position[1],
+                            contact.point[2] - first.transform.position[2]};
+                    const Vec3 secondArm{contact.point[0] - second.transform.position[0],
+                            contact.point[1] - second.transform.position[1],
+                            contact.point[2] - second.transform.position[2]};
+                    const auto pointVelocity = [](const RigidbodyComponent& body, float inverseMass,
+                                                  const Vec3& arm) {
+                        if (inverseMass <= 0.0f) return Vec3{0.0f, 0.0f, 0.0f};
+                        const Vec3 spin = cross(body.angularVelocity, arm);
+                        return Vec3{body.velocity[0] + spin[0], body.velocity[1] + spin[1],
+                                    body.velocity[2] + spin[2]};
+                    };
+                    const auto relativeVelocity = [&]() {
+                        const Vec3 firstVelocity = pointVelocity(firstBody, firstInverseMass, firstArm);
+                        const Vec3 secondVelocity = pointVelocity(secondBody, secondInverseMass, secondArm);
+                        return Vec3{secondVelocity[0] - firstVelocity[0],
+                                secondVelocity[1] - firstVelocity[1],
+                                secondVelocity[2] - firstVelocity[2]};
+                    };
+                    const auto applyImpulse = [&](const Vec3& impulse) {
+                        if (firstInverseMass > 0.0f) {
+                            for (std::size_t axis = 0; axis < 3; ++axis) {
+                                firstBody.velocity[axis] -= impulse[axis] * firstInverseMass;
+                            }
+                            applyShapeAngularImpulse(firstBody, firstShape, firstInverseMass,
+                                    firstArm, {-impulse[0], -impulse[1], -impulse[2]});
+                        }
+                        if (secondInverseMass > 0.0f) {
+                            for (std::size_t axis = 0; axis < 3; ++axis) {
+                                secondBody.velocity[axis] += impulse[axis] * secondInverseMass;
+                            }
+                            applyShapeAngularImpulse(secondBody, secondShape, secondInverseMass,
+                                    secondArm, impulse);
+                        }
+                    };
+                    Vec3 relative = relativeVelocity();
+                    const float normalSpeed = dot(relative, contact.normal);
+                    const float normalDenominator = inverseMassSum
+                            + angularImpulseDenominator(firstShape, firstInverseMass,
+                                    firstArm, contact.normal)
+                            + angularImpulseDenominator(secondShape, secondInverseMass,
+                                    secondArm, contact.normal);
+                    float normalImpulse = 0.0f;
+                    if (normalSpeed < 0.0f && normalDenominator > 1.0e-8f) {
+                        const float restitution = std::clamp(std::min(firstShape.restitution,
+                                secondShape.restitution), 0.0f, 1.0f);
+                        normalImpulse = -(1.0f + restitution) * normalSpeed / normalDenominator;
+                        const Vec3 impulse{contact.normal[0] * normalImpulse,
+                                contact.normal[1] * normalImpulse,
+                                contact.normal[2] * normalImpulse};
+                        applyImpulse(impulse);
+                    }
+                    if (normalImpulse <= 0.0f) continue;
+                    relative = relativeVelocity();
+                    const float relativeNormal = dot(relative, contact.normal);
+                    Vec3 tangent{relative[0] - relativeNormal * contact.normal[0],
+                            relative[1] - relativeNormal * contact.normal[1],
+                            relative[2] - relativeNormal * contact.normal[2]};
+                    const float tangentSpeed = std::sqrt(dot(tangent, tangent));
+                    if (tangentSpeed <= 1.0e-6f) continue;
+                    for (float& component : tangent) component /= tangentSpeed;
+                    const float tangentDenominator = inverseMassSum
+                            + angularImpulseDenominator(firstShape, firstInverseMass, firstArm, tangent)
+                            + angularImpulseDenominator(secondShape, secondInverseMass, secondArm, tangent);
+                    if (tangentDenominator <= 1.0e-8f) continue;
+                    const float friction = std::clamp(std::sqrt(std::max(0.0f,
+                            firstShape.friction * secondShape.friction)), 0.0f, 1.0f);
+                    const float frictionImpulse = std::min(tangentSpeed / tangentDenominator,
+                            normalImpulse * friction);
+                    const Vec3 impulse{-tangent[0] * frictionImpulse,
+                            -tangent[1] * frictionImpulse, -tangent[2] * frictionImpulse};
+                    applyImpulse(impulse);
+                }
+            }
+        }
+
         std::sort(currentTriggerPairs.begin(), currentTriggerPairs.end());
         for (const std::uint64_t key : currentTriggerPairs) {
             if (!std::binary_search(activeTriggerPairs_.begin(), activeTriggerPairs_.end(), key)) {

@@ -143,6 +143,16 @@ struct SphereColliderComponent {
     bool trigger = false;
 };
 
+// World-axis-aligned box collider. Half-extents are scaled by the entity's
+// absolute scale; entity rotation is intentionally ignored in this solver.
+struct BoxColliderComponent {
+    bool enabled = false;
+    std::array<float, 3> halfExtents{0.5f, 0.5f, 0.5f};
+    float restitution = 0.2f;
+    float friction = 0.35f;
+    bool trigger = false;
+};
+
 struct CharacterControllerComponent {
     bool enabled = false;
     std::array<float, 2> moveInput{0.0f, 0.0f};
@@ -224,6 +234,7 @@ struct Entity {
     AnimationComponent animation;
     RigidbodyComponent rigidbody;
     SphereColliderComponent sphereCollider;
+    BoxColliderComponent boxCollider;
     CharacterControllerComponent characterController;
     PointLightComponent pointLight;
     CameraComponent camera;

@@ -30,7 +30,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 13") {
+        if (line == "NUBY_SCENE 14") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
             if (targetVersion < 7) continue;
@@ -59,6 +59,8 @@ std::string downgradeTextureSchema(const std::string& encoded,
                 legacy << line.substr(tag.size());
             }
             legacy << '\n';
+        } else if (line.rfind("BOX_COLLIDER ", 0) == 0 && targetVersion < 14) {
+            continue;
         } else if (line.rfind("RIGIDBODY ", 0) == 0 && targetVersion < 13) {
             std::istringstream rigidbody(line);
             std::string tag;
@@ -164,6 +166,11 @@ nuby::Scene makeScene() {
     mesh.material.opacityTexture = "textures/hero opacity.tga";
     mesh.material.emissiveTexture = "textures/hero emission.tga";
     mesh.material.opacityMapChannel = nuby::ScalarTextureChannel::Matte;
+    mesh.boxCollider.enabled = true;
+    mesh.boxCollider.halfExtents = {0.75f, 1.25f, 0.5f};
+    mesh.boxCollider.restitution = 0.65f;
+    mesh.boxCollider.friction = 0.18f;
+    mesh.boxCollider.trigger = true;
     mesh.material.opacityMapTransform.uvScale = {0.7f, 0.8f};
     mesh.material.opacityMapTransform.uvOffset = {0.12f, -0.08f};
     mesh.material.opacityMapTransform.clampToEdge = true;
@@ -310,6 +317,13 @@ void testRoundTripAllSceneData() {
                "PBR and opacity texture-map asset references are restored");
         expect(mesh->overrideMtlMaterials,
                "explicit entity-level override of imported MTL materials is restored");
+        expect(mesh->boxCollider.enabled && mesh->boxCollider.trigger
+                       && near(mesh->boxCollider.halfExtents[0], 0.75f)
+                       && near(mesh->boxCollider.halfExtents[1], 1.25f)
+                       && near(mesh->boxCollider.halfExtents[2], 0.5f)
+                       && near(mesh->boxCollider.restitution, 0.65f)
+                       && near(mesh->boxCollider.friction, 0.18f),
+               "box collider dimensions, response and trigger state are restored");
         expect(near(mesh->material.albedoMapTransform.uvScale[0], 0.5f)
                        && near(mesh->material.albedoMapTransform.uvScale[1], 0.75f)
                        && near(mesh->material.albedoMapTransform.uvOffset[0], 0.1f)
@@ -440,6 +454,20 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid opacity channel cannot partially replace target scene");
 
+    std::string invalidBoxCollider = valid.str();
+    const std::string boxDimensions = "BOX_COLLIDER 1 0.75";
+    const std::size_t boxPosition = invalidBoxCollider.find(boxDimensions);
+    expect(boxPosition != std::string::npos, "v14 scene stores box collider dimensions");
+    if (boxPosition != std::string::npos) {
+        invalidBoxCollider.replace(boxPosition + std::string("BOX_COLLIDER 1 ").size(),
+                                   std::string("0.75").size(), "0");
+    }
+    std::stringstream malformedBox(invalidBoxCollider);
+    expect(!nuby::SceneSerializer::load(target, malformedBox, error),
+           "box colliders with zero half-extents are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid box collider data cannot partially replace the target scene");
+
     std::string truncated = valid.str();
     truncated.resize(truncated.size() - 8);
     std::stringstream incomplete(truncated);
@@ -503,6 +531,17 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
                    && near(legacyV10Mesh->material.opacityMapValueRange.base, 0.0f)
                    && near(legacyV10Mesh->material.opacityMapValueRange.gain, 1.0f),
            "version-ten map data loads and newly added base/gain ranges default to identity");
+
+    const std::string versionThirteenText = downgradeTextureSchema(valid.str(), 13, 6);
+    std::stringstream legacyV13(versionThirteenText);
+    expect(nuby::SceneSerializer::load(target, legacyV13, error),
+           "version-thirteen scenes load with default box collider components");
+    const nuby::Entity* legacyV13Mesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyV13Mesh = &entity;
+    }
+    expect(legacyV13Mesh != nullptr && !legacyV13Mesh->boxCollider.enabled,
+           "version-thirteen scenes receive disabled default box colliders");
 
     const std::string versionTwelveText = downgradeTextureSchema(valid.str(), 12, 6);
     std::stringstream legacyV12(versionTwelveText);

@@ -408,6 +408,120 @@ void testTriggerEventsReportEnterExitWithoutApplyingImpulse() {
            "destroying an overlapping trigger emits an exit event for cleanup");
 }
 
+void testBoxCollidersHandleFloorAndMixedShapeContacts() {
+    nuby::Scene floorScene;
+    floorScene.physicsSettings().floorEnabled = true;
+    floorScene.physicsSettings().floorHeight = 0.0f;
+    floorScene.physicsSettings().floorRestitution = 0.0f;
+    floorScene.physicsSettings().floorFriction = 0.0f;
+    nuby::Entity& fallingBox = floorScene.create("falling box", nuby::Primitive::None);
+    fallingBox.transform.position[1] = 2.0f;
+    fallingBox.rigidbody.enabled = true;
+    fallingBox.rigidbody.linearDamping = 0.0f;
+    fallingBox.boxCollider.enabled = true;
+    fallingBox.boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    fallingBox.boxCollider.restitution = 0.0f;
+    for (int frame = 0; frame < 180; ++frame) floorScene.update(1.0f / 60.0f);
+    expect(near(fallingBox.transform.position[1], 0.5f, 0.002f)
+                   && near(fallingBox.rigidbody.velocity[1], 0.0f, 0.002f),
+           "axis-aligned box settles on the world floor with bounded penetration");
+
+    nuby::Scene rollingScene;
+    rollingScene.physicsSettings().floorEnabled = true;
+    rollingScene.physicsSettings().floorRestitution = 0.0f;
+    rollingScene.physicsSettings().floorFriction = 1.0f;
+    nuby::Entity& rollingBox = rollingScene.create("rolling box", nuby::Primitive::None);
+    rollingBox.transform.position[1] = 0.5f;
+    rollingBox.rigidbody.enabled = true;
+    rollingBox.rigidbody.linearDamping = 0.0f;
+    rollingBox.rigidbody.angularDamping = 0.0f;
+    rollingBox.rigidbody.velocity[0] = 2.0f;
+    rollingBox.boxCollider.enabled = true;
+    rollingBox.boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    rollingBox.boxCollider.restitution = 0.0f;
+    rollingBox.boxCollider.friction = 1.0f;
+    for (int frame = 0; frame < 30; ++frame) rollingScene.update(1.0f / 60.0f);
+    expect(rollingBox.rigidbody.velocity[0] < 2.0f
+                   && std::fabs(rollingBox.rigidbody.angularVelocity[2]) > 0.01f,
+           "box-floor friction uses box inertia and generates angular velocity");
+
+    nuby::Scene mixedScene;
+    mixedScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    nuby::Entity& wall = mixedScene.create("wall", nuby::Primitive::None);
+    wall.boxCollider.enabled = true;
+    wall.boxCollider.halfExtents = {0.5f, 1.0f, 1.0f};
+    wall.boxCollider.restitution = 0.0f;
+    nuby::Entity& ball = mixedScene.create("ball", nuby::Primitive::Sphere);
+    ball.transform.position[0] = -1.2f;
+    ball.rigidbody.enabled = true;
+    ball.rigidbody.linearDamping = 0.0f;
+    ball.rigidbody.velocity[0] = 2.0f;
+    ball.sphereCollider.enabled = true;
+    ball.sphereCollider.radius = 0.25f;
+    ball.sphereCollider.restitution = 0.0f;
+    for (int frame = 0; frame < 60; ++frame) mixedScene.update(1.0f / 60.0f);
+    expect(ball.transform.position[0] <= -0.748f
+                   && std::fabs(ball.rigidbody.velocity[0]) < 0.01f,
+           "sphere collides against a static box and receives a normal impulse");
+
+    nuby::Scene boxPairScene;
+    boxPairScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t crateId = boxPairScene.create(
+            "crate", nuby::Primitive::None).id;
+    nuby::Entity* crate = boxPairScene.find(crateId);
+    crate->transform.position[0] = -1.2f;
+    crate->rigidbody.enabled = true;
+    crate->rigidbody.linearDamping = 0.0f;
+    crate->rigidbody.velocity[0] = 2.0f;
+    crate->boxCollider.enabled = true;
+    crate->boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    crate->boxCollider.restitution = 0.0f;
+    nuby::Entity& obstacle = boxPairScene.create("obstacle", nuby::Primitive::None);
+    obstacle.boxCollider.enabled = true;
+    obstacle.boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    obstacle.boxCollider.restitution = 0.0f;
+    for (int frame = 0; frame < 60; ++frame) boxPairScene.update(1.0f / 60.0f);
+    crate = boxPairScene.find(crateId);
+    expect(crate->transform.position[0] <= -0.998f
+                   && std::fabs(crate->rigidbody.velocity[0]) < 0.01f,
+           "dynamic box collides against a static box");
+}
+
+void testMixedShapeTriggersReportTransitionsWithoutImpulses() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t sensorId = scene.create("box sensor", nuby::Primitive::None).id;
+    nuby::Entity* sensor = scene.find(sensorId);
+    sensor->boxCollider.enabled = true;
+    sensor->boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    sensor->boxCollider.trigger = true;
+    const std::uint32_t moverId = scene.create("sphere mover", nuby::Primitive::Sphere).id;
+    nuby::Entity* mover = scene.find(moverId);
+    mover->transform.position[0] = -1.5f;
+    mover->rigidbody.enabled = true;
+    mover->rigidbody.linearDamping = 0.0f;
+    mover->rigidbody.velocity[0] = 1.0f;
+    mover->sphereCollider.enabled = true;
+    mover->sphereCollider.radius = 0.25f;
+
+    bool sawEnter = false;
+    bool sawExit = false;
+    std::vector<nuby::PhysicsEvent> events;
+    for (int frame = 0; frame < 180; ++frame) {
+        scene.update(1.0f / 60.0f);
+        scene.consumePhysicsEvents(events);
+        for (const nuby::PhysicsEvent& event : events) {
+            expect(event.firstEntityId == sensorId && event.secondEntityId == moverId,
+                   "mixed-shape trigger events carry canonical entity IDs");
+            if (event.type == nuby::PhysicsEventType::TriggerEnter) sawEnter = true;
+            if (event.type == nuby::PhysicsEventType::TriggerExit) sawExit = true;
+        }
+    }
+    expect(sawEnter && sawExit, "box-sphere trigger reports both overlap transitions");
+    expect(near(mover->rigidbody.velocity[0], 1.0f),
+           "mixed-shape triggers do not alter rigidbody velocity");
+}
+
 void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     nuby::Scene scene;
     scene.physicsSettings().floorEnabled = true;
@@ -509,6 +623,8 @@ int main() {
     testRigidBodyRotationAndRollingFriction();
     testPhysicsSphereImpulseAndHierarchySafety();
     testTriggerEventsReportEnterExitWithoutApplyingImpulse();
+    testBoxCollidersHandleFloorAndMixedShapeContacts();
+    testMixedShapeTriggersReportTransitionsWithoutImpulses();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();

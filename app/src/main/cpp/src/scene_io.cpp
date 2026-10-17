@@ -189,6 +189,9 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.sphereCollider.radius)
             || !finite(entity.sphereCollider.restitution)
             || !finite(entity.sphereCollider.friction)
+            || !finite3(entity.boxCollider.halfExtents)
+            || !finite(entity.boxCollider.restitution)
+            || !finite(entity.boxCollider.friction)
             || !finite(entity.characterController.moveInput[0])
             || !finite(entity.characterController.moveInput[1])
             || !finite(entity.characterController.maximumSpeed)
@@ -210,6 +213,13 @@ bool validEntity(const Entity& entity) {
             || (entity.sphereCollider.enabled && entity.sphereCollider.radius <= 0.0f)
             || entity.sphereCollider.restitution < 0.0f || entity.sphereCollider.restitution > 1.0f
             || entity.sphereCollider.friction < 0.0f || entity.sphereCollider.friction > 1.0f
+            || (entity.boxCollider.enabled && entity.sphereCollider.enabled)
+            || (entity.boxCollider.enabled
+                && (entity.boxCollider.halfExtents[0] <= 0.0f
+                    || entity.boxCollider.halfExtents[1] <= 0.0f
+                    || entity.boxCollider.halfExtents[2] <= 0.0f))
+            || entity.boxCollider.restitution < 0.0f || entity.boxCollider.restitution > 1.0f
+            || entity.boxCollider.friction < 0.0f || entity.boxCollider.friction > 1.0f
             || (entity.characterController.enabled
                 && (entity.characterController.maximumSpeed <= 0.0f
                     || entity.characterController.acceleration <= 0.0f
@@ -424,6 +434,11 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << entity.sphereCollider.radius << ' ' << entity.sphereCollider.restitution << ' '
            << entity.sphereCollider.friction << ' '
            << (entity.sphereCollider.trigger ? 1 : 0) << '\n';
+
+    output << "BOX_COLLIDER " << (entity.boxCollider.enabled ? 1 : 0);
+    writeFloatArray(output, entity.boxCollider.halfExtents);
+    output << ' ' << entity.boxCollider.restitution << ' ' << entity.boxCollider.friction
+           << ' ' << (entity.boxCollider.trigger ? 1 : 0) << '\n';
 
     output << "CHARACTER_CONTROLLER " << (entity.characterController.enabled ? 1 : 0)
            << ' ' << entity.characterController.moveInput[0]
@@ -685,6 +700,16 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.sphereCollider.restitution)
                 || !std::isfinite(entity.sphereCollider.friction)) {
             return fail(error, "Entity sphere collider component is invalid");
+        }
+        if (version >= 14
+                && (!readTag(input, "BOX_COLLIDER", error)
+                    || !readBool(input, entity.boxCollider.enabled)
+                    || !readFloatArray(input, entity.boxCollider.halfExtents)
+                    || !(input >> entity.boxCollider.restitution >> entity.boxCollider.friction)
+                    || !readBool(input, entity.boxCollider.trigger)
+                    || !std::isfinite(entity.boxCollider.restitution)
+                    || !std::isfinite(entity.boxCollider.friction))) {
+            return fail(error, "Entity box collider component is invalid");
         }
     }
     if (version >= 3) {
