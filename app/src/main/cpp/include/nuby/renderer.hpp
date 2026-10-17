@@ -89,12 +89,17 @@ private:
         GLint metallicTexture = -1;
         GLint roughnessTexture = -1;
         GLint occlusionTexture = -1;
+        GLint opacityTexture = -1;
         GLint hasAlbedoTexture = -1;
         GLint hasNormalTexture = -1;
         GLint hasMetallicRoughnessTexture = -1;
         GLint hasMetallicTexture = -1;
         GLint hasRoughnessTexture = -1;
         GLint hasOcclusionTexture = -1;
+        GLint hasOpacityTexture = -1;
+        GLint opacityMapChannel = -1;
+        GLint opacityUvScale = -1;
+        GLint opacityUvOffset = -1;
         std::array<GLint, 6> textureUvScale{};
         std::array<GLint, 6> textureUvOffset{};
         GLint cameraPosition = -1;

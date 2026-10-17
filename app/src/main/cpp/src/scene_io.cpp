@@ -123,6 +123,9 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.metallicTexture)
             || !validTexturePath(entity.material.roughnessTexture)
             || !validTexturePath(entity.material.occlusionTexture)
+            || !validTexturePath(entity.material.opacityTexture)
+            || static_cast<unsigned int>(entity.material.opacityMapChannel)
+                    > static_cast<unsigned int>(ScalarTextureChannel::Luminance)
             || static_cast<unsigned int>(entity.primitive)
                     > static_cast<unsigned int>(Primitive::None)) {
         return false;
@@ -132,7 +135,8 @@ bool validEntity(const Entity& entity) {
             || !validTextureMapTransform(entity.material.metallicRoughnessMapTransform)
             || !validTextureMapTransform(entity.material.metallicMapTransform)
             || !validTextureMapTransform(entity.material.roughnessMapTransform)
-            || !validTextureMapTransform(entity.material.occlusionMapTransform)) {
+            || !validTextureMapTransform(entity.material.occlusionMapTransform)
+            || !validTextureMapTransform(entity.material.opacityMapTransform)) {
         return false;
     }
     const auto finite = [](float value) { return std::isfinite(value); };
@@ -313,7 +317,8 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.material.metallicRoughnessTexture) << ' '
            << std::quoted(entity.material.occlusionTexture) << ' '
            << std::quoted(entity.material.metallicTexture) << ' '
-           << std::quoted(entity.material.roughnessTexture) << '\n';
+           << std::quoted(entity.material.roughnessTexture) << ' '
+           << std::quoted(entity.material.opacityTexture) << '\n';
     output << "OVERRIDE_MTL_MATERIALS "
            << (entity.overrideMtlMaterials ? 1 : 0) << '\n';
     output << "MATERIAL_MAP_UV";
@@ -323,7 +328,10 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTextureMapTransform(output, entity.material.metallicMapTransform);
     writeTextureMapTransform(output, entity.material.roughnessMapTransform);
     writeTextureMapTransform(output, entity.material.occlusionMapTransform);
+    writeTextureMapTransform(output, entity.material.opacityMapTransform);
     output << '\n';
+    output << "OPACITY_MAP_CHANNEL "
+           << static_cast<unsigned int>(entity.material.opacityMapChannel) << '\n';
 
     output << "SPIN";
     writeFloatArray(output, entity.spin.radiansPerSecond);
@@ -458,6 +466,11 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !validTexturePath(entity.material.roughnessTexture))) {
         return fail(error, "Entity scalar PBR texture path is invalid");
     }
+    if (version >= 10
+            && (!(input >> std::quoted(entity.material.opacityTexture))
+                || !validTexturePath(entity.material.opacityTexture))) {
+        return fail(error, "Entity opacity texture path is invalid");
+    }
     if (version >= 6) {
         int overrideMtlMaterials = -1;
         if (!readTag(input, "OVERRIDE_MTL_MATERIALS", error)
@@ -480,8 +493,21 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !readTextureMapTransform(input, entity.material.roughnessMapTransform,
                         version >= 8)
                 || !readTextureMapTransform(input, entity.material.occlusionMapTransform,
-                        version >= 8))) {
+                        version >= 8)
+                || (version >= 10
+                    && !readTextureMapTransform(input,
+                            entity.material.opacityMapTransform, true)))) {
         return fail(error, "Material UV transform or sampler settings are invalid");
+    }
+    if (version >= 10) {
+        int opacityMapChannel = -1;
+        if (!readTag(input, "OPACITY_MAP_CHANNEL", error)
+                || !(input >> opacityMapChannel) || opacityMapChannel < 0
+                || opacityMapChannel > static_cast<int>(ScalarTextureChannel::Luminance)) {
+            return fail(error, "Material opacity-map channel is invalid");
+        }
+        entity.material.opacityMapChannel =
+                static_cast<ScalarTextureChannel>(opacityMapChannel);
     }
 
     if (!readTag(input, "SPIN", error)

@@ -7,3 +7,4 @@ Pm 0.68
 Pr 0.26
 map_Kd -clamp on -s 1.25 1.25 1 -o 0.05 0.0 0 orbital_shard_albedo.tga
 norm -s 1.25 1.25 1 -o 0.05 0.0 0 orbital_shard_normal.tga
+map_d -imfchan m -s 1.25 1.25 1 -o 0.05 0.0 0 orbital_shard_albedo.tga

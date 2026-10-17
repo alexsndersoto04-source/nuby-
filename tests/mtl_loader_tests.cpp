@@ -40,8 +40,10 @@ void testPackagedSampleMaterialLibrary() {
                        && near(material.emission[0], 0.018f),
                "sample MTL PBR factors parse as expected");
         expect(material.albedoTexture == "meshes/orbital_shard_albedo.tga"
-                       && material.normalTexture == "meshes/orbital_shard_normal.tga",
-               "sample MTL image paths resolve to packaged assets");
+                       && material.normalTexture == "meshes/orbital_shard_normal.tga"
+                       && material.opacityTexture == "meshes/orbital_shard_albedo.tga"
+                       && material.opacityMapChannel == nuby::ScalarTextureChannel::Matte,
+               "sample MTL image paths and matte opacity channel resolve to packaged assets");
         expect(near(material.albedoMapTransform.uvScale[0], 1.25f)
                        && near(material.albedoMapTransform.uvOffset[0], 0.05f)
                        && material.albedoMapTransform.clampToEdge
@@ -63,6 +65,7 @@ Pr 0.31
 d 0.65
 map_Kd -s 0.5 0.75 1 -o 0.1 0.2 0 textures/sun albedo.tga
 norm -s 2 2 textures/sun normal.tga
+map_d -imfchan m -s 0.75 0.8 1 -o 0.2 0.1 0 -clamp on textures/sun opacity.tga
 map_Pr -o -0.2 0.25 textures/roughness.tga
 map_Pm -clamp on textures/metallic.tga
 map_AO -clamp off textures/occlusion.tga
@@ -71,6 +74,7 @@ newmtl Stone
 Kd 0.34 0.31 0.27
 Ns 18
 Tr 0.2
+map_d textures/stone opacity.tga
 illum 2
 )MTL";
     std::vector<nuby::WavefrontMaterial> materials;
@@ -97,8 +101,19 @@ illum 2
                        && relic.metallicTexture
                        == "characters/wayfarer/textures/metallic.tga"
                        && relic.occlusionTexture
-                       == "characters/wayfarer/textures/occlusion.tga",
-               "all supported PBR texture maps resolve relative to the MTL file");
+                       == "characters/wayfarer/textures/occlusion.tga"
+                       && relic.opacityTexture
+                               == "characters/wayfarer/textures/sun opacity.tga"
+                       && materials[1].material.opacityTexture
+                               == "characters/wayfarer/textures/stone opacity.tga",
+               "all supported PBR and opacity texture paths resolve relative to the MTL");
+        expect(relic.opacityMapChannel == nuby::ScalarTextureChannel::Matte
+                       && materials[1].material.opacityMapChannel
+                               == nuby::ScalarTextureChannel::Luminance
+                       && relic.opacityMapTransform.clampToEdge
+                       && near(relic.opacityMapTransform.uvScale[0], 0.75f)
+                       && near(relic.opacityMapTransform.uvOffset[1], 0.1f),
+               "opacity channel and its independent UV/wrap settings are parsed");
         expect(relic.metallicMapTransform.clampToEdge
                        && !relic.occlusionMapTransform.clampToEdge
                        && !relic.albedoMapTransform.clampToEdge,
@@ -117,6 +132,33 @@ illum 2
     }
 }
 
+void testEverySupportedOpacityChannelParses() {
+    constexpr char source[] = R"MTL(
+newmtl Red
+map_d -imfchan r red.tga
+newmtl Green
+map_d -imfchan g green.tga
+newmtl Blue
+map_d -imfchan b blue.tga
+newmtl Matte
+map_d -imfchan m matte.tga
+newmtl Luminance
+map_d -imfchan l luminance.tga
+)MTL";
+    std::vector<nuby::WavefrontMaterial> materials;
+    std::string error;
+    expect(nuby::parseMtl(source, "materials/channels.mtl", materials, error),
+           "all supported scalar texture channels parse");
+    expect(materials.size() == 5, "all opacity channel fixture materials are retained");
+    if (materials.size() == 5) {
+        for (std::size_t index = 0; index < materials.size(); ++index) {
+            expect(static_cast<unsigned int>(materials[index].material.opacityMapChannel)
+                           == index,
+                   "opacity map channel enum follows the supported Wavefront channel order");
+        }
+    }
+}
+
 void testInvalidMaterialsAndTraversalAreRejectedTransactionally() {
     std::vector<nuby::WavefrontMaterial> materials(1);
     materials[0].name = "keep";
@@ -126,9 +168,11 @@ void testInvalidMaterialsAndTraversalAreRejectedTransactionally() {
         "newmtl Bad\nPr nan\n",
         "newmtl Bad\nd nan\n",
         "newmtl Bad\nTr 1.1\n",
-        "newmtl Bad\nmap_d opacity.tga\n",
+        "newmtl Bad\nmap_d -imfchan z opacity.tga\n",
+        "newmtl Bad\nmap_d ../outside.tga\n",
         "newmtl Duplicate\nnewmtl Duplicate\n",
         "newmtl Bad\nmap_Kd -blendu on texture.tga\n",
+        "newmtl Bad\nmap_Kd -imfchan r texture.tga\n",
         "newmtl Bad\nmap_Kd -clamp sideways texture.tga\n",
         "newmtl Bad\nmap_Kd -s 2000 2000 texture.tga\n"
     };
@@ -147,6 +191,8 @@ void testMalformedAndMissingMaterialRecordsAreRejected() {
     std::string error;
     expect(!nuby::parseMtl("Kd 1 1 1\n", "materials/file.mtl", materials, error),
            "material properties before the first newmtl are not accepted as a library");
+    expect(!nuby::parseMtl("map_d alpha.tga\n", "materials/file.mtl", materials, error),
+           "opacity maps before the first material are rejected");
     expect(!nuby::parseMtl("", "materials/file.mtl", materials, error),
            "empty MTL files are rejected");
     expect(!nuby::parseMtl("newmtl Color\nKd 0 1 1 0.5\n",
@@ -158,6 +204,7 @@ void testMalformedAndMissingMaterialRecordsAreRejected() {
 int main() {
     testPackagedSampleMaterialLibrary();
     testPbrFactorsAndRelativeMapsParse();
+    testEverySupportedOpacityChannelParses();
     testInvalidMaterialsAndTraversalAreRejectedTransactionally();
     testMalformedAndMissingMaterialRecordsAreRejected();
     if (failures != 0) {

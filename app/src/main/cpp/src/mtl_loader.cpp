@@ -83,7 +83,9 @@ bool parseFiniteFloat(const std::string& token, float& value) {
 
 bool parseMapSpecification(std::istringstream& fields,
                            std::string& path,
-                           TextureMapTransform& transform) {
+                           TextureMapTransform& transform,
+                           bool allowScalarChannel = false,
+                           ScalarTextureChannel* scalarChannel = nullptr) {
     std::vector<std::string> tokens;
     std::string token;
     while (fields >> token) tokens.push_back(std::move(token));
@@ -95,6 +97,19 @@ bool parseMapSpecification(std::istringstream& fields,
             if (index >= tokens.size()) return false;
             if (tokens[index] == "on") transform.clampToEdge = true;
             else if (tokens[index] == "off") transform.clampToEdge = false;
+            else return false;
+            ++index;
+            continue;
+        }
+        if (option == "-imfchan") {
+            if (!allowScalarChannel || scalarChannel == nullptr || index >= tokens.size()) {
+                return false;
+            }
+            if (tokens[index] == "r") *scalarChannel = ScalarTextureChannel::Red;
+            else if (tokens[index] == "g") *scalarChannel = ScalarTextureChannel::Green;
+            else if (tokens[index] == "b") *scalarChannel = ScalarTextureChannel::Blue;
+            else if (tokens[index] == "m") *scalarChannel = ScalarTextureChannel::Matte;
+            else if (tokens[index] == "l") *scalarChannel = ScalarTextureChannel::Luminance;
             else return false;
             ++index;
             continue;
@@ -222,18 +237,24 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
                 return fail(error, "MTL dissolve or transparency factor is invalid");
             }
             current->material.opacity = record == "d" ? transparency : 1.0f - transparency;
-        } else if (record == "map_d") {
-            return fail(error, "MTL opacity maps are not supported yet");
-        } else if (record == "map_Kd" || record == "map_Kn" || record == "norm"
-                || record == "map_Pr" || record == "map_Pm" || record == "map_AO") {
+        } else if (record == "map_d" || record == "map_Kd" || record == "map_Kn"
+                || record == "norm" || record == "map_Pr" || record == "map_Pm"
+                || record == "map_AO") {
             std::string rawPath;
             TextureMapTransform transform;
-            if (!parseMapSpecification(fields, rawPath, transform)) {
-                return fail(error, "MTL texture map path or -s/-o options are invalid or unsupported");
+            ScalarTextureChannel opacityChannel = ScalarTextureChannel::Luminance;
+            const bool isOpacityMap = record == "map_d";
+            if (!parseMapSpecification(fields, rawPath, transform, isOpacityMap,
+                                       &opacityChannel)) {
+                return fail(error, "MTL texture map path or options are invalid or unsupported");
             }
             const std::string resolved = resolveMapPath(directory, rawPath);
             if (resolved.empty()) return fail(error, "MTL texture map escapes its asset directory");
-            if (record == "map_Kd") {
+            if (isOpacityMap) {
+                current->material.opacityTexture = resolved;
+                current->material.opacityMapTransform = transform;
+                current->material.opacityMapChannel = opacityChannel;
+            } else if (record == "map_Kd") {
                 current->material.albedoTexture = resolved;
                 current->material.albedoMapTransform = transform;
             } else if (record == "map_Kn" || record == "norm") {

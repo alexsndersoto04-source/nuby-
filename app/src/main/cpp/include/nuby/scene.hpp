@@ -28,6 +28,14 @@ struct TextureMapTransform {
     bool clampToEdge = false;
 };
 
+enum class ScalarTextureChannel : std::uint8_t {
+    Red,
+    Green,
+    Blue,
+    Matte,
+    Luminance
+};
+
 struct Material {
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
     std::array<float, 3> emission{0.0f, 0.0f, 0.0f};
@@ -42,12 +50,15 @@ struct Material {
     std::string metallicTexture;
     std::string roughnessTexture;
     std::string occlusionTexture;
+    std::string opacityTexture;
     TextureMapTransform albedoMapTransform;
     TextureMapTransform normalMapTransform;
     TextureMapTransform metallicRoughnessMapTransform;
     TextureMapTransform metallicMapTransform;
     TextureMapTransform roughnessMapTransform;
     TextureMapTransform occlusionMapTransform;
+    TextureMapTransform opacityMapTransform;
+    ScalarTextureChannel opacityMapChannel = ScalarTextureChannel::Luminance;
 };
 
 struct SpinComponent {
