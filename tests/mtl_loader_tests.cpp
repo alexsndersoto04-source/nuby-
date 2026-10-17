@@ -41,9 +41,12 @@ void testPackagedSampleMaterialLibrary() {
                "sample MTL PBR factors parse as expected");
         expect(material.albedoTexture == "meshes/orbital_shard_albedo.tga"
                        && material.normalTexture == "meshes/orbital_shard_normal.tga"
-                       && material.opacityTexture == "meshes/orbital_shard_albedo.tga"
-                       && material.opacityMapChannel == nuby::ScalarTextureChannel::Matte,
-               "sample MTL image paths and matte opacity channel resolve to packaged assets");
+                       && material.opacityTexture == "meshes/orbital_shard_opacity.tga"
+                       && material.opacityMapChannel == nuby::ScalarTextureChannel::Matte
+                       && material.opacityMapTransform.clampToEdge
+                       && near(material.opacityMapTransform.uvScale[0], 1.25f)
+                       && near(material.opacityMapTransform.uvOffset[0], 0.05f),
+               "sample MTL resolves the matte mask and its independent UV/wrap settings");
         expect(near(material.albedoMapTransform.uvScale[0], 1.25f)
                        && near(material.albedoMapTransform.uvOffset[0], 0.05f)
                        && material.albedoMapTransform.clampToEdge

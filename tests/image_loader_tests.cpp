@@ -1,5 +1,7 @@
 #include "nuby/image_loader.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -122,6 +124,32 @@ void testPackagedAdventureMaterialMapsDecode() {
     }
 }
 
+void testPackagedOpacityMaskContainsVariableMatteAlpha() {
+    std::ifstream file("app/src/main/assets/meshes/orbital_shard_opacity.tga",
+                       std::ios::binary);
+    expect(file.good(), "packaged orbital shard opacity mask exists");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    nuby::ImageRgba8 image;
+    std::string error;
+    expect(nuby::decodeTga(source, image, error),
+           "packaged orbital shard opacity mask decodes");
+    expect(image.width == 64 && image.height == 64,
+           "opacity mask uses a compact texture dimension");
+    if (image.pixels.empty()) return;
+    std::uint8_t minimumAlpha = 255;
+    std::uint8_t maximumAlpha = 0;
+    for (std::size_t pixel = 3; pixel < image.pixels.size(); pixel += 4) {
+        minimumAlpha = std::min(minimumAlpha, image.pixels[pixel]);
+        maximumAlpha = std::max(maximumAlpha, image.pixels[pixel]);
+    }
+    const std::size_t centerAlpha = (32U * 64U + 32U) * 4U + 3U;
+    expect(minimumAlpha < 16 && maximumAlpha > 240
+                   && image.pixels[centerAlpha] > 240,
+           "opacity mask provides transparent edges and an opaque center in its matte channel");
+}
+
 void testMalformedAndUnsupportedImagesAreRejectedTransactionally() {
     nuby::ImageRgba8 image;
     image.width = 1;
@@ -157,6 +185,7 @@ int main() {
     testUncompressedTopOriginConvertsToBottomLeftRgba();
     testRleAndRightOriginImagesDecode();
     testPackagedAdventureMaterialMapsDecode();
+    testPackagedOpacityMaskContainsVariableMatteAlpha();
     testMalformedAndUnsupportedImagesAreRejectedTransactionally();
     if (failures != 0) {
         std::cerr << failures << " image loader test(s) failed\n";
