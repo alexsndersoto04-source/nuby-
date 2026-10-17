@@ -41,8 +41,14 @@ void testQuadTriangulationAndAttributes() {
     expect(vertices.size() == 6, "quad is triangulated into six vertices");
     if (vertices.size() == 6) {
         expect(near(vertices[2].position[0], 1.0f), "position attribute is preserved");
-        expect(near(vertices[2].uv[0], 1.0f) && near(vertices[2].uv[1], 1.0f),
-               "UV attribute is preserved");
+        bool pairedUvFound = false;
+        for (const nuby::MeshVertex& vertex : vertices) {
+            if (near(vertex.position[0], 1.0f) && near(vertex.position[1], 1.0f)
+                    && near(vertex.uv[0], 1.0f) && near(vertex.uv[1], 1.0f)) {
+                pairedUvFound = true;
+            }
+        }
+        expect(pairedUvFound, "UV attribute remains paired with its source position");
         expect(near(vertices[0].normal[2], 1.0f), "authored normal is preserved");
     }
 }
@@ -61,6 +67,64 @@ void testNegativeIndicesAndGeneratedNormals() {
     if (vertices.size() == 3) {
         expect(near(vertices[0].normal[2], 1.0f), "normal is generated for a face without normals");
     }
+}
+
+double signedTriangleAreaZ(const nuby::MeshVertex& a,
+                           const nuby::MeshVertex& b,
+                           const nuby::MeshVertex& c) {
+    return 0.5 * ((b.position[0] - a.position[0]) * (c.position[1] - a.position[1])
+                - (b.position[1] - a.position[1]) * (c.position[0] - a.position[0]));
+}
+
+void testConcavePolygonEarClippingAndWinding() {
+    constexpr char counterClockwise[] = R"OBJ(
+        v 0 0 0
+        v 2 0 0
+        v 2 2 0
+        v 1 1 0
+        v 0 2 0
+        f 1 2 3 4 5
+    )OBJ";
+    constexpr char clockwise[] = R"OBJ(
+        v 0 0 0
+        v 2 0 0
+        v 2 2 0
+        v 1 1 0
+        v 0 2 0
+        f 5 4 3 2 1
+    )OBJ";
+    std::vector<nuby::MeshVertex> vertices;
+    std::string error;
+    expect(nuby::parseObj(counterClockwise, vertices, error),
+           "concave OBJ polygon is triangulated successfully");
+    expect(vertices.size() == 9, "concave pentagon produces three triangles");
+    double area = 0.0;
+    for (std::size_t i = 0; i + 2 < vertices.size(); i += 3) {
+        area += signedTriangleAreaZ(vertices[i], vertices[i + 1], vertices[i + 2]);
+    }
+    expect(near(static_cast<float>(area), 3.0f),
+           "concave triangulation preserves total signed area without overlap");
+
+    expect(nuby::parseObj(clockwise, vertices, error),
+           "concave polygons with reversed winding remain supported");
+    area = 0.0;
+    for (std::size_t i = 0; i + 2 < vertices.size(); i += 3) {
+        area += signedTriangleAreaZ(vertices[i], vertices[i + 1], vertices[i + 2]);
+    }
+    expect(near(static_cast<float>(area), -3.0f),
+           "triangulation preserves the original clockwise winding");
+}
+
+void testInvalidPolygonBoundariesAreRejected() {
+    constexpr char degenerate[] = "v 0 0 0\nv 1 1 0\nv 2 2 0\nf 1 2 3\n";
+    constexpr char selfIntersecting[] =
+            "v 0 0 0\nv 2 2 0\nv 0 2 0\nv 2 0 0\nf 1 2 3 4\n";
+    std::vector<nuby::MeshVertex> vertices;
+    std::string error;
+    expect(!nuby::parseObj(degenerate, vertices, error),
+           "zero-area polygons are rejected instead of generating unstable normals");
+    expect(!nuby::parseObj(selfIntersecting, vertices, error),
+           "self-intersecting polygon boundaries are rejected");
 }
 
 void testInvalidIndexIsRejected() {
@@ -158,6 +222,8 @@ void testPackagedSampleAsset() {
 int main() {
     testQuadTriangulationAndAttributes();
     testNegativeIndicesAndGeneratedNormals();
+    testConcavePolygonEarClippingAndWinding();
+    testInvalidPolygonBoundariesAreRejected();
     testInvalidIndexIsRejected();
     testMalformedNumbersAndUnsupportedLibraryPathsAreRejected();
     testMaterialLibrariesAndSubmeshAssignments();
