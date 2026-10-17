@@ -210,6 +210,18 @@ uniform sampler2D uMetallicRoughnessTexture;
 uniform sampler2D uMetallicTexture;
 uniform sampler2D uRoughnessTexture;
 uniform sampler2D uOcclusionTexture;
+uniform vec2 uAlbedoUvScale;
+uniform vec2 uAlbedoUvOffset;
+uniform vec2 uNormalUvScale;
+uniform vec2 uNormalUvOffset;
+uniform vec2 uMetallicRoughnessUvScale;
+uniform vec2 uMetallicRoughnessUvOffset;
+uniform vec2 uMetallicUvScale;
+uniform vec2 uMetallicUvOffset;
+uniform vec2 uRoughnessUvScale;
+uniform vec2 uRoughnessUvOffset;
+uniform vec2 uOcclusionUvScale;
+uniform vec2 uOcclusionUvOffset;
 uniform int uHasAlbedoTexture;
 uniform int uHasNormalTexture;
 uniform int uHasMetallicRoughnessTexture;
@@ -312,15 +324,22 @@ void main() {
     }
 
     vec3 baseColor = uColor;
+    vec2 albedoUv = vUv * uAlbedoUvScale + uAlbedoUvOffset;
+    vec2 normalUv = vUv * uNormalUvScale + uNormalUvOffset;
+    vec2 metallicRoughnessUv = vUv * uMetallicRoughnessUvScale
+                             + uMetallicRoughnessUvOffset;
+    vec2 metallicUv = vUv * uMetallicUvScale + uMetallicUvOffset;
+    vec2 roughnessUv = vUv * uRoughnessUvScale + uRoughnessUvOffset;
+    vec2 occlusionUv = vUv * uOcclusionUvScale + uOcclusionUvOffset;
     if (uHasAlbedoTexture != 0) {
-        baseColor *= srgbToLinear(texture(uAlbedoTexture, vUv).rgb);
+        baseColor *= srgbToLinear(texture(uAlbedoTexture, albedoUv).rgb);
     }
     if (uHasNormalTexture != 0) {
-        vec3 tangentNormal = texture(uNormalTexture, vUv).rgb * 2.0 - 1.0;
+        vec3 tangentNormal = texture(uNormalTexture, normalUv).rgb * 2.0 - 1.0;
         vec3 positionDx = dFdx(vWorldPosition);
         vec3 positionDy = dFdy(vWorldPosition);
-        vec2 uvDx = dFdx(vUv);
-        vec2 uvDy = dFdy(vUv);
+        vec2 uvDx = dFdx(normalUv);
+        vec2 uvDy = dFdy(normalUv);
         float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
         if (abs(determinant) > 0.00001) {
             vec3 tangent = normalize((positionDx * uvDy.y - positionDy * uvDx.y)
@@ -334,21 +353,21 @@ void main() {
     float roughness = clamp(uRoughness, 0.06, 1.0);
     float metallic = clamp(uMetallic, 0.0, 1.0);
     if (uHasMetallicRoughnessTexture != 0) {
-        vec4 materialSample = texture(uMetallicRoughnessTexture, vUv);
+        vec4 materialSample = texture(uMetallicRoughnessTexture, metallicRoughnessUv);
         roughness *= materialSample.g;
         metallic *= materialSample.b;
     }
     if (uHasRoughnessTexture != 0) {
-        roughness = texture(uRoughnessTexture, vUv).r;
+        roughness = texture(uRoughnessTexture, roughnessUv).r;
     }
     if (uHasMetallicTexture != 0) {
-        metallic = texture(uMetallicTexture, vUv).r;
+        metallic = texture(uMetallicTexture, metallicUv).r;
     }
     roughness = clamp(roughness, 0.06, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
     float occlusion = uAmbientOcclusion;
     if (uHasOcclusionTexture != 0) {
-        occlusion *= texture(uOcclusionTexture, vUv).r;
+        occlusion *= texture(uOcclusionTexture, occlusionUv).r;
     }
 
     float visibility = 1.0 - shadowAmount(normal, lightDirection) * 0.82;
@@ -1334,6 +1353,16 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.hasMetallicTexture = glGetUniformLocation(program_, "uHasMetallicTexture");
     uniforms_.hasRoughnessTexture = glGetUniformLocation(program_, "uHasRoughnessTexture");
     uniforms_.hasOcclusionTexture = glGetUniformLocation(program_, "uHasOcclusionTexture");
+    const std::array<const char*, 6> uvScaleNames{{
+            "uAlbedoUvScale", "uNormalUvScale", "uMetallicRoughnessUvScale",
+            "uMetallicUvScale", "uRoughnessUvScale", "uOcclusionUvScale"}};
+    const std::array<const char*, 6> uvOffsetNames{{
+            "uAlbedoUvOffset", "uNormalUvOffset", "uMetallicRoughnessUvOffset",
+            "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset"}};
+    for (std::size_t map = 0; map < uniforms_.textureUvScale.size(); ++map) {
+        uniforms_.textureUvScale[map] = glGetUniformLocation(program_, uvScaleNames[map]);
+        uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
+    }
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
     uniforms_.lightViewProjection = glGetUniformLocation(program_, "uLightViewProjection");
@@ -1399,6 +1428,20 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.hasMetallicTexture, metallicTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasRoughnessTexture, roughnessTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
+    const std::array<const TextureMapTransform*, 6> mapTransforms{{
+            &material.albedoMapTransform,
+            &material.normalMapTransform,
+            &material.metallicRoughnessMapTransform,
+            &material.metallicMapTransform,
+            &material.roughnessMapTransform,
+            &material.occlusionMapTransform
+    }};
+    for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
+        glUniform2fv(uniforms_.textureUvScale[map], 1,
+                     mapTransforms[map]->uvScale.data());
+        glUniform2fv(uniforms_.textureUvOffset[map], 1,
+                     mapTransforms[map]->uvOffset.data());
+    }
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
     glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
     glUniform1i(uniforms_.shadowMap, 0);

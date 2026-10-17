@@ -87,6 +87,8 @@ private:
         GLint hasMetallicTexture = -1;
         GLint hasRoughnessTexture = -1;
         GLint hasOcclusionTexture = -1;
+        std::array<GLint, 6> textureUvScale{};
+        std::array<GLint, 6> textureUvOffset{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
         GLint lightViewProjection = -1;

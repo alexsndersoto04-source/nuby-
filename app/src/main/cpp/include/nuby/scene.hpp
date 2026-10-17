@@ -22,6 +22,11 @@ struct Transform {
     std::array<float, 3> scale{1.0f, 1.0f, 1.0f};
 };
 
+struct TextureMapTransform {
+    std::array<float, 2> uvScale{1.0f, 1.0f};
+    std::array<float, 2> uvOffset{0.0f, 0.0f};
+};
+
 struct Material {
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
     std::array<float, 3> emission{0.0f, 0.0f, 0.0f};
@@ -35,6 +40,12 @@ struct Material {
     std::string metallicTexture;
     std::string roughnessTexture;
     std::string occlusionTexture;
+    TextureMapTransform albedoMapTransform;
+    TextureMapTransform normalMapTransform;
+    TextureMapTransform metallicRoughnessMapTransform;
+    TextureMapTransform metallicMapTransform;
+    TextureMapTransform roughnessMapTransform;
+    TextureMapTransform occlusionMapTransform;
 };
 
 struct SpinComponent {

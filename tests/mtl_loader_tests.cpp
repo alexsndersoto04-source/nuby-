@@ -54,9 +54,9 @@ Ke 0.02 0.01 0.0
 Ns 198.0
 Pm 0.72
 Pr 0.31
-map_Kd textures/sun albedo.tga
-norm textures/sun normal.tga
-map_Pr textures/roughness.tga
+map_Kd -s 0.5 0.75 1 -o 0.1 0.2 0 textures/sun albedo.tga
+norm -s 2 2 textures/sun normal.tga
+map_Pr -o -0.2 0.25 textures/roughness.tga
 map_Pm textures/metallic.tga
 map_AO textures/occlusion.tga
 
@@ -89,6 +89,14 @@ illum 2
                        && relic.occlusionTexture
                        == "characters/wayfarer/textures/occlusion.tga",
                "all supported PBR texture maps resolve relative to the MTL file");
+        expect(near(relic.albedoMapTransform.uvScale[0], 0.5f)
+                       && near(relic.albedoMapTransform.uvScale[1], 0.75f)
+                       && near(relic.albedoMapTransform.uvOffset[0], 0.1f)
+                       && near(relic.albedoMapTransform.uvOffset[1], 0.2f)
+                       && near(relic.normalMapTransform.uvScale[0], 2.0f)
+                       && near(relic.roughnessMapTransform.uvOffset[0], -0.2f)
+                       && near(relic.roughnessMapTransform.uvOffset[1], 0.25f),
+               "common per-map UV scale and offset options are parsed independently");
         expect(near(materials[1].material.roughness,
                     std::sqrt(2.0f / 20.0f)),
                "classic specular exponent maps to a PBR roughness fallback");
@@ -103,7 +111,8 @@ void testInvalidMaterialsAndTraversalAreRejectedTransactionally() {
         "newmtl Bad\nmap_Kd ../outside.tga\n",
         "newmtl Bad\nPr nan\n",
         "newmtl Duplicate\nnewmtl Duplicate\n",
-        "newmtl Bad\nmap_Kd -s 2 2 texture.tga\n"
+        "newmtl Bad\nmap_Kd -clamp on texture.tga\n",
+        "newmtl Bad\nmap_Kd -s 2000 2000 texture.tga\n"
     };
     for (const std::string& source : invalidLibraries) {
         expect(!nuby::parseMtl(source, "materials/model.mtl", materials, error),

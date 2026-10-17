@@ -29,8 +29,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 6") {
+        if (line == "NUBY_SCENE 7") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0 && targetVersion < 7) {
+            continue;
         } else if (line.rfind("OVERRIDE_MTL_MATERIALS ", 0) == 0
                 && targetVersion < 6) {
             continue;
@@ -92,6 +94,11 @@ nuby::Scene makeScene() {
     mesh.material.occlusionTexture = "textures/hero ao.tga";
     mesh.material.metallicTexture = "textures/hero metallic.tga";
     mesh.material.roughnessTexture = "textures/hero roughness.tga";
+    mesh.material.albedoMapTransform.uvScale = {0.5f, 0.75f};
+    mesh.material.albedoMapTransform.uvOffset = {0.1f, 0.2f};
+    mesh.material.normalMapTransform.uvScale = {2.0f, 1.5f};
+    mesh.material.normalMapTransform.uvOffset = {-0.25f, 0.35f};
+    mesh.material.roughnessMapTransform.uvScale = {0.8f, 0.9f};
     mesh.spin.radiansPerSecond = {0.2f, 0.3f, 0.4f};
     mesh.orbit.enabled = true;
     mesh.orbit.center = {1.0f, 2.0f, 3.0f};
@@ -212,6 +219,13 @@ void testRoundTripAllSceneData() {
                "PBR texture-map asset references are restored");
         expect(mesh->overrideMtlMaterials,
                "explicit entity-level override of imported MTL materials is restored");
+        expect(near(mesh->material.albedoMapTransform.uvScale[0], 0.5f)
+                       && near(mesh->material.albedoMapTransform.uvScale[1], 0.75f)
+                       && near(mesh->material.albedoMapTransform.uvOffset[0], 0.1f)
+                       && near(mesh->material.normalMapTransform.uvScale[0], 2.0f)
+                       && near(mesh->material.normalMapTransform.uvOffset[0], -0.25f)
+                       && near(mesh->material.roughnessMapTransform.uvScale[1], 0.9f),
+               "per-map UV scale and offset transforms survive scene serialization");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
         expect(mesh->animation.position.keyframes.size() == 2
@@ -298,11 +312,25 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "version-two physics scenes remain readable after adding character controllers");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
            "version-two scenes receive default character controller state");
+    const std::string versionSixText = downgradeTextureSchema(valid.str(), 6, 6);
+    std::stringstream legacyV6(versionSixText);
+    expect(nuby::SceneSerializer::load(target, legacyV6, error),
+           "version-six scenes remain readable after adding per-map UV transforms");
+    const nuby::Entity* legacyMesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyMesh = &entity;
+    }
+    expect(legacyMesh != nullptr && legacyMesh->overrideMtlMaterials
+                   && legacyMesh->material.metallicTexture == "textures/hero metallic.tga"
+                   && near(legacyMesh->material.albedoMapTransform.uvScale[0], 1.0f)
+                   && near(legacyMesh->material.albedoMapTransform.uvOffset[0], 0.0f),
+           "version-six material policy is restored and new UV transforms default to identity");
+
     const std::string versionFiveText = downgradeTextureSchema(valid.str(), 5, 6);
     std::stringstream legacyV5(versionFiveText);
     expect(nuby::SceneSerializer::load(target, legacyV5, error),
            "version-five scenes remain readable after adding explicit imported-material overrides");
-    const nuby::Entity* legacyMesh = nullptr;
+    legacyMesh = nullptr;
     for (const nuby::Entity& entity : target.entities()) {
         if (entity.name == "mesh") legacyMesh = &entity;
     }
@@ -351,6 +379,13 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream invalidPhysicsOutput;
     expect(!nuby::SceneSerializer::save(invalidPhysics, invalidPhysicsOutput, error),
            "scene serialization rejects invalid physics settings");
+
+    nuby::Scene invalidUvTransform;
+    invalidUvTransform.create("invalid UV transform", nuby::Primitive::ImportedMesh)
+            .material.normalMapTransform.uvScale[0] = 1001.0f;
+    std::stringstream invalidUvOutput;
+    expect(!nuby::SceneSerializer::save(invalidUvTransform, invalidUvOutput, error),
+           "scene serialization rejects unbounded material UV transforms");
 }
 }  // namespace
 

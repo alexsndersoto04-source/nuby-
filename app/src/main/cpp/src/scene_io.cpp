@@ -73,6 +73,28 @@ void writeFloatArray(std::ostream& output, const std::array<float, N>& values) {
     for (float value : values) output << ' ' << value;
 }
 
+bool validTextureMapTransform(const TextureMapTransform& transform) {
+    for (float scale : transform.uvScale) {
+        if (!std::isfinite(scale) || std::fabs(scale) > 1000.0f) return false;
+    }
+    for (float offset : transform.uvOffset) {
+        if (!std::isfinite(offset) || std::fabs(offset) > 10000.0f) return false;
+    }
+    return true;
+}
+
+bool readTextureMapTransform(std::istream& input, TextureMapTransform& transform) {
+    return readFloatArray(input, transform.uvScale)
+            && readFloatArray(input, transform.uvOffset)
+            && validTextureMapTransform(transform);
+}
+
+void writeTextureMapTransform(std::ostream& output,
+                              const TextureMapTransform& transform) {
+    writeFloatArray(output, transform.uvScale);
+    writeFloatArray(output, transform.uvOffset);
+}
+
 bool validTrack(const Vector3Track& track) {
     if (track.keyframes.size() > kMaximumKeyframesPerTrack) return false;
     float previousTime = -1.0f;
@@ -100,6 +122,14 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.occlusionTexture)
             || static_cast<unsigned int>(entity.primitive)
                     > static_cast<unsigned int>(Primitive::None)) {
+        return false;
+    }
+    if (!validTextureMapTransform(entity.material.albedoMapTransform)
+            || !validTextureMapTransform(entity.material.normalMapTransform)
+            || !validTextureMapTransform(entity.material.metallicRoughnessMapTransform)
+            || !validTextureMapTransform(entity.material.metallicMapTransform)
+            || !validTextureMapTransform(entity.material.roughnessMapTransform)
+            || !validTextureMapTransform(entity.material.occlusionMapTransform)) {
         return false;
     }
     const auto finite = [](float value) { return std::isfinite(value); };
@@ -280,6 +310,14 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.material.roughnessTexture) << '\n';
     output << "OVERRIDE_MTL_MATERIALS "
            << (entity.overrideMtlMaterials ? 1 : 0) << '\n';
+    output << "MATERIAL_MAP_UV";
+    writeTextureMapTransform(output, entity.material.albedoMapTransform);
+    writeTextureMapTransform(output, entity.material.normalMapTransform);
+    writeTextureMapTransform(output, entity.material.metallicRoughnessMapTransform);
+    writeTextureMapTransform(output, entity.material.metallicMapTransform);
+    writeTextureMapTransform(output, entity.material.roughnessMapTransform);
+    writeTextureMapTransform(output, entity.material.occlusionMapTransform);
+    output << '\n';
 
     output << "SPIN";
     writeFloatArray(output, entity.spin.radiansPerSecond);
@@ -416,6 +454,17 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
             return fail(error, "Imported mesh material override flag is invalid");
         }
         entity.overrideMtlMaterials = overrideMtlMaterials != 0;
+    }
+    if (version >= 7
+            && (!readTag(input, "MATERIAL_MAP_UV", error)
+                || !readTextureMapTransform(input, entity.material.albedoMapTransform)
+                || !readTextureMapTransform(input, entity.material.normalMapTransform)
+                || !readTextureMapTransform(input,
+                        entity.material.metallicRoughnessMapTransform)
+                || !readTextureMapTransform(input, entity.material.metallicMapTransform)
+                || !readTextureMapTransform(input, entity.material.roughnessMapTransform)
+                || !readTextureMapTransform(input, entity.material.occlusionMapTransform))) {
+        return fail(error, "Material UV transform is invalid");
     }
 
     if (!readTag(input, "SPIN", error)

@@ -5,6 +5,7 @@
 #include <locale>
 #include <sstream>
 #include <unordered_set>
+#include <vector>
 #include <utility>
 
 namespace nuby {
@@ -70,6 +71,58 @@ std::string resolveMapPath(const std::string& directory, const std::string& path
     if (!safeRelativePath(path)) return {};
     if (directory.empty()) return path;
     return directory + "/" + path;
+}
+
+bool parseFiniteFloat(const std::string& token, float& value) {
+    std::istringstream number(token);
+    number.imbue(std::locale::classic());
+    if (!(number >> value)) return false;
+    number >> std::ws;
+    return number.peek() == std::char_traits<char>::eof() && std::isfinite(value);
+}
+
+bool parseMapSpecification(std::istringstream& fields,
+                           std::string& path,
+                           TextureMapTransform& transform) {
+    std::vector<std::string> tokens;
+    std::string token;
+    while (fields >> token) tokens.push_back(std::move(token));
+    std::size_t index = 0;
+    while (index < tokens.size() && !tokens[index].empty()
+            && tokens[index].front() == '-') {
+        const std::string option = tokens[index++];
+        if (option != "-s" && option != "-o") return false;
+        if (index + 1 >= tokens.size()) return false;
+        float first = 0.0f;
+        float second = 0.0f;
+        if (!parseFiniteFloat(tokens[index++], first)
+                || !parseFiniteFloat(tokens[index++], second)) return false;
+        // Wavefront permits an optional third, depth-axis component. It is
+        // irrelevant for this 2D renderer, but must still be a valid number.
+        if (index < tokens.size()) {
+            float third = 0.0f;
+            if (parseFiniteFloat(tokens[index], third)) ++index;
+        }
+        if (option == "-s") {
+            transform.uvScale = {first, second};
+        } else {
+            transform.uvOffset = {first, second};
+        }
+    }
+    if (index >= tokens.size()) return false;
+    path = tokens[index++];
+    while (index < tokens.size()) {
+        path += ' ';
+        path += tokens[index++];
+    }
+    path = trim(std::move(path));
+    for (float scale : transform.uvScale) {
+        if (std::fabs(scale) > 1000.0f) return false;
+    }
+    for (float offset : transform.uvOffset) {
+        if (std::fabs(offset) > 10000.0f) return false;
+    }
+    return !path.empty();
 }
 
 }  // namespace
@@ -157,22 +210,27 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
         } else if (record == "map_Kd" || record == "map_Kn" || record == "norm"
                 || record == "map_Pr" || record == "map_Pm" || record == "map_AO") {
             std::string rawPath;
-            std::getline(fields, rawPath);
-            rawPath = trim(std::move(rawPath));
-            if (rawPath.empty() || rawPath.front() == '-') {
-                return fail(error, "MTL texture map path is empty or uses unsupported options");
+            TextureMapTransform transform;
+            if (!parseMapSpecification(fields, rawPath, transform)) {
+                return fail(error, "MTL texture map path or -s/-o options are invalid or unsupported");
             }
             const std::string resolved = resolveMapPath(directory, rawPath);
             if (resolved.empty()) return fail(error, "MTL texture map escapes its asset directory");
-            if (record == "map_Kd") current->material.albedoTexture = resolved;
-            else if (record == "map_Kn" || record == "norm") {
+            if (record == "map_Kd") {
+                current->material.albedoTexture = resolved;
+                current->material.albedoMapTransform = transform;
+            } else if (record == "map_Kn" || record == "norm") {
                 current->material.normalTexture = resolved;
+                current->material.normalMapTransform = transform;
             } else if (record == "map_Pr") {
                 current->material.roughnessTexture = resolved;
+                current->material.roughnessMapTransform = transform;
             } else if (record == "map_Pm") {
                 current->material.metallicTexture = resolved;
+                current->material.metallicMapTransform = transform;
             } else {
                 current->material.occlusionTexture = resolved;
+                current->material.occlusionMapTransform = transform;
             }
         }
     }
