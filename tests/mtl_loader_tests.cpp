@@ -2,7 +2,9 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,29 @@ void expect(bool condition, const char* message) {
 
 bool near(float actual, float expected, float epsilon = 0.0001f) {
     return std::fabs(actual - expected) <= epsilon;
+}
+
+void testPackagedSampleMaterialLibrary() {
+    std::ifstream file("app/src/main/assets/meshes/orbital_shard.mtl");
+    expect(file.good(), "packaged sample MTL asset exists");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    std::vector<nuby::WavefrontMaterial> materials;
+    std::string error;
+    expect(nuby::parseMtl(source, "meshes/orbital_shard.mtl", materials, error),
+           "packaged sample MTL parses");
+    expect(materials.size() == 1 && materials[0].name == "ShardMetal",
+           "sample MTL material name is preserved");
+    if (!materials.empty()) {
+        const nuby::Material& material = materials[0].material;
+        expect(near(material.metallic, 0.68f) && near(material.roughness, 0.26f)
+                       && near(material.emission[0], 0.018f),
+               "sample MTL PBR factors parse as expected");
+        expect(material.albedoTexture == "meshes/orbital_shard_albedo.tga"
+                       && material.normalTexture == "meshes/orbital_shard_normal.tga",
+               "sample MTL image paths resolve to packaged assets");
+    }
 }
 
 void testPbrFactorsAndRelativeMapsParse() {
@@ -104,6 +129,7 @@ void testMalformedAndMissingMaterialRecordsAreRejected() {
 }  // namespace
 
 int main() {
+    testPackagedSampleMaterialLibrary();
     testPbrFactorsAndRelativeMapsParse();
     testInvalidMaterialsAndTraversalAreRejectedTransactionally();
     testMalformedAndMissingMaterialRecordsAreRejected();

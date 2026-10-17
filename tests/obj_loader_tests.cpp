@@ -77,6 +77,59 @@ void testInvalidIndexIsRejected() {
     expect(!error.empty(), "failed parse reports a useful error");
 }
 
+void testMalformedNumbersAndUnsupportedLibraryPathsAreRejected() {
+    nuby::ObjModel model;
+    std::string error;
+    expect(!nuby::parseObjModel("v nan 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+                               model, error),
+           "non-finite OBJ coordinates are rejected");
+    expect(!nuby::parseObjModel("mtllib ../outside.mtl\n", model, error),
+           "parent traversal in a material library reference is rejected");
+    expect(!nuby::parseObjModel("mtllib -o 1 1 1\n", model, error),
+           "unsupported mtllib options are rejected explicitly");
+}
+
+void testMaterialLibrariesAndSubmeshAssignments() {
+    constexpr char obj[] = R"OBJ(
+        mtllib materials/relics.mtl common.mtl
+        v 0 0 0
+        v 1 0 0
+        v 0 1 0
+        v 0 0 1
+        usemtl Sun Relic
+        f 1 2 3
+        usemtl Stone
+        f 1 4 2
+        usemtl Sun Relic
+        f 1 3 4
+    )OBJ";
+    nuby::ObjModel model;
+    std::string error;
+    expect(nuby::parseObjModel(obj, model, error),
+           "OBJ material library references and assignments parse");
+    expect(model.materialLibraries.size() == 2
+                   && model.materialLibraries[0] == "materials/relics.mtl"
+                   && model.materialLibraries[1] == "common.mtl",
+           "OBJ retains multiple unique MTL references in source order");
+    expect(model.submeshes.size() == 3,
+           "usemtl boundaries retain separate contiguous submeshes");
+    if (model.submeshes.size() == 3) {
+        expect(model.submeshes[0].materialName == "Sun Relic"
+                       && model.submeshes[1].materialName == "Stone"
+                       && model.submeshes[2].materialName == "Sun Relic",
+               "material names including spaces map to their face ranges");
+        expect(model.submeshes[0].vertices.size() == 3
+                       && model.submeshes[1].vertices.size() == 3
+                       && model.submeshes[2].vertices.size() == 3,
+               "every material range contains its own expanded triangles");
+    }
+
+    expect(!nuby::parseObjModel("mtllib ../outside.mtl\nv 0 0 0\n", model, error),
+           "OBJ MTL references cannot traverse outside the asset directory");
+    expect(model.submeshes.empty() && model.materialLibraries.empty(),
+           "failed OBJ parse leaves no partial model data");
+}
+
 void testPackagedSampleAsset() {
     std::ifstream file("app/src/main/assets/meshes/orbital_shard.obj");
     expect(file.good(), "packaged orbital shard asset exists");
@@ -88,6 +141,17 @@ void testPackagedSampleAsset() {
     std::string error;
     expect(nuby::parseObj(source, vertices, error), "packaged sample mesh parses");
     expect(vertices.size() == 24, "sample shard contains eight triangulated faces");
+
+    nuby::ObjModel model;
+    expect(nuby::parseObjModel(source, model, error),
+           "packaged sample OBJ preserves material ranges");
+    expect(model.materialLibraries.size() == 1
+                   && model.materialLibraries[0] == "orbital_shard.mtl"
+                   && model.submeshes.size() == 1
+                   && model.submeshes[0].materialName == "ShardMetal",
+           "packaged sample references its MTL and assigns its named material");
+    std::ifstream library("app/src/main/assets/meshes/orbital_shard.mtl");
+    expect(library.good(), "packaged orbital shard material library exists");
 }
 }  // namespace
 
@@ -95,6 +159,8 @@ int main() {
     testQuadTriangulationAndAttributes();
     testNegativeIndicesAndGeneratedNormals();
     testInvalidIndexIsRejected();
+    testMalformedNumbersAndUnsupportedLibraryPathsAreRejected();
+    testMaterialLibrariesAndSubmeshAssignments();
     testPackagedSampleAsset();
     if (failures != 0) {
         std::cerr << failures << " OBJ loader test(s) failed\n";

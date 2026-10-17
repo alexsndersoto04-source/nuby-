@@ -13,8 +13,22 @@ struct MeshVertex {
     float uv[2]{};
 };
 
-// Parses the geometry subset of Wavefront OBJ: positions, UVs, normals and
-// polygon faces. Faces are triangulated and missing normals are generated.
+struct ObjSubmesh {
+    std::string materialName;
+    std::vector<MeshVertex> vertices;
+};
+
+struct ObjModel {
+    std::vector<std::string> materialLibraries;
+    std::vector<ObjSubmesh> submeshes;
+};
+
+// Parses the supported OBJ geometry subset and preserves contiguous usemtl
+// ranges plus mtllib references. Faces are triangulated and missing normals
+// are generated. Material library paths are checked as project-relative paths.
+bool parseObjModel(std::string_view source, ObjModel& model, std::string& error);
+
+// Compatibility convenience API for callers that only need concatenated geometry.
 bool parseObj(std::string_view source, std::vector<MeshVertex>& vertices,
               std::string& error);
 

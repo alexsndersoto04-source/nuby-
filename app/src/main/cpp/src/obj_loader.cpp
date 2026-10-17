@@ -4,10 +4,20 @@
 #include <charconv>
 #include <cmath>
 #include <sstream>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace nuby {
 namespace {
+
+constexpr std::size_t kMaximumSourceBytes = 16U * 1024U * 1024U;
+constexpr std::size_t kMaximumAttributeValues = 500000;
+constexpr std::size_t kMaximumExpandedVertices = 500000;
+constexpr std::size_t kMaximumFaceCorners = 4096;
+constexpr std::size_t kMaximumMaterialLibraries = 32;
+constexpr std::size_t kMaximumSubmeshes = 1024;
+constexpr std::size_t kMaximumLineLength = 4096;
 
 struct FaceIndex {
     std::size_t position = 0;
@@ -85,67 +95,175 @@ bool parseFaceIndex(std::string_view token, std::size_t positionCount,
     return true;
 }
 
-}  // namespace
+std::string trim(std::string value) {
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const std::size_t last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
 
-bool parseObj(std::string_view source, std::vector<MeshVertex>& vertices,
-              std::string& error) {
-    vertices.clear();
+bool safeProjectRelativePath(const std::string& path) {
+    if (path.empty() || path.size() > 4096 || path.front() == '/'
+            || path.front() == '\\' || path.find('\\') != std::string::npos
+            || path.find(':') != std::string::npos) return false;
+    std::size_t start = 0;
+    while (start < path.size()) {
+        const std::size_t slash = path.find('/', start);
+        const std::size_t end = slash == std::string::npos ? path.size() : slash;
+        if (start == end) return false;
+        const std::string segment = path.substr(start, end - start);
+        if (segment == "." || segment == "..") return false;
+        for (unsigned char character : segment) {
+            if (character < 0x20U || character == 0x7FU) return false;
+        }
+        if (slash == std::string::npos) break;
+        start = slash + 1;
+    }
+    return true;
+}
+
+bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string& error) {
+    model = {};
     error.clear();
+    if (source.empty() || source.size() > kMaximumSourceBytes) {
+        error = "OBJ source is empty or exceeds the maximum size";
+        return false;
+    }
 
     std::vector<Vec3> positions;
     std::vector<Vec3> normals;
     std::vector<std::array<float, 2>> texcoords;
+    std::unordered_set<std::string> materialLibrarySet;
+    std::string activeMaterial;
+    std::size_t expandedVertexCount = 0;
     std::istringstream input{std::string(source)};
     std::string line;
     std::size_t lineNumber = 0;
 
     while (std::getline(input, line)) {
         ++lineNumber;
+        if (line.size() > kMaximumLineLength) {
+            error = "OBJ record exceeds the maximum line length at line "
+                  + std::to_string(lineNumber);
+            model = {};
+            return false;
+        }
+        const std::size_t comment = line.find('#');
+        if (comment != std::string::npos) line.resize(comment);
         std::istringstream fields(line);
         std::string record;
-        if (!(fields >> record) || record[0] == '#') continue;
+        if (!(fields >> record)) continue;
 
         if (record == "v") {
             Vec3 position{};
-            if (!(fields >> position[0] >> position[1] >> position[2])) {
+            if (!(fields >> position[0] >> position[1] >> position[2])
+                    || !std::isfinite(position[0]) || !std::isfinite(position[1])
+                    || !std::isfinite(position[2])
+                    || positions.size() >= kMaximumAttributeValues) {
                 error = "invalid vertex at line " + std::to_string(lineNumber);
+                model = {};
                 return false;
             }
             positions.push_back(position);
         } else if (record == "vn") {
             Vec3 normal{};
-            if (!(fields >> normal[0] >> normal[1] >> normal[2])) {
+            if (!(fields >> normal[0] >> normal[1] >> normal[2])
+                    || !std::isfinite(normal[0]) || !std::isfinite(normal[1])
+                    || !std::isfinite(normal[2])
+                    || normals.size() >= kMaximumAttributeValues) {
                 error = "invalid normal at line " + std::to_string(lineNumber);
+                model = {};
                 return false;
             }
             normals.push_back(normalized(normal));
         } else if (record == "vt") {
             std::array<float, 2> uv{};
-            if (!(fields >> uv[0] >> uv[1])) {
+            if (!(fields >> uv[0] >> uv[1]) || !std::isfinite(uv[0])
+                    || !std::isfinite(uv[1])
+                    || texcoords.size() >= kMaximumAttributeValues) {
                 error = "invalid texture coordinate at line " + std::to_string(lineNumber);
+                model = {};
                 return false;
             }
             texcoords.push_back(uv);
+        } else if (record == "mtllib") {
+            std::string library;
+            while (fields >> library) {
+                if (library.front() == '-') {
+                    error = "OBJ mtllib options are not supported at line "
+                          + std::to_string(lineNumber);
+                    model = {};
+                    return false;
+                }
+                if (!safeProjectRelativePath(library)) {
+                    error = "OBJ material library path is unsafe at line "
+                          + std::to_string(lineNumber);
+                    model = {};
+                    return false;
+                }
+                if (materialLibrarySet.insert(library).second) {
+                    if (model.materialLibraries.size() >= kMaximumMaterialLibraries) {
+                        error = "OBJ contains too many material libraries";
+                        model = {};
+                        return false;
+                    }
+                    model.materialLibraries.push_back(std::move(library));
+                }
+            }
+        } else if (record == "usemtl") {
+            std::getline(fields, activeMaterial);
+            activeMaterial = trim(std::move(activeMaterial));
+            if (activeMaterial.empty() || activeMaterial.size() > 128) {
+                error = "usemtl name is empty or exceeds limits at line "
+                      + std::to_string(lineNumber);
+                model = {};
+                return false;
+            }
         } else if (record == "f") {
             std::vector<FaceIndex> face;
             std::string token;
             while (fields >> token) {
-                if (!token.empty() && token[0] == '#') break;
                 FaceIndex index{};
                 if (!parseFaceIndex(token, positions.size(), texcoords.size(),
                                     normals.size(), index)) {
                     error = "invalid face index at line " + std::to_string(lineNumber);
-                    vertices.clear();
+                    model = {};
                     return false;
                 }
                 face.push_back(index);
+                if (face.size() > kMaximumFaceCorners) {
+                    error = "face exceeds the maximum corner count at line "
+                          + std::to_string(lineNumber);
+                    model = {};
+                    return false;
+                }
             }
             if (face.size() < 3) {
                 error = "face has fewer than three vertices at line "
                       + std::to_string(lineNumber);
-                vertices.clear();
+                model = {};
                 return false;
             }
+
+            const std::size_t verticesForFace = (face.size() - 2U) * 3U;
+            if (verticesForFace > kMaximumExpandedVertices - expandedVertexCount) {
+                error = "OBJ exceeds the maximum expanded vertex count";
+                model = {};
+                return false;
+            }
+            expandedVertexCount += verticesForFace;
+
+            if (model.submeshes.empty()
+                    || model.submeshes.back().materialName != activeMaterial) {
+                if (model.submeshes.size() >= kMaximumSubmeshes) {
+                    error = "OBJ contains too many material submeshes";
+                    model = {};
+                    return false;
+                }
+                model.submeshes.push_back(ObjSubmesh{});
+                model.submeshes.back().materialName = activeMaterial;
+            }
+            std::vector<MeshVertex>& vertices = model.submeshes.back().vertices;
 
             // Fan triangulation handles triangles, quads and convex n-gons.
             for (std::size_t corner = 1; corner + 1 < face.size(); ++corner) {
@@ -176,9 +294,25 @@ bool parseObj(std::string_view source, std::vector<MeshVertex>& vertices,
         }
     }
 
-    if (vertices.empty()) {
+    if (model.submeshes.empty()) {
         error = "OBJ contains no valid triangle faces";
         return false;
+    }
+    return true;
+}
+}  // namespace
+
+bool parseObjModel(std::string_view source, ObjModel& model, std::string& error) {
+    return parseObjModelInternal(source, model, error);
+}
+
+bool parseObj(std::string_view source, std::vector<MeshVertex>& vertices,
+              std::string& error) {
+    vertices.clear();
+    ObjModel model;
+    if (!parseObjModel(source, model, error)) return false;
+    for (const ObjSubmesh& submesh : model.submeshes) {
+        vertices.insert(vertices.end(), submesh.vertices.begin(), submesh.vertices.end());
     }
     return true;
 }

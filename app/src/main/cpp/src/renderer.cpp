@@ -110,6 +110,65 @@ void appendTriangle(std::vector<MeshVertex>& vertices,
     vertices.push_back(c);
 }
 
+bool safeRelativeAssetPath(const std::string& path) {
+    if (path.empty() || path.size() > 4096 || path.front() == '/'
+            || path.front() == '\\' || path.find('\\') != std::string::npos
+            || path.find(':') != std::string::npos) return false;
+    std::size_t start = 0;
+    while (start < path.size()) {
+        const std::size_t slash = path.find('/', start);
+        const std::size_t end = slash == std::string::npos ? path.size() : slash;
+        if (start == end) return false;
+        const std::string segment = path.substr(start, end - start);
+        if (segment == "." || segment == "..") return false;
+        for (unsigned char character : segment) {
+            if (character < 0x20U || character == 0x7FU) return false;
+        }
+        if (slash == std::string::npos) break;
+        start = slash + 1;
+    }
+    return true;
+}
+
+bool resolveAssetReference(const std::string& baseAssetPath,
+                           const std::string& relativePath,
+                           std::string& resolvedPath) {
+    if (!safeRelativeAssetPath(baseAssetPath) || !safeRelativeAssetPath(relativePath)) {
+        return false;
+    }
+    const std::size_t slash = baseAssetPath.find_last_of('/');
+    if (slash == std::string::npos) resolvedPath = relativePath;
+    else resolvedPath = baseAssetPath.substr(0, slash + 1) + relativePath;
+    return safeRelativeAssetPath(resolvedPath);
+}
+
+bool readTextAsset(AAssetManager* manager, const std::string& assetPath,
+                   std::size_t maximumBytes, std::string& output) {
+    output.clear();
+    if (manager == nullptr || !safeRelativeAssetPath(assetPath)) return false;
+    AAsset* asset = AAssetManager_open(manager, assetPath.c_str(), AASSET_MODE_BUFFER);
+    if (asset == nullptr) return false;
+    const off_t length = AAsset_getLength(asset);
+    if (length <= 0 || static_cast<std::uint64_t>(length) > maximumBytes) {
+        AAsset_close(asset);
+        return false;
+    }
+    output.resize(static_cast<std::size_t>(length));
+    std::size_t bytesRead = 0;
+    while (bytesRead < output.size()) {
+        const int count = AAsset_read(asset, output.data() + bytesRead,
+                                      output.size() - bytesRead);
+        if (count <= 0) break;
+        bytesRead += static_cast<std::size_t>(count);
+    }
+    AAsset_close(asset);
+    if (bytesRead != output.size()) {
+        output.clear();
+        return false;
+    }
+    return true;
+}
+
 constexpr const char* kVertexShader = R"(
 #version 300 es
 precision highp float;
@@ -477,55 +536,75 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
     return mesh;
 }
 
-bool Renderer::loadObjAsset(const std::string& assetPath, Mesh& mesh) {
-    if (assetManager_ == nullptr) {
-        __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                            "Cannot load %s: Android asset manager is unavailable", assetPath.c_str());
-        return false;
-    }
-
-    AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
-    if (asset == nullptr) {
+bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) {
+    std::string source;
+    constexpr std::size_t kMaximumObjBytes = 16U * 1024U * 1024U;
+    if (!readTextAsset(assetManager_, assetPath, kMaximumObjBytes, source)) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                            "OBJ asset not found: %s", assetPath.c_str());
+                "OBJ asset is unavailable or exceeds limits: %s", assetPath.c_str());
         return false;
     }
 
-    constexpr off_t kMaximumAssetBytes = 16 * 1024 * 1024;
-    const off_t length = AAsset_getLength(asset);
-    if (length <= 0 || length > kMaximumAssetBytes) {
-        AAsset_close(asset);
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                            "OBJ asset has invalid size: %s", assetPath.c_str());
-        return false;
-    }
-
-    std::string source(static_cast<std::size_t>(length), '\0');
-    std::size_t bytesRead = 0;
-    while (bytesRead < source.size()) {
-        const int count = AAsset_read(asset, source.data() + bytesRead,
-                                      source.size() - bytesRead);
-        if (count <= 0) break;
-        bytesRead += static_cast<std::size_t>(count);
-    }
-    AAsset_close(asset);
-    if (bytesRead != source.size()) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                            "Could not read complete OBJ asset: %s", assetPath.c_str());
-        return false;
-    }
-
-    std::vector<MeshVertex> vertices;
+    ObjModel parsedObj;
     std::string error;
-    if (!parseObj(source, vertices, error)) {
+    if (!parseObjModel(source, parsedObj, error)) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
                 "OBJ parse failed for %s: %s", assetPath.c_str(), error.c_str());
         return false;
     }
-    mesh = uploadMesh(vertices);
+
+    std::unordered_map<std::string, Material> materialsByName;
+    for (const std::string& relativeLibrary : parsedObj.materialLibraries) {
+        std::string libraryPath;
+        if (!resolveAssetReference(assetPath, relativeLibrary, libraryPath)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "Ignoring unsafe MTL reference %s from %s",
+                    relativeLibrary.c_str(), assetPath.c_str());
+            continue;
+        }
+        std::string librarySource;
+        if (!readTextAsset(assetManager_, libraryPath, 4U * 1024U * 1024U,
+                           librarySource)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "MTL asset unavailable: %s", libraryPath.c_str());
+            continue;
+        }
+        std::vector<WavefrontMaterial> parsedMaterials;
+        if (!parseMtl(librarySource, libraryPath, parsedMaterials, error)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "MTL parse failed for %s: %s", libraryPath.c_str(), error.c_str());
+            continue;
+        }
+        for (WavefrontMaterial& material : parsedMaterials) {
+            materialsByName[material.name] = std::move(material.material);
+        }
+    }
+
+    ImportedModel candidate;
+    candidate.parts.reserve(parsedObj.submeshes.size());
+    std::size_t totalVertices = 0;
+    for (const ObjSubmesh& submesh : parsedObj.submeshes) {
+        ImportedPart part{};
+        part.mesh = uploadMesh(submesh.vertices);
+        if (part.mesh.vao == 0) {
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "Could not upload OBJ submesh from %s", assetPath.c_str());
+            return false;
+        }
+        const auto material = materialsByName.find(submesh.materialName);
+        if (!submesh.materialName.empty() && material != materialsByName.end()) {
+            part.material = material->second;
+            part.hasMaterial = true;
+        }
+        totalVertices += submesh.vertices.size();
+        candidate.parts.push_back(std::move(part));
+    }
+    if (candidate.parts.empty()) return false;
+    model = std::move(candidate);
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Loaded OBJ %s (%zu triangle vertices)", assetPath.c_str(), vertices.size());
-    return mesh.vao != 0;
+            "Loaded OBJ %s (%zu triangle vertices, %zu material submeshes)",
+            assetPath.c_str(), totalVertices, model.parts.size());
+    return true;
 }
 
 bool Renderer::loadTgaAsset(const std::string& assetPath, GLuint& texture) {
@@ -785,16 +864,18 @@ void Renderer::buildScene() {
         satellite.orbit.phase = 2.0f * kPi * static_cast<float>(index) / 3.0f;
         satellite.orbit.verticalAmplitude = 0.44f;
         satellite.orbit.verticalFrequency = 1.7f;
-        if (index == 1) {
-            satellite.material.color = {0.95f, 0.43f, 0.20f};
-        } else {
-            satellite.material.color = {0.18f, 0.79f, 0.78f};
+        if (!useImportedMesh) {
+            if (index == 1) {
+                satellite.material.color = {0.95f, 0.43f, 0.20f};
+            } else {
+                satellite.material.color = {0.18f, 0.79f, 0.78f};
+            }
+            satellite.material.emission = {satellite.material.color[0] * 0.28f,
+                                           satellite.material.color[1] * 0.20f,
+                                           satellite.material.color[2] * 0.16f};
+            satellite.material.metallic = 0.24f;
+            satellite.material.roughness = 0.29f;
         }
-        satellite.material.emission = {satellite.material.color[0] * 0.28f,
-                                       satellite.material.color[1] * 0.20f,
-                                       satellite.material.color[2] * 0.16f};
-        satellite.material.metallic = 0.24f;
-        satellite.material.roughness = 0.29f;
     }
 
     Entity& cyanLight = scene_.create("Aether Point Light", Primitive::None);
@@ -887,11 +968,56 @@ void Renderer::loadSceneAssets() {
                 || !attemptedMeshes.insert(entity.meshAsset).second) {
             continue;
         }
-        Mesh mesh{};
-        if (loadObjAsset(entity.meshAsset, mesh)) {
-            importedMeshes_.emplace(entity.meshAsset, mesh);
+        ImportedModel model{};
+        if (loadObjAsset(entity.meshAsset, model)) {
+            importedMeshes_.emplace(entity.meshAsset, std::move(model));
         }
     }
+
+    for (const auto& entry : importedMeshes_) {
+        for (const ImportedPart& part : entry.second.parts) {
+            if (!part.hasMaterial) continue;
+            const std::array<const std::string*, 6> materialTextures{{
+                    &part.material.albedoTexture,
+                    &part.material.normalTexture,
+                    &part.material.metallicRoughnessTexture,
+                    &part.material.occlusionTexture,
+                    &part.material.metallicTexture,
+                    &part.material.roughnessTexture
+            }};
+            for (const std::string* path : materialTextures) {
+                if (path->empty() || textures_.find(*path) != textures_.end()
+                        || !attemptedTextures.insert(*path).second) continue;
+                GLuint texture = 0;
+                if (loadTgaAsset(*path, texture)) textures_.emplace(*path, texture);
+            }
+        }
+    }
+}
+
+bool Renderer::sampleMaterialLoaded() const {
+    const auto imported = importedMeshes_.find("meshes/orbital_shard.obj");
+    if (imported == importedMeshes_.end()) return false;
+    for (const ImportedPart& part : imported->second.parts) {
+        if (!part.hasMaterial) continue;
+        const std::array<const std::string*, 6> paths{{
+                &part.material.albedoTexture,
+                &part.material.normalTexture,
+                &part.material.metallicRoughnessTexture,
+                &part.material.occlusionTexture,
+                &part.material.metallicTexture,
+                &part.material.roughnessTexture
+        }};
+        bool texturesAvailable = true;
+        for (const std::string* path : paths) {
+            if (!path->empty() && textures_.find(*path) == textures_.end()) {
+                texturesAvailable = false;
+                break;
+            }
+        }
+        if (texturesAvailable) return true;
+    }
+    return false;
 }
 
 const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
@@ -901,7 +1027,8 @@ const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
         case Primitive::Ground: return &ground_;
         case Primitive::ImportedMesh: {
             const auto found = importedMeshes_.find(entity.meshAsset);
-            return found == importedMeshes_.end() ? &sphere_ : &found->second;
+            if (found == importedMeshes_.end() || found->second.parts.empty()) return &sphere_;
+            return &found->second.parts.front().mesh;
         }
         case Primitive::None: return nullptr;
     }
@@ -970,10 +1097,21 @@ void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
 
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible || entity.primitive == Primitive::Ground) continue;
-        const Mesh* mesh = meshFor(entity);
-        if (mesh == nullptr || mesh->vao == 0) continue;
         const Mat4 model = scene_.worldMatrix(entity.id);
         glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
+        if (entity.primitive == Primitive::ImportedMesh) {
+            const auto imported = importedMeshes_.find(entity.meshAsset);
+            if (imported != importedMeshes_.end()) {
+                for (const ImportedPart& part : imported->second.parts) {
+                    if (part.mesh.vao == 0) continue;
+                    glBindVertexArray(part.mesh.vao);
+                    glDrawArrays(GL_TRIANGLES, 0, part.mesh.vertexCount);
+                }
+                continue;
+            }
+        }
+        const Mesh* mesh = meshFor(entity);
+        if (mesh == nullptr || mesh->vao == 0) continue;
         glBindVertexArray(mesh->vao);
         glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
     }
@@ -1358,9 +1496,21 @@ void Renderer::render(float deltaSeconds) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     for (const Entity& entity : scene_.entities()) {
         if (!entity.visible) continue;
+        const Mat4 model = scene_.worldMatrix(entity.id);
+        if (entity.primitive == Primitive::ImportedMesh) {
+            const auto imported = importedMeshes_.find(entity.meshAsset);
+            if (imported != importedMeshes_.end()) {
+                for (const ImportedPart& part : imported->second.parts) {
+                    if (part.mesh.vao == 0) continue;
+                    draw(part.mesh, model,
+                         part.hasMaterial ? part.material : entity.material);
+                }
+                continue;
+            }
+        }
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr) continue;
-        draw(*mesh, scene_.worldMatrix(entity.id), entity.material);
+        draw(*mesh, model, entity.material);
     }
     if (postProcessingAvailable_) renderBloom();
 }

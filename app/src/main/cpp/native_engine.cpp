@@ -33,6 +33,11 @@ Java_com_nuby_engine_MainActivity_nativeSampleMeshLoaded(JNIEnv*, jclass) {
     return gRenderer && gRenderer->sampleMeshLoaded() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeSampleMaterialLoaded(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->sampleMaterialLoaded() ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeSetGameMode(JNIEnv*, jclass, jboolean enabled) {
     if (gRenderer) gRenderer->setGameMode(enabled == JNI_TRUE);

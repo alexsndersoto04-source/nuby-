@@ -49,6 +49,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
     private static native boolean nativeSampleMeshLoaded();
+    private static native boolean nativeSampleMaterialLoaded();
     private static native void nativeSetDemoMode(int mode);
     private static native void nativeAdventureMove(float horizontal, float forward);
     private static native void nativeAdventureJump();
@@ -279,7 +280,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         nativeResize(width, height);
         shadowStatus = nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
         postStatus = nativePostProcessingEnabled() ? "BLOOM ON" : "BLOOM OFF";
-        meshStatus = nativeSampleMeshLoaded() ? "MESH ON" : "MESH FALLBACK";
+        boolean sampleMeshLoaded = nativeSampleMeshLoaded();
+        meshStatus = !sampleMeshLoaded ? "MESH FALLBACK"
+                : nativeSampleMaterialLoaded() ? "OBJ+MTL ON" : "MESH ON";
     }
 
     @Override

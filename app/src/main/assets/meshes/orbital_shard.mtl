@@ -1,0 +1,9 @@
+# Packaged importer smoke-test: albedo and tangent-space normal maps.
+newmtl ShardMetal
+Kd 0.82 0.63 0.32
+Ke 0.018 0.008 0.002
+Ns 96
+Pm 0.68
+Pr 0.26
+map_Kd orbital_shard_albedo.tga
+norm orbital_shard_normal.tga

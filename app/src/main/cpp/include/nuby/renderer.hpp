@@ -11,6 +11,7 @@
 
 #include "nuby/adventure_game.hpp"
 #include "nuby/image_loader.hpp"
+#include "nuby/mtl_loader.hpp"
 #include "nuby/obj_loader.hpp"
 #include "nuby/sample_game.hpp"
 #include "nuby/scene.hpp"
@@ -37,12 +38,23 @@ public:
     bool sampleMeshLoaded() const {
         return importedMeshes_.find("meshes/orbital_shard.obj") != importedMeshes_.end();
     }
+    bool sampleMaterialLoaded() const;
 
 private:
     struct Mesh {
         GLuint vao = 0;
         GLuint vbo = 0;
         GLsizei vertexCount = 0;
+    };
+
+    struct ImportedPart {
+        Mesh mesh;
+        Material material;
+        bool hasMaterial = false;
+    };
+
+    struct ImportedModel {
+        std::vector<ImportedPart> parts;
     };
 
     struct PostUniforms {
@@ -88,7 +100,7 @@ private:
     GLuint compileShader(GLenum type, const char* source);
     GLuint createProgram(const char* vertexSource, const char* fragmentSource);
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
-    bool loadObjAsset(const std::string& assetPath, Mesh& mesh);
+    bool loadObjAsset(const std::string& assetPath, ImportedModel& model);
     bool loadTgaAsset(const std::string& assetPath, GLuint& texture);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
@@ -107,7 +119,7 @@ private:
     void drawFullscreen();
 
     AAssetManager* assetManager_ = nullptr;
-    std::unordered_map<std::string, Mesh> importedMeshes_;
+    std::unordered_map<std::string, ImportedModel> importedMeshes_;
     std::unordered_map<std::string, GLuint> textures_;
     GLuint program_ = 0;
     GLuint shadowProgram_ = 0;
