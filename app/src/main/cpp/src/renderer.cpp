@@ -212,6 +212,7 @@ uniform sampler2D uMetallicTexture;
 uniform sampler2D uRoughnessTexture;
 uniform sampler2D uOcclusionTexture;
 uniform sampler2D uOpacityTexture;
+uniform sampler2D uEmissiveTexture;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
 uniform vec2 uNormalUvScale;
@@ -226,6 +227,8 @@ uniform vec2 uOcclusionUvScale;
 uniform vec2 uOcclusionUvOffset;
 uniform vec2 uOpacityUvScale;
 uniform vec2 uOpacityUvOffset;
+uniform vec2 uEmissiveUvScale;
+uniform vec2 uEmissiveUvOffset;
 uniform int uOpacityMapChannel;
 uniform vec2 uAlbedoMapBaseGain;
 uniform vec2 uNormalMapBaseGain;
@@ -234,6 +237,7 @@ uniform vec2 uMetallicMapBaseGain;
 uniform vec2 uRoughnessMapBaseGain;
 uniform vec2 uOcclusionMapBaseGain;
 uniform vec2 uOpacityMapBaseGain;
+uniform vec2 uEmissiveMapBaseGain;
 uniform int uHasAlbedoTexture;
 uniform int uHasNormalTexture;
 uniform int uHasMetallicRoughnessTexture;
@@ -241,6 +245,7 @@ uniform int uHasMetallicTexture;
 uniform int uHasRoughnessTexture;
 uniform int uHasOcclusionTexture;
 uniform int uHasOpacityTexture;
+uniform int uHasEmissiveTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 uniform sampler2D uShadowMap;
@@ -365,6 +370,7 @@ void main() {
     vec2 metallicUv = vUv * uMetallicUvScale + uMetallicUvOffset;
     vec2 roughnessUv = vUv * uRoughnessUvScale + uRoughnessUvOffset;
     vec2 occlusionUv = vUv * uOcclusionUvScale + uOcclusionUvOffset;
+    vec2 emissiveUv = vUv * uEmissiveUvScale + uEmissiveUvOffset;
     if (uHasAlbedoTexture != 0) {
         vec3 albedoSample = texture(uAlbedoTexture, albedoUv).rgb;
         baseColor *= srgbToLinear(adjustTextureValues(albedoSample, uAlbedoMapBaseGain));
@@ -438,7 +444,13 @@ void main() {
     vec3 ambientLight = mix(vec3(0.075, 0.085, 0.14),
                             vec3(0.22, 0.29, 0.46), skyAmount);
     vec3 ambient = baseColor * ambientLight * occlusion * (1.0 - metallic * 0.55);
-    vec3 color = ambient + directLight + uEmission;
+    vec3 emission = uEmission;
+    if (uHasEmissiveTexture != 0) {
+        vec3 emissiveSample = texture(uEmissiveTexture, emissiveUv).rgb;
+        emission *= srgbToLinear(adjustTextureValues(
+                emissiveSample, uEmissiveMapBaseGain));
+    }
+    vec3 color = ambient + directLight + emission;
     color = (color * (2.51 * color + 0.03))
           / max(color * (2.43 * color + 0.59) + 0.14, vec3(0.001));
     color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
@@ -1010,14 +1022,15 @@ void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> attemptedMeshes;
     std::unordered_set<std::string> attemptedTextures;
     for (const Entity& entity : scene_.entities()) {
-        const std::array<const std::string*, 7> materialTextures{{
+        const std::array<const std::string*, 8> materialTextures{{
                 &entity.material.albedoTexture,
                 &entity.material.normalTexture,
                 &entity.material.metallicRoughnessTexture,
                 &entity.material.occlusionTexture,
                 &entity.material.metallicTexture,
                 &entity.material.roughnessTexture,
-                &entity.material.opacityTexture
+                &entity.material.opacityTexture,
+                &entity.material.emissiveTexture
         }};
         for (const std::string* path : materialTextures) {
             if (path->empty() || textures_.find(*path) != textures_.end()
@@ -1042,14 +1055,15 @@ void Renderer::loadSceneAssets() {
     for (const auto& entry : importedMeshes_) {
         for (const ImportedPart& part : entry.second.parts) {
             if (!part.hasMaterial) continue;
-            const std::array<const std::string*, 7> materialTextures{{
+            const std::array<const std::string*, 8> materialTextures{{
                     &part.material.albedoTexture,
                     &part.material.normalTexture,
                     &part.material.metallicRoughnessTexture,
                     &part.material.occlusionTexture,
                     &part.material.metallicTexture,
                     &part.material.roughnessTexture,
-                    &part.material.opacityTexture
+                    &part.material.opacityTexture,
+                    &part.material.emissiveTexture
             }};
             for (const std::string* path : materialTextures) {
                 if (path->empty() || textures_.find(*path) != textures_.end()
@@ -1076,14 +1090,15 @@ int Renderer::sampleAssetStatus() const {
     if (imported == importedMeshes_.end() || imported->second.parts.empty()) return 1;
     for (const ImportedPart& part : imported->second.parts) {
         if (!part.hasMaterial) continue;
-        const std::array<const std::string*, 7> paths{{
+        const std::array<const std::string*, 8> paths{{
                 &part.material.albedoTexture,
                 &part.material.normalTexture,
                 &part.material.metallicRoughnessTexture,
                 &part.material.occlusionTexture,
                 &part.material.metallicTexture,
                 &part.material.roughnessTexture,
-                &part.material.opacityTexture
+                &part.material.opacityTexture,
+                &part.material.emissiveTexture
         }};
         bool texturesAvailable = true;
         for (const std::string* path : paths) {
@@ -1422,13 +1437,17 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.roughnessTexture = glGetUniformLocation(program_, "uRoughnessTexture");
     uniforms_.occlusionTexture = glGetUniformLocation(program_, "uOcclusionTexture");
     uniforms_.opacityTexture = glGetUniformLocation(program_, "uOpacityTexture");
+    uniforms_.emissiveTexture = glGetUniformLocation(program_, "uEmissiveTexture");
     uniforms_.opacityUvScale = glGetUniformLocation(program_, "uOpacityUvScale");
     uniforms_.opacityUvOffset = glGetUniformLocation(program_, "uOpacityUvOffset");
+    uniforms_.emissiveUvScale = glGetUniformLocation(program_, "uEmissiveUvScale");
+    uniforms_.emissiveUvOffset = glGetUniformLocation(program_, "uEmissiveUvOffset");
     uniforms_.opacityMapChannel = glGetUniformLocation(program_, "uOpacityMapChannel");
-    const std::array<const char*, 7> mapValueRangeNames{{
+    const std::array<const char*, 8> mapValueRangeNames{{
             "uAlbedoMapBaseGain", "uNormalMapBaseGain",
             "uMetallicRoughnessMapBaseGain", "uMetallicMapBaseGain",
-            "uRoughnessMapBaseGain", "uOcclusionMapBaseGain", "uOpacityMapBaseGain"}};
+            "uRoughnessMapBaseGain", "uOcclusionMapBaseGain",
+            "uOpacityMapBaseGain", "uEmissiveMapBaseGain"}};
     for (std::size_t map = 0; map < mapValueRangeNames.size(); ++map) {
         uniforms_.textureMapValueRange[map] =
                 glGetUniformLocation(program_, mapValueRangeNames[map]);
@@ -1440,12 +1459,15 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.hasRoughnessTexture = glGetUniformLocation(program_, "uHasRoughnessTexture");
     uniforms_.hasOcclusionTexture = glGetUniformLocation(program_, "uHasOcclusionTexture");
     uniforms_.hasOpacityTexture = glGetUniformLocation(program_, "uHasOpacityTexture");
-    const std::array<const char*, 6> uvScaleNames{{
+    uniforms_.hasEmissiveTexture = glGetUniformLocation(program_, "uHasEmissiveTexture");
+    const std::array<const char*, 7> uvScaleNames{{
             "uAlbedoUvScale", "uNormalUvScale", "uMetallicRoughnessUvScale",
-            "uMetallicUvScale", "uRoughnessUvScale", "uOcclusionUvScale"}};
-    const std::array<const char*, 6> uvOffsetNames{{
+            "uMetallicUvScale", "uRoughnessUvScale", "uOcclusionUvScale",
+            "uEmissiveUvScale"}};
+    const std::array<const char*, 7> uvOffsetNames{{
             "uAlbedoUvOffset", "uNormalUvOffset", "uMetallicRoughnessUvOffset",
-            "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset"}};
+            "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset",
+            "uEmissiveUvOffset"}};
     for (std::size_t map = 0; map < uniforms_.textureUvScale.size(); ++map) {
         uniforms_.textureUvScale[map] = glGetUniformLocation(program_, uvScaleNames[map]);
         uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
@@ -1504,6 +1526,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const GLuint roughnessTexture = textureFor(material.roughnessTexture);
     const GLuint occlusionTexture = textureFor(material.occlusionTexture);
     const GLuint opacityTexture = textureFor(material.opacityTexture);
+    const GLuint emissiveTexture = textureFor(material.emissiveTexture);
     glUniform1i(uniforms_.albedoTexture, 1);
     glUniform1i(uniforms_.normalTexture, 2);
     glUniform1i(uniforms_.metallicRoughnessTexture, 3);
@@ -1511,6 +1534,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.metallicTexture, 5);
     glUniform1i(uniforms_.roughnessTexture, 6);
     glUniform1i(uniforms_.opacityTexture, 7);
+    glUniform1i(uniforms_.emissiveTexture, 8);
     glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasMetallicRoughnessTexture,
@@ -1519,6 +1543,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.hasRoughnessTexture, roughnessTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasOpacityTexture, opacityTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasEmissiveTexture, emissiveTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.opacityMapChannel,
                 static_cast<GLint>(material.opacityMapChannel));
     glUniform2fv(uniforms_.opacityUvScale, 1,
@@ -1531,7 +1556,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
             &material.metallicRoughnessMapTransform,
             &material.metallicMapTransform,
             &material.roughnessMapTransform,
-            &material.occlusionMapTransform
+            &material.occlusionMapTransform,
+            &material.emissiveMapTransform
     }};
     for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
         glUniform2fv(uniforms_.textureUvScale[map], 1,
@@ -1539,14 +1565,15 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
         glUniform2fv(uniforms_.textureUvOffset[map], 1,
                      mapTransforms[map]->uvOffset.data());
     }
-    const std::array<const TextureMapValueRange*, 7> mapValueRanges{{
+    const std::array<const TextureMapValueRange*, 8> mapValueRanges{{
             &material.albedoMapValueRange,
             &material.normalMapValueRange,
             &material.metallicRoughnessMapValueRange,
             &material.metallicMapValueRange,
             &material.roughnessMapValueRange,
             &material.occlusionMapValueRange,
-            &material.opacityMapValueRange
+            &material.opacityMapValueRange,
+            &material.emissiveMapValueRange
     }};
     for (std::size_t map = 0; map < mapValueRanges.size(); ++map) {
         const std::array<float, 2> baseGain{{
@@ -1579,6 +1606,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindTexture(GL_TEXTURE_2D, roughnessTexture);
     glActiveTexture(GL_TEXTURE7);
     glBindTexture(GL_TEXTURE_2D, opacityTexture);
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, emissiveTexture);
     const auto samplerFor = [this](const TextureMapTransform& map) {
         return map.clampToEdge ? clampSampler_ : repeatSampler_;
     };
@@ -1589,6 +1618,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindSampler(5, samplerFor(material.metallicMapTransform));
     glBindSampler(6, samplerFor(material.roughnessMapTransform));
     glBindSampler(7, samplerFor(material.opacityMapTransform));
+    glBindSampler(8, samplerFor(material.emissiveMapTransform));
+    glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(mesh.vao);
     glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);

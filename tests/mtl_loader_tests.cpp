@@ -40,6 +40,9 @@ void testPackagedSampleMaterialLibrary() {
                        && near(material.emission[0], 0.018f),
                "sample MTL PBR factors parse as expected");
         expect(material.albedoTexture == "meshes/orbital_shard_albedo.tga"
+                       && material.emissiveTexture == "meshes/orbital_shard_albedo.tga"
+                       && near(material.emissiveMapValueRange.base, 0.0f)
+                       && near(material.emissiveMapValueRange.gain, 1.0f)
                        && material.normalTexture == "meshes/orbital_shard_normal.tga"
                        && material.opacityTexture == "meshes/orbital_shard_opacity.tga"
                        && material.opacityMapChannel == nuby::ScalarTextureChannel::Matte
@@ -69,6 +72,7 @@ Pm 0.72
 Pr 0.31
 d 0.65
 map_Kd -mm -0.1 1.3 -s 0.5 0.75 1 -o 0.1 0.2 0 textures/sun albedo.tga
+map_Ke -mm 0.1 0.9 -s 0.6 0.8 1 -o -0.1 0.2 0 textures/sun emission.tga
 norm -mm -0.05 1.1 -s 2 2 textures/sun normal.tga
 map_d -imfchan m -mm 0.2 0.7 -s 0.75 0.8 1 -o 0.2 0.1 0 -clamp on textures/sun opacity.tga
 map_Pr -mm 0.03 0.9 -o -0.2 0.25 textures/roughness.tga
@@ -99,6 +103,8 @@ illum 2
                "diffuse, emissive, PBR and dissolve/transparency factors are parsed");
         expect(relic.albedoTexture
                        == "characters/wayfarer/textures/sun albedo.tga"
+                       && relic.emissiveTexture
+                               == "characters/wayfarer/textures/sun emission.tga"
                        && relic.normalTexture
                        == "characters/wayfarer/textures/sun normal.tga"
                        && relic.roughnessTexture
@@ -136,6 +142,10 @@ illum 2
                        && near(relic.albedoMapValueRange.gain, 1.3f)
                        && near(relic.normalMapValueRange.base, -0.05f)
                        && near(relic.normalMapValueRange.gain, 1.1f)
+                       && near(relic.emissiveMapValueRange.base, 0.1f)
+                       && near(relic.emissiveMapValueRange.gain, 0.9f)
+                       && near(relic.emissiveMapTransform.uvScale[0], 0.6f)
+                       && near(relic.emissiveMapTransform.uvOffset[0], -0.1f)
                        && near(relic.roughnessMapTransform.uvOffset[0], -0.2f)
                        && near(relic.roughnessMapTransform.uvOffset[1], 0.25f)
                        && near(relic.roughnessMapValueRange.base, 0.03f)

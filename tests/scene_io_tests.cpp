@@ -30,7 +30,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 11") {
+        if (line == "NUBY_SCENE 12") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
             if (targetVersion < 7) continue;
@@ -51,6 +51,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
                 for (std::size_t value = 0; value < 30; ++value) {
                     legacy << ' ' << fields[value];
                 }
+            } else if (targetVersion < 12) {
+                for (std::size_t value = 0; value < 35; ++value) {
+                    legacy << ' ' << fields[value];
+                }
             } else {
                 legacy << line.substr(tag.size());
             }
@@ -61,6 +65,18 @@ std::string downgradeTextureSchema(const std::string& encoded,
         } else if (line.rfind("MATERIAL_MAP_MM ", 0) == 0
                 && targetVersion < 11) {
             continue;
+        } else if (line.rfind("MATERIAL_MAP_MM ", 0) == 0
+                && targetVersion < 12) {
+            std::istringstream ranges(line);
+            std::string tag;
+            ranges >> tag;
+            legacy << tag;
+            for (int value = 0; value < 14; ++value) {
+                std::string field;
+                ranges >> field;
+                legacy << ' ' << field;
+            }
+            legacy << '\n';
         } else if (line.rfind("OVERRIDE_MTL_MATERIALS ", 0) == 0
                 && targetVersion < 6) {
             continue;
@@ -85,6 +101,9 @@ std::string downgradeTextureSchema(const std::string& encoded,
             std::string opacityPath;
             material >> std::quoted(opacityPath);
             if (targetVersion >= 10) legacy << ' ' << std::quoted(opacityPath);
+            std::string emissivePath;
+            material >> std::quoted(emissivePath);
+            if (targetVersion >= 12) legacy << ' ' << std::quoted(emissivePath);
             legacy << '\n';
         } else {
             legacy << line << '\n';
@@ -130,10 +149,14 @@ nuby::Scene makeScene() {
     mesh.material.metallicTexture = "textures/hero metallic.tga";
     mesh.material.roughnessTexture = "textures/hero roughness.tga";
     mesh.material.opacityTexture = "textures/hero opacity.tga";
+    mesh.material.emissiveTexture = "textures/hero emission.tga";
     mesh.material.opacityMapChannel = nuby::ScalarTextureChannel::Matte;
     mesh.material.opacityMapTransform.uvScale = {0.7f, 0.8f};
     mesh.material.opacityMapTransform.uvOffset = {0.12f, -0.08f};
     mesh.material.opacityMapTransform.clampToEdge = true;
+    mesh.material.emissiveMapTransform.uvScale = {1.25f, 0.75f};
+    mesh.material.emissiveMapTransform.uvOffset = {-0.2f, 0.15f};
+    mesh.material.emissiveMapTransform.clampToEdge = true;
     mesh.material.albedoMapValueRange = {-0.1f, 1.35f};
     mesh.material.normalMapValueRange = {0.1f, 0.8f};
     mesh.material.metallicRoughnessMapValueRange = {0.2f, 0.7f};
@@ -141,6 +164,7 @@ nuby::Scene makeScene() {
     mesh.material.roughnessMapValueRange = {0.04f, 0.9f};
     mesh.material.occlusionMapValueRange = {0.0f, 1.4f};
     mesh.material.opacityMapValueRange = {0.05f, 0.95f};
+    mesh.material.emissiveMapValueRange = {0.08f, 1.25f};
     mesh.material.albedoMapTransform.uvScale = {0.5f, 0.75f};
     mesh.material.albedoMapTransform.uvOffset = {0.1f, 0.2f};
     mesh.material.albedoMapTransform.clampToEdge = true;
@@ -266,7 +290,8 @@ void testRoundTripAllSceneData() {
                        && mesh->material.occlusionTexture == "textures/hero ao.tga"
                        && mesh->material.metallicTexture == "textures/hero metallic.tga"
                        && mesh->material.roughnessTexture == "textures/hero roughness.tga"
-                       && mesh->material.opacityTexture == "textures/hero opacity.tga",
+                       && mesh->material.opacityTexture == "textures/hero opacity.tga"
+                       && mesh->material.emissiveTexture == "textures/hero emission.tga",
                "PBR and opacity texture-map asset references are restored");
         expect(mesh->overrideMtlMaterials,
                "explicit entity-level override of imported MTL materials is restored");
@@ -281,6 +306,9 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.opacityMapTransform.uvScale[0], 0.7f)
                        && near(mesh->material.opacityMapTransform.uvOffset[1], -0.08f)
                        && mesh->material.opacityMapTransform.clampToEdge
+                       && near(mesh->material.emissiveMapTransform.uvScale[0], 1.25f)
+                       && near(mesh->material.emissiveMapTransform.uvOffset[1], 0.15f)
+                       && mesh->material.emissiveMapTransform.clampToEdge
                        && mesh->material.opacityMapChannel
                                == nuby::ScalarTextureChannel::Matte
                        && near(mesh->material.albedoMapValueRange.base, -0.1f)
@@ -296,7 +324,9 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.occlusionMapValueRange.base, 0.0f)
                        && near(mesh->material.occlusionMapValueRange.gain, 1.4f)
                        && near(mesh->material.opacityMapValueRange.base, 0.05f)
-                       && near(mesh->material.opacityMapValueRange.gain, 0.95f),
+                       && near(mesh->material.opacityMapValueRange.gain, 0.95f)
+                       && near(mesh->material.emissiveMapValueRange.base, 0.08f)
+                       && near(mesh->material.emissiveMapValueRange.gain, 1.25f),
                "per-map UV, sampler, channel and base/gain settings survive serialization");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
@@ -458,6 +488,21 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
                    && near(legacyV10Mesh->material.opacityMapValueRange.base, 0.0f)
                    && near(legacyV10Mesh->material.opacityMapValueRange.gain, 1.0f),
            "version-ten map data loads and newly added base/gain ranges default to identity");
+
+    const std::string versionElevenText = downgradeTextureSchema(valid.str(), 11, 6);
+    std::stringstream legacyV11(versionElevenText);
+    expect(nuby::SceneSerializer::load(target, legacyV11, error),
+           "version-eleven base/gain scenes remain compatible after emissive-map support");
+    const nuby::Entity* legacyV11Mesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyV11Mesh = &entity;
+    }
+    expect(legacyV11Mesh != nullptr
+                   && legacyV11Mesh->material.emissiveTexture.empty()
+                   && near(legacyV11Mesh->material.emissiveMapValueRange.base, 0.0f)
+                   && near(legacyV11Mesh->material.emissiveMapValueRange.gain, 1.0f)
+                   && near(legacyV11Mesh->material.emissiveMapTransform.uvScale[0], 1.0f),
+           "version-eleven scenes receive empty emissive maps with identity defaults");
 
     const std::string versionSevenText = downgradeTextureSchema(valid.str(), 7, 6);
     std::stringstream legacyV7(versionSevenText);

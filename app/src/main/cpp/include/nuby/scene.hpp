@@ -57,6 +57,7 @@ struct Material {
     std::string roughnessTexture;
     std::string occlusionTexture;
     std::string opacityTexture;
+    std::string emissiveTexture;
     TextureMapTransform albedoMapTransform;
     TextureMapTransform normalMapTransform;
     TextureMapTransform metallicRoughnessMapTransform;
@@ -64,6 +65,7 @@ struct Material {
     TextureMapTransform roughnessMapTransform;
     TextureMapTransform occlusionMapTransform;
     TextureMapTransform opacityMapTransform;
+    TextureMapTransform emissiveMapTransform;
     TextureMapValueRange albedoMapValueRange;
     TextureMapValueRange normalMapValueRange;
     TextureMapValueRange metallicRoughnessMapValueRange;
@@ -71,6 +73,7 @@ struct Material {
     TextureMapValueRange roughnessMapValueRange;
     TextureMapValueRange occlusionMapValueRange;
     TextureMapValueRange opacityMapValueRange;
+    TextureMapValueRange emissiveMapValueRange;
     ScalarTextureChannel opacityMapChannel = ScalarTextureChannel::Luminance;
 };
 

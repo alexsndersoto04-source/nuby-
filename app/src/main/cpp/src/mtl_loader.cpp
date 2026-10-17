@@ -209,7 +209,7 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
                     || record == "Pr" || record == "d" || record == "Tr"
                     || record == "map_d" || record == "map_Kd" || record == "map_Kn"
                     || record == "norm" || record == "map_Pr" || record == "map_Pm"
-                    || record == "map_AO") {
+                    || record == "map_AO" || record == "map_Ke") {
                 return fail(error, "MTL material property appears before newmtl");
             }
             continue;
@@ -249,7 +249,7 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
             current->material.opacity = record == "d" ? transparency : 1.0f - transparency;
         } else if (record == "map_d" || record == "map_Kd" || record == "map_Kn"
                 || record == "norm" || record == "map_Pr" || record == "map_Pm"
-                || record == "map_AO") {
+                || record == "map_AO" || record == "map_Ke") {
             std::string rawPath;
             TextureMapTransform transform;
             TextureMapValueRange valueRange;
@@ -282,10 +282,14 @@ bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
                 current->material.metallicTexture = resolved;
                 current->material.metallicMapTransform = transform;
                 current->material.metallicMapValueRange = valueRange;
-            } else {
+            } else if (record == "map_AO") {
                 current->material.occlusionTexture = resolved;
                 current->material.occlusionMapTransform = transform;
                 current->material.occlusionMapValueRange = valueRange;
+            } else {
+                current->material.emissiveTexture = resolved;
+                current->material.emissiveMapTransform = transform;
+                current->material.emissiveMapValueRange = valueRange;
             }
         }
     }

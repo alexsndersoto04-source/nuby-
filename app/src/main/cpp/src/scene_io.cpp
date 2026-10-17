@@ -140,6 +140,7 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.roughnessTexture)
             || !validTexturePath(entity.material.occlusionTexture)
             || !validTexturePath(entity.material.opacityTexture)
+            || !validTexturePath(entity.material.emissiveTexture)
             || static_cast<unsigned int>(entity.material.opacityMapChannel)
                     > static_cast<unsigned int>(ScalarTextureChannel::Luminance)
             || static_cast<unsigned int>(entity.primitive)
@@ -153,13 +154,15 @@ bool validEntity(const Entity& entity) {
             || !validTextureMapTransform(entity.material.roughnessMapTransform)
             || !validTextureMapTransform(entity.material.occlusionMapTransform)
             || !validTextureMapTransform(entity.material.opacityMapTransform)
+            || !validTextureMapTransform(entity.material.emissiveMapTransform)
             || !validTextureMapValueRange(entity.material.albedoMapValueRange)
             || !validTextureMapValueRange(entity.material.normalMapValueRange)
             || !validTextureMapValueRange(entity.material.metallicRoughnessMapValueRange)
             || !validTextureMapValueRange(entity.material.metallicMapValueRange)
             || !validTextureMapValueRange(entity.material.roughnessMapValueRange)
             || !validTextureMapValueRange(entity.material.occlusionMapValueRange)
-            || !validTextureMapValueRange(entity.material.opacityMapValueRange)) {
+            || !validTextureMapValueRange(entity.material.opacityMapValueRange)
+            || !validTextureMapValueRange(entity.material.emissiveMapValueRange)) {
         return false;
     }
     const auto finite = [](float value) { return std::isfinite(value); };
@@ -341,7 +344,8 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.material.occlusionTexture) << ' '
            << std::quoted(entity.material.metallicTexture) << ' '
            << std::quoted(entity.material.roughnessTexture) << ' '
-           << std::quoted(entity.material.opacityTexture) << '\n';
+           << std::quoted(entity.material.opacityTexture) << ' '
+           << std::quoted(entity.material.emissiveTexture) << '\n';
     output << "OVERRIDE_MTL_MATERIALS "
            << (entity.overrideMtlMaterials ? 1 : 0) << '\n';
     output << "MATERIAL_MAP_UV";
@@ -352,6 +356,7 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTextureMapTransform(output, entity.material.roughnessMapTransform);
     writeTextureMapTransform(output, entity.material.occlusionMapTransform);
     writeTextureMapTransform(output, entity.material.opacityMapTransform);
+    writeTextureMapTransform(output, entity.material.emissiveMapTransform);
     output << '\n';
     output << "OPACITY_MAP_CHANNEL "
            << static_cast<unsigned int>(entity.material.opacityMapChannel) << '\n';
@@ -363,6 +368,7 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTextureMapValueRange(output, entity.material.roughnessMapValueRange);
     writeTextureMapValueRange(output, entity.material.occlusionMapValueRange);
     writeTextureMapValueRange(output, entity.material.opacityMapValueRange);
+    writeTextureMapValueRange(output, entity.material.emissiveMapValueRange);
     output << '\n';
 
     output << "SPIN";
@@ -503,6 +509,11 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !validTexturePath(entity.material.opacityTexture))) {
         return fail(error, "Entity opacity texture path is invalid");
     }
+    if (version >= 12
+            && (!(input >> std::quoted(entity.material.emissiveTexture))
+                || !validTexturePath(entity.material.emissiveTexture))) {
+        return fail(error, "Entity emissive texture path is invalid");
+    }
     if (version >= 6) {
         int overrideMtlMaterials = -1;
         if (!readTag(input, "OVERRIDE_MTL_MATERIALS", error)
@@ -528,7 +539,10 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                         version >= 8)
                 || (version >= 10
                     && !readTextureMapTransform(input,
-                            entity.material.opacityMapTransform, true)))) {
+                            entity.material.opacityMapTransform, true))
+                || (version >= 12
+                    && !readTextureMapTransform(input,
+                            entity.material.emissiveMapTransform, true)))) {
         return fail(error, "Material UV transform or sampler settings are invalid");
     }
     if (version >= 10) {
@@ -550,7 +564,10 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !readTextureMapValueRange(input, entity.material.metallicMapValueRange)
                 || !readTextureMapValueRange(input, entity.material.roughnessMapValueRange)
                 || !readTextureMapValueRange(input, entity.material.occlusionMapValueRange)
-                || !readTextureMapValueRange(input, entity.material.opacityMapValueRange))) {
+                || !readTextureMapValueRange(input, entity.material.opacityMapValueRange)
+                || (version >= 12
+                    && !readTextureMapValueRange(input,
+                            entity.material.emissiveMapValueRange)))) {
         return fail(error, "Material map base/gain range is invalid");
     }
 

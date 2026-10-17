@@ -90,6 +90,7 @@ private:
         GLint roughnessTexture = -1;
         GLint occlusionTexture = -1;
         GLint opacityTexture = -1;
+        GLint emissiveTexture = -1;
         GLint hasAlbedoTexture = -1;
         GLint hasNormalTexture = -1;
         GLint hasMetallicRoughnessTexture = -1;
@@ -97,12 +98,15 @@ private:
         GLint hasRoughnessTexture = -1;
         GLint hasOcclusionTexture = -1;
         GLint hasOpacityTexture = -1;
+        GLint hasEmissiveTexture = -1;
         GLint opacityMapChannel = -1;
+        GLint emissiveUvScale = -1;
+        GLint emissiveUvOffset = -1;
         GLint opacityUvScale = -1;
         GLint opacityUvOffset = -1;
-        std::array<GLint, 6> textureUvScale{};
-        std::array<GLint, 6> textureUvOffset{};
-        std::array<GLint, 7> textureMapValueRange{};
+        std::array<GLint, 7> textureUvScale{};
+        std::array<GLint, 7> textureUvOffset{};
+        std::array<GLint, 8> textureMapValueRange{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
         GLint lightViewProjection = -1;
