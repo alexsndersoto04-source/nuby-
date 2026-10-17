@@ -42,6 +42,11 @@ void testPackagedSampleMaterialLibrary() {
         expect(material.albedoTexture == "meshes/orbital_shard_albedo.tga"
                        && material.normalTexture == "meshes/orbital_shard_normal.tga",
                "sample MTL image paths resolve to packaged assets");
+        expect(near(material.albedoMapTransform.uvScale[0], 1.25f)
+                       && near(material.albedoMapTransform.uvOffset[0], 0.05f)
+                       && near(material.normalMapTransform.uvScale[1], 1.25f)
+                       && near(material.normalMapTransform.uvOffset[0], 0.05f),
+               "packaged sample exercises per-map scale and offset options");
     }
 }
 
