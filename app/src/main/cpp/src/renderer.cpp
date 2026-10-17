@@ -1550,7 +1550,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                  material.opacityMapTransform.uvScale.data());
     glUniform2fv(uniforms_.opacityUvOffset, 1,
                  material.opacityMapTransform.uvOffset.data());
-    const std::array<const TextureMapTransform*, 6> mapTransforms{{
+    const std::array<const TextureMapTransform*, 7> mapTransforms{{
             &material.albedoMapTransform,
             &material.normalMapTransform,
             &material.metallicRoughnessMapTransform,
