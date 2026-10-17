@@ -236,9 +236,11 @@ uniform int uHasOpacityTexture;
 uniform int uHasEmissiveTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
+#ifndef NUBY_DISABLE_CSM
 uniform sampler2DArray uShadowMap;
 uniform mat4 uLightViewProjection[3];
 uniform vec3 uCascadeFarSplits;
+#endif
 uniform int uShadowsEnabled;
 uniform int uGrid;
 uniform int uPointLightCount;
@@ -260,6 +262,11 @@ float adjustTextureValue(float sampleValue, vec2 baseGain) {
     return clamp(baseGain.x + sampleValue * baseGain.y, 0.0, 1.0);
 }
 
+#ifdef NUBY_DISABLE_CSM
+float shadowAmount(vec3 normal, vec3 lightDirection) {
+    return 0.0;
+}
+#else
 float shadowAmount(vec3 normal, vec3 lightDirection) {
     if (uShadowsEnabled == 0 || vViewDepth > uCascadeFarSplits.z) return 0.0;
     int cascade = vViewDepth <= uCascadeFarSplits.x ? 0
@@ -292,6 +299,7 @@ float shadowAmount(vec3 normal, vec3 lightDirection) {
     }
     return occlusion / 9.0;
 }
+#endif
 
 float distributionGGX(float normalHalf, float roughness) {
     const float pi = 3.14159265;
@@ -1162,7 +1170,7 @@ const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
 }
 
 void Renderer::initializeShadowMap() {
-    if (fallbackRenderer_) return;
+    if (fallbackRenderer_ || !csmShaderSupported_) return;
     shadowProgram_ = createProgram(kShadowVertexShader, kShadowFragmentShader);
     if (shadowProgram_ == 0) {
         __android_log_print(ANDROID_LOG_WARN, kLogTag,
@@ -1446,15 +1454,31 @@ void Renderer::initialize(AAssetManager* assetManager) {
     importedMeshes_.clear();
     textures_.clear();
     fallbackRenderer_ = false;
+    csmShaderSupported_ = false;
     shadowsAvailable_ = false;
     shadowCascadesValid_ = false;
     postProcessingAvailable_ = false;
     program_ = createProgram(kVertexShader, kFragmentShader);
-    if (program_ == 0) {
-        fallbackRenderer_ = true;
-        __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                "Advanced PBR shader unavailable; trying compatibility renderer");
-        program_ = createProgram(kFallbackVertexShader, kFallbackFragmentShader);
+    if (program_ != 0) {
+        csmShaderSupported_ = true;
+    } else {
+        std::string pbrWithoutCsm = kFragmentShader;
+        const std::size_t versionStart = pbrWithoutCsm.find("#version");
+        const std::size_t versionEnd = versionStart == std::string::npos
+                ? std::string::npos : pbrWithoutCsm.find('\n', versionStart);
+        if (versionEnd != std::string::npos) {
+            pbrWithoutCsm.insert(versionEnd + 1, "#define NUBY_DISABLE_CSM\n");
+            program_ = createProgram(kVertexShader, pbrWithoutCsm.c_str());
+        }
+        if (program_ == 0) {
+            fallbackRenderer_ = true;
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "Advanced PBR shaders unavailable; trying compatibility renderer");
+            program_ = createProgram(kFallbackVertexShader, kFallbackFragmentShader);
+        } else {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "PBR shader enabled without cascaded shadows on this GPU");
+        }
     }
     if (program_ == 0) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
