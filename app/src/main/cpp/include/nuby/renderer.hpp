@@ -48,6 +48,8 @@ private:
 
     struct ImportedPart {
         Mesh mesh;
+        std::string objectName;
+        std::string groupName;
         Material material;
         bool hasMaterial = false;
     };

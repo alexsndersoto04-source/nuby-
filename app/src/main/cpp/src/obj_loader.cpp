@@ -45,6 +45,8 @@ struct ParsedFace {
 };
 
 struct ParsedSubmesh {
+    std::string objectName;
+    std::string groupName;
     std::string materialName;
     std::vector<ParsedFace> faces;
 };
@@ -335,6 +337,8 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
     std::vector<std::array<float, 2>> texcoords;
     std::unordered_set<std::string> materialLibrarySet;
     std::vector<ParsedSubmesh> parsedSubmeshes;
+    std::string activeObject;
+    std::string activeGroup;
     std::string activeMaterial;
     std::uint32_t activeSmoothingGroup = 0;
     std::size_t expandedVertexCount = 0;
@@ -388,6 +392,18 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
                 return false;
             }
             texcoords.push_back(uv);
+        } else if (record == "o" || record == "g") {
+            std::string name;
+            std::getline(fields, name);
+            name = trim(std::move(name));
+            if (name.size() > 128) {
+                error = "OBJ object/group name exceeds limits at line "
+                      + std::to_string(lineNumber);
+                model = {};
+                return false;
+            }
+            if (record == "o") activeObject = std::move(name);
+            else activeGroup = std::move(name);
         } else if (record == "mtllib") {
             std::string library;
             while (fields >> library) {
@@ -486,6 +502,8 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
             expandedVertexCount += verticesForFace;
 
             if (parsedSubmeshes.empty()
+                    || parsedSubmeshes.back().objectName != activeObject
+                    || parsedSubmeshes.back().groupName != activeGroup
                     || parsedSubmeshes.back().materialName != activeMaterial) {
                 if (parsedSubmeshes.size() >= kMaximumSubmeshes) {
                     error = "OBJ contains too many material submeshes";
@@ -493,6 +511,8 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
                     return false;
                 }
                 parsedSubmeshes.push_back(ParsedSubmesh{});
+                parsedSubmeshes.back().objectName = activeObject;
+                parsedSubmeshes.back().groupName = activeGroup;
                 parsedSubmeshes.back().materialName = activeMaterial;
             }
             ParsedFace parsedFace;
@@ -539,6 +559,8 @@ bool parseObjModelInternal(std::string_view source, ObjModel& model, std::string
     model.submeshes.reserve(parsedSubmeshes.size());
     for (const ParsedSubmesh& parsedSubmesh : parsedSubmeshes) {
         ObjSubmesh submesh;
+        submesh.objectName = parsedSubmesh.objectName;
+        submesh.groupName = parsedSubmesh.groupName;
         submesh.materialName = parsedSubmesh.materialName;
         for (const ParsedFace& face : parsedSubmesh.faces) {
             for (const TriangleCorners& triangle : face.triangles) {

@@ -585,6 +585,8 @@ bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) 
     std::size_t totalVertices = 0;
     for (const ObjSubmesh& submesh : parsedObj.submeshes) {
         ImportedPart part{};
+        part.objectName = submesh.objectName;
+        part.groupName = submesh.groupName;
         part.mesh = uploadMesh(submesh.vertices);
         if (part.mesh.vao == 0) {
             __android_log_print(ANDROID_LOG_ERROR, kLogTag,

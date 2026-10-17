@@ -14,6 +14,8 @@ struct MeshVertex {
 };
 
 struct ObjSubmesh {
+    std::string objectName;
+    std::string groupName;
     std::string materialName;
     std::vector<MeshVertex> vertices;
 };
@@ -23,10 +25,10 @@ struct ObjModel {
     std::vector<ObjSubmesh> submeshes;
 };
 
-// Parses the supported OBJ geometry subset and preserves contiguous usemtl
-// ranges plus mtllib references. Ear clipping triangulates simple polygons;
-// missing normals honor OBJ smoothing groups. Material library paths are
-// checked as project-relative paths.
+// Parses the supported OBJ geometry subset and preserves contiguous object,
+// group and usemtl ranges plus mtllib references. Ear clipping triangulates
+// simple polygons; missing normals honor OBJ smoothing groups. Material library
+// paths are checked as project-relative paths.
 bool parseObjModel(std::string_view source, ObjModel& model, std::string& error);
 
 // Compatibility convenience API for callers that only need concatenated geometry.

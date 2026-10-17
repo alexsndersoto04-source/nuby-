@@ -233,6 +233,38 @@ void testInvalidIndexIsRejected() {
     expect(!error.empty(), "failed parse reports a useful error");
 }
 
+void testObjectAndGroupNamesArePreservedOnSubmeshes() {
+    constexpr char obj[] = R"OBJ(
+        o Ship Hull
+        g Front Plates
+        v 0 0 0
+        v 1 0 0
+        v 0 1 0
+        v 0 0 1
+        f 1 2 3
+        g Rear Plates
+        f 1 4 2
+        o Sail
+        g Fabric
+        f 1 3 4
+    )OBJ";
+    nuby::ObjModel model;
+    std::string error;
+    expect(nuby::parseObjModel(obj, model, error),
+           "OBJ object and group declarations parse");
+    expect(model.submeshes.size() == 3,
+           "object/group boundaries create separately named submesh ranges");
+    if (model.submeshes.size() == 3) {
+        expect(model.submeshes[0].objectName == "Ship Hull"
+                       && model.submeshes[0].groupName == "Front Plates"
+                       && model.submeshes[1].objectName == "Ship Hull"
+                       && model.submeshes[1].groupName == "Rear Plates"
+                       && model.submeshes[2].objectName == "Sail"
+                       && model.submeshes[2].groupName == "Fabric",
+               "object and group names are retained for each material range");
+    }
+}
+
 void testMalformedNumbersAndUnsupportedLibraryPathsAreRejected() {
     nuby::ObjModel model;
     std::string error;
@@ -319,6 +351,7 @@ int main() {
     testInvalidSmoothingGroupsAreRejected();
     testInvalidPolygonBoundariesAreRejected();
     testInvalidIndexIsRejected();
+    testObjectAndGroupNamesArePreservedOnSubmeshes();
     testMalformedNumbersAndUnsupportedLibraryPathsAreRejected();
     testMaterialLibrariesAndSubmeshAssignments();
     testPackagedSampleAsset();
