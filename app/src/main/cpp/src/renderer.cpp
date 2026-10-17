@@ -1513,7 +1513,8 @@ void Renderer::render(float deltaSeconds) {
                 for (const ImportedPart& part : imported->second.parts) {
                     if (part.mesh.vao == 0) continue;
                     draw(part.mesh, model,
-                         part.hasMaterial ? part.material : entity.material);
+                         part.hasMaterial && !entity.overrideMtlMaterials
+                                 ? part.material : entity.material);
                 }
                 continue;
             }

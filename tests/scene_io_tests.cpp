@@ -29,8 +29,11 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 5") {
+        if (line == "NUBY_SCENE 6") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("OVERRIDE_MTL_MATERIALS ", 0) == 0
+                && targetVersion < 6) {
+            continue;
         } else if (line.rfind("MATERIAL ", 0) == 0) {
             std::istringstream material(line);
             std::string tag;
@@ -78,6 +81,7 @@ nuby::Scene makeScene() {
     nuby::Entity& mesh = scene.create("mesh", nuby::Primitive::ImportedMesh);
     const std::uint32_t meshId = mesh.id;
     mesh.meshAsset = "meshes/shard \"A\".obj";
+    mesh.overrideMtlMaterials = true;
     mesh.transform.position = {0.25f, -0.5f, 1.25f};
     mesh.transform.rotation = {0.1f, 0.2f, 0.3f};
     mesh.transform.scale = {0.5f, 0.6f, 0.7f};
@@ -206,6 +210,8 @@ void testRoundTripAllSceneData() {
                        && mesh->material.metallicTexture == "textures/hero metallic.tga"
                        && mesh->material.roughnessTexture == "textures/hero roughness.tga",
                "PBR texture-map asset references are restored");
+        expect(mesh->overrideMtlMaterials,
+               "explicit entity-level override of imported MTL materials is restored");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
         expect(mesh->animation.position.keyframes.size() == 2
@@ -259,6 +265,20 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid hierarchy cannot partially replace target scene");
 
+    std::string invalidOverride = valid.str();
+    const std::string overrideRecord = "OVERRIDE_MTL_MATERIALS 1";
+    const std::size_t overridePosition = invalidOverride.find(overrideRecord);
+    expect(overridePosition != std::string::npos, "v6 scene stores imported-material policy");
+    if (overridePosition != std::string::npos) {
+        invalidOverride.replace(overridePosition, overrideRecord.size(),
+                                "OVERRIDE_MTL_MATERIALS 2");
+    }
+    std::stringstream malformedOverride(invalidOverride);
+    expect(!nuby::SceneSerializer::load(target, malformedOverride, error),
+           "invalid imported-material override flags are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid material policy cannot partially replace target scene");
+
     std::string truncated = valid.str();
     truncated.resize(truncated.size() - 8);
     std::stringstream incomplete(truncated);
@@ -278,11 +298,24 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "version-two physics scenes remain readable after adding character controllers");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
            "version-two scenes receive default character controller state");
+    const std::string versionFiveText = downgradeTextureSchema(valid.str(), 5, 6);
+    std::stringstream legacyV5(versionFiveText);
+    expect(nuby::SceneSerializer::load(target, legacyV5, error),
+           "version-five scenes remain readable after adding explicit imported-material overrides");
+    const nuby::Entity* legacyMesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyMesh = &entity;
+    }
+    expect(legacyMesh != nullptr && !legacyMesh->overrideMtlMaterials
+                   && legacyMesh->material.metallicTexture == "textures/hero metallic.tga"
+                   && legacyMesh->material.roughnessTexture == "textures/hero roughness.tga",
+           "version-five scalar PBR maps load and material override defaults off");
+
     const std::string versionFourText = downgradeTextureSchema(valid.str(), 4, 4);
     std::stringstream legacyV4(versionFourText);
     expect(nuby::SceneSerializer::load(target, legacyV4, error),
            "version-four scenes remain readable after adding scalar PBR texture maps");
-    const nuby::Entity* legacyMesh = nullptr;
+    legacyMesh = nullptr;
     for (const nuby::Entity& entity : target.entities()) {
         if (entity.name == "mesh") legacyMesh = &entity;
     }
@@ -290,8 +323,9 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
                    && legacyMesh->material.albedoTexture == "textures/hero diffuse.tga"
                    && legacyMesh->material.occlusionTexture == "textures/hero ao.tga"
                    && legacyMesh->material.metallicTexture.empty()
-                   && legacyMesh->material.roughnessTexture.empty(),
-           "legacy version-four maps load and new scalar maps default empty");
+                   && legacyMesh->material.roughnessTexture.empty()
+                   && !legacyMesh->overrideMtlMaterials,
+           "legacy version-four maps load and v5/v6 material fields default safely");
 
     const std::string versionThreeText = downgradeTextureSchema(valid.str(), 3, 0);
     std::stringstream legacyV3(versionThreeText);

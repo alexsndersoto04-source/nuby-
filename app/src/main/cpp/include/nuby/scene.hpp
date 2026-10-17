@@ -186,6 +186,7 @@ struct Entity {
     CameraComponent camera;
     OrbitCameraController orbitCamera;
     bool visible = true;
+    bool overrideMtlMaterials = false;
 };
 
 // Scene state is platform independent. Entity transforms are local to their

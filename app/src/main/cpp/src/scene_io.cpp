@@ -278,6 +278,8 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.material.occlusionTexture) << ' '
            << std::quoted(entity.material.metallicTexture) << ' '
            << std::quoted(entity.material.roughnessTexture) << '\n';
+    output << "OVERRIDE_MTL_MATERIALS "
+           << (entity.overrideMtlMaterials ? 1 : 0) << '\n';
 
     output << "SPIN";
     writeFloatArray(output, entity.spin.radiansPerSecond);
@@ -405,6 +407,15 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !validTexturePath(entity.material.metallicTexture)
                 || !validTexturePath(entity.material.roughnessTexture))) {
         return fail(error, "Entity scalar PBR texture path is invalid");
+    }
+    if (version >= 6) {
+        int overrideMtlMaterials = -1;
+        if (!readTag(input, "OVERRIDE_MTL_MATERIALS", error)
+                || !(input >> overrideMtlMaterials)
+                || (overrideMtlMaterials != 0 && overrideMtlMaterials != 1)) {
+            return fail(error, "Imported mesh material override flag is invalid");
+        }
+        entity.overrideMtlMaterials = overrideMtlMaterials != 0;
     }
 
     if (!readTag(input, "SPIN", error)
