@@ -125,6 +125,8 @@ private:
     std::unordered_map<std::string, ImportedModel> importedMeshes_;
     std::unordered_map<std::string, GLuint> textures_;
     GLuint program_ = 0;
+    GLuint repeatSampler_ = 0;
+    GLuint clampSampler_ = 0;
     GLuint shadowProgram_ = 0;
     GLuint shadowFramebuffer_ = 0;
     GLuint shadowDepthTexture_ = 0;

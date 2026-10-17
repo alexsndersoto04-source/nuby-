@@ -83,16 +83,19 @@ bool validTextureMapTransform(const TextureMapTransform& transform) {
     return true;
 }
 
-bool readTextureMapTransform(std::istream& input, TextureMapTransform& transform) {
+bool readTextureMapTransform(std::istream& input, TextureMapTransform& transform,
+                             bool hasSamplerSettings) {
     return readFloatArray(input, transform.uvScale)
             && readFloatArray(input, transform.uvOffset)
-            && validTextureMapTransform(transform);
+            && validTextureMapTransform(transform)
+            && (!hasSamplerSettings || readBool(input, transform.clampToEdge));
 }
 
 void writeTextureMapTransform(std::ostream& output,
                               const TextureMapTransform& transform) {
     writeFloatArray(output, transform.uvScale);
     writeFloatArray(output, transform.uvOffset);
+    output << ' ' << (transform.clampToEdge ? 1 : 0);
 }
 
 bool validTrack(const Vector3Track& track) {
@@ -457,14 +460,19 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
     }
     if (version >= 7
             && (!readTag(input, "MATERIAL_MAP_UV", error)
-                || !readTextureMapTransform(input, entity.material.albedoMapTransform)
-                || !readTextureMapTransform(input, entity.material.normalMapTransform)
+                || !readTextureMapTransform(input, entity.material.albedoMapTransform,
+                        version >= 8)
+                || !readTextureMapTransform(input, entity.material.normalMapTransform,
+                        version >= 8)
                 || !readTextureMapTransform(input,
-                        entity.material.metallicRoughnessMapTransform)
-                || !readTextureMapTransform(input, entity.material.metallicMapTransform)
-                || !readTextureMapTransform(input, entity.material.roughnessMapTransform)
-                || !readTextureMapTransform(input, entity.material.occlusionMapTransform))) {
-        return fail(error, "Material UV transform is invalid");
+                        entity.material.metallicRoughnessMapTransform, version >= 8)
+                || !readTextureMapTransform(input, entity.material.metallicMapTransform,
+                        version >= 8)
+                || !readTextureMapTransform(input, entity.material.roughnessMapTransform,
+                        version >= 8)
+                || !readTextureMapTransform(input, entity.material.occlusionMapTransform,
+                        version >= 8))) {
+        return fail(error, "Material UV transform or sampler settings are invalid");
     }
 
     if (!readTag(input, "SPIN", error)

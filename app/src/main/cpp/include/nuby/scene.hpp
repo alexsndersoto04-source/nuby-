@@ -25,6 +25,7 @@ struct Transform {
 struct TextureMapTransform {
     std::array<float, 2> uvScale{1.0f, 1.0f};
     std::array<float, 2> uvOffset{0.0f, 0.0f};
+    bool clampToEdge = false;
 };
 
 struct Material {

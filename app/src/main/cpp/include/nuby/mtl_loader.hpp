@@ -14,7 +14,8 @@ struct WavefrontMaterial {
 };
 
 // Reads the Wavefront MTL material subset used by the engine's PBR renderer.
-// Texture paths are resolved relative to the MTL asset and traversal is rejected.
+// Per-map -s/-o UV transforms and -clamp sampling are preserved. Texture paths
+// resolve relative to the MTL asset and traversal is rejected.
 bool parseMtl(std::string_view source, const std::string& libraryAssetPath,
               std::vector<WavefrontMaterial>& materials, std::string& error);
 

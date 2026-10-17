@@ -29,10 +29,24 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 7") {
+        if (line == "NUBY_SCENE 8") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
-        } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0 && targetVersion < 7) {
-            continue;
+        } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
+            if (targetVersion < 7) continue;
+            if (targetVersion < 8) {
+                std::istringstream mapRecord(line);
+                std::string tag;
+                mapRecord >> tag;
+                legacy << tag;
+                for (int value = 0; value < 24; ++value) {
+                    std::string field;
+                    mapRecord >> field;
+                    legacy << ' ' << field;
+                }
+                legacy << '\n';
+            } else {
+                legacy << line << '\n';
+            }
         } else if (line.rfind("OVERRIDE_MTL_MATERIALS ", 0) == 0
                 && targetVersion < 6) {
             continue;
@@ -96,6 +110,7 @@ nuby::Scene makeScene() {
     mesh.material.roughnessTexture = "textures/hero roughness.tga";
     mesh.material.albedoMapTransform.uvScale = {0.5f, 0.75f};
     mesh.material.albedoMapTransform.uvOffset = {0.1f, 0.2f};
+    mesh.material.albedoMapTransform.clampToEdge = true;
     mesh.material.normalMapTransform.uvScale = {2.0f, 1.5f};
     mesh.material.normalMapTransform.uvOffset = {-0.25f, 0.35f};
     mesh.material.roughnessMapTransform.uvScale = {0.8f, 0.9f};
@@ -224,8 +239,10 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.albedoMapTransform.uvOffset[0], 0.1f)
                        && near(mesh->material.normalMapTransform.uvScale[0], 2.0f)
                        && near(mesh->material.normalMapTransform.uvOffset[0], -0.25f)
-                       && near(mesh->material.roughnessMapTransform.uvScale[1], 0.9f),
-               "per-map UV scale and offset transforms survive scene serialization");
+                       && near(mesh->material.roughnessMapTransform.uvScale[1], 0.9f)
+                       && mesh->material.albedoMapTransform.clampToEdge
+                       && !mesh->material.normalMapTransform.clampToEdge,
+               "per-map UV transforms and edge-clamp sampling survive scene serialization");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
         expect(mesh->animation.position.keyframes.size() == 2
@@ -293,6 +310,21 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid material policy cannot partially replace target scene");
 
+    std::string invalidSampler = valid.str();
+    const std::size_t samplerStart = invalidSampler.find("MATERIAL_MAP_UV ");
+    const std::size_t samplerEnd = invalidSampler.find('\n', samplerStart);
+    expect(samplerStart != std::string::npos && samplerEnd != std::string::npos,
+           "v8 scene stores per-map sampler settings");
+    if (samplerStart != std::string::npos && samplerEnd != std::string::npos) {
+        const std::size_t lastField = invalidSampler.rfind(' ', samplerEnd - 1);
+        invalidSampler.replace(lastField + 1, samplerEnd - lastField - 1, "2");
+    }
+    std::stringstream malformedSampler(invalidSampler);
+    expect(!nuby::SceneSerializer::load(target, malformedSampler, error),
+           "invalid serialized edge-clamp flags are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid sampler state cannot partially replace target scene");
+
     std::string truncated = valid.str();
     truncated.resize(truncated.size() - 8);
     std::stringstream incomplete(truncated);
@@ -312,6 +344,19 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "version-two physics scenes remain readable after adding character controllers");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
            "version-two scenes receive default character controller state");
+    const std::string versionSevenText = downgradeTextureSchema(valid.str(), 7, 6);
+    std::stringstream legacyV7(versionSevenText);
+    expect(nuby::SceneSerializer::load(target, legacyV7, error),
+           "version-seven scenes remain readable after adding sampler settings");
+    const nuby::Entity* legacyV7Mesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyV7Mesh = &entity;
+    }
+    expect(legacyV7Mesh != nullptr
+                   && near(legacyV7Mesh->material.albedoMapTransform.uvScale[0], 0.5f)
+                   && !legacyV7Mesh->material.albedoMapTransform.clampToEdge,
+           "version-seven UV transforms load and new edge-clamp flags default off");
+
     const std::string versionSixText = downgradeTextureSchema(valid.str(), 6, 6);
     std::stringstream legacyV6(versionSixText);
     expect(nuby::SceneSerializer::load(target, legacyV6, error),

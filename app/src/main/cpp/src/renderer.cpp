@@ -1279,6 +1279,8 @@ void Renderer::drawFullscreen() {
 
 void Renderer::renderBloom() {
     if (!postProcessingAvailable_) return;
+    glBindSampler(0, 0);
+    glBindSampler(1, 0);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glViewport(0, 0, bloomWidth_, bloomHeight_);
@@ -1332,6 +1334,26 @@ void Renderer::initialize(AAssetManager* assetManager) {
     if (program_ == 0) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Renderer initialization failed: shader program unavailable");
         return;
+    }
+
+    glGenSamplers(1, &repeatSampler_);
+    glGenSamplers(1, &clampSampler_);
+    if (repeatSampler_ != 0 && clampSampler_ != 0) {
+        for (GLuint sampler : {repeatSampler_, clampSampler_}) {
+            glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        }
+        glSamplerParameteri(repeatSampler_, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glSamplerParameteri(repeatSampler_, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glSamplerParameteri(clampSampler_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glSamplerParameteri(clampSampler_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "MTL per-map clamp samplers unavailable; texture repeat remains active");
+        if (repeatSampler_ != 0) glDeleteSamplers(1, &repeatSampler_);
+        if (clampSampler_ != 0) glDeleteSamplers(1, &clampSampler_);
+        repeatSampler_ = 0;
+        clampSampler_ = 0;
     }
 
     uniforms_.viewProjection = glGetUniformLocation(program_, "uViewProjection");
@@ -1466,6 +1488,15 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindTexture(GL_TEXTURE_2D, metallicTexture);
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, roughnessTexture);
+    const auto samplerFor = [this](const TextureMapTransform& map) {
+        return map.clampToEdge ? clampSampler_ : repeatSampler_;
+    };
+    glBindSampler(1, samplerFor(material.albedoMapTransform));
+    glBindSampler(2, samplerFor(material.normalMapTransform));
+    glBindSampler(3, samplerFor(material.metallicRoughnessMapTransform));
+    glBindSampler(4, samplerFor(material.occlusionMapTransform));
+    glBindSampler(5, samplerFor(material.metallicMapTransform));
+    glBindSampler(6, samplerFor(material.roughnessMapTransform));
 
     glBindVertexArray(mesh.vao);
     glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);

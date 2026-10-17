@@ -91,6 +91,14 @@ bool parseMapSpecification(std::istringstream& fields,
     while (index < tokens.size() && !tokens[index].empty()
             && tokens[index].front() == '-') {
         const std::string option = tokens[index++];
+        if (option == "-clamp") {
+            if (index >= tokens.size()) return false;
+            if (tokens[index] == "on") transform.clampToEdge = true;
+            else if (tokens[index] == "off") transform.clampToEdge = false;
+            else return false;
+            ++index;
+            continue;
+        }
         if (option != "-s" && option != "-o") return false;
         if (index + 1 >= tokens.size()) return false;
         float first = 0.0f;
