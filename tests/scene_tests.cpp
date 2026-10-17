@@ -296,6 +296,61 @@ void testPhysicsSphereImpulseAndHierarchySafety() {
            "physics safely leaves parented rigidbodies under transform animation control");
 }
 
+void testTriggerEventsReportEnterExitWithoutApplyingImpulse() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t sensorId = scene.create("sensor", nuby::Primitive::None).id;
+    const std::uint32_t moverId = scene.create("mover", nuby::Primitive::Sphere).id;
+    nuby::Entity* sensor = scene.find(sensorId);
+    sensor->sphereCollider.enabled = true;
+    sensor->sphereCollider.trigger = true;
+    sensor->sphereCollider.radius = 0.5f;
+    nuby::Entity* mover = scene.find(moverId);
+    mover->transform.position[0] = -1.5f;
+    mover->rigidbody.enabled = true;
+    mover->rigidbody.linearDamping = 0.0f;
+    mover->rigidbody.velocity[0] = 1.0f;
+    mover->sphereCollider.enabled = true;
+    mover->sphereCollider.radius = 0.5f;
+
+    bool sawEnter = false;
+    bool sawExit = false;
+    std::vector<nuby::PhysicsEvent> events;
+    for (int frame = 0; frame < 190; ++frame) {
+        scene.update(1.0f / 60.0f);
+        scene.consumePhysicsEvents(events);
+        for (const nuby::PhysicsEvent& event : events) {
+            expect(event.firstEntityId == sensorId && event.secondEntityId == moverId,
+                   "trigger events carry canonical entity IDs");
+            if (event.type == nuby::PhysicsEventType::TriggerEnter) sawEnter = true;
+            if (event.type == nuby::PhysicsEventType::TriggerExit) sawExit = true;
+        }
+    }
+    expect(sawEnter, "overlapping sphere trigger emits one enter transition");
+    expect(sawExit, "separating from a sphere trigger emits an exit transition");
+    expect(near(mover->rigidbody.velocity[0], 1.0f),
+           "trigger overlap reports events without applying a collision impulse");
+    scene.consumePhysicsEvents(events);
+    expect(events.empty(), "consuming physics events drains the event queue");
+
+    nuby::Scene destructionScene;
+    const std::uint32_t triggerId = destructionScene.create(
+            "temporary trigger", nuby::Primitive::None).id;
+    const std::uint32_t insideId = destructionScene.create(
+            "inside", nuby::Primitive::None).id;
+    destructionScene.find(triggerId)->sphereCollider.enabled = true;
+    destructionScene.find(triggerId)->sphereCollider.trigger = true;
+    destructionScene.find(insideId)->sphereCollider.enabled = true;
+    destructionScene.update(1.0f / 60.0f);
+    destructionScene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::TriggerEnter,
+           "stationary overlap emits its enter event");
+    expect(destructionScene.destroyEntity(triggerId), "active trigger can be removed");
+    destructionScene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::TriggerExit,
+           "destroying an overlapping trigger emits an exit event for cleanup");
+}
+
 void testPhysicsSubstepCapKeepsSimulationBounded() {
     nuby::Scene scene;
     scene.physicsSettings().maximumSubsteps = 2;
@@ -337,6 +392,7 @@ int main() {
     testKeyframedAnimationInterpolationAndLooping();
     testPhysicsFixedStepGravityAndFloorContact();
     testPhysicsSphereImpulseAndHierarchySafety();
+    testTriggerEventsReportEnterExitWithoutApplyingImpulse();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {

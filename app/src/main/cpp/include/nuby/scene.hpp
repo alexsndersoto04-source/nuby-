@@ -104,6 +104,19 @@ struct PhysicsSettings {
     float floorFriction = 0.35f;
 };
 
+// Trigger transitions are emitted at fixed simulation steps; consume them after
+// Scene::update. The queue is bounded to protect long-running scenes.
+enum class PhysicsEventType : std::uint8_t {
+    TriggerEnter,
+    TriggerExit
+};
+
+struct PhysicsEvent {
+    PhysicsEventType type = PhysicsEventType::TriggerEnter;
+    std::uint32_t firstEntityId = 0;
+    std::uint32_t secondEntityId = 0;
+};
+
 struct PointLightComponent {
     bool enabled = false;
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
@@ -183,6 +196,7 @@ public:
     float elapsedSeconds() const { return elapsedSeconds_; }
     PhysicsSettings& physicsSettings() { return physicsSettings_; }
     const PhysicsSettings& physicsSettings() const { return physicsSettings_; }
+    void consumePhysicsEvents(std::vector<PhysicsEvent>& output);
 
 private:
     void simulatePhysics(float deltaSeconds);
@@ -194,6 +208,10 @@ private:
     float elapsedSeconds_ = 0.0f;
     PhysicsSettings physicsSettings_;
     float physicsAccumulator_ = 0.0f;
+    std::vector<std::uint64_t> activeTriggerPairs_;
+    std::vector<std::uint64_t> triggerPairsScratch_;
+    std::vector<std::size_t> colliderIndicesScratch_;
+    std::vector<PhysicsEvent> physicsEvents_;
 };
 
 }  // namespace nuby

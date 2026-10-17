@@ -10,6 +10,20 @@ namespace {
 constexpr float kTau = 6.28318530717958647692f;
 using Mat4 = std::array<float, 16>;
 
+constexpr std::size_t kMaximumQueuedPhysicsEvents = 1024;
+
+std::uint64_t triggerPairKey(std::uint32_t first, std::uint32_t second) {
+    if (first > second) std::swap(first, second);
+    return (static_cast<std::uint64_t>(first) << 32U) | second;
+}
+
+void queuePhysicsEvent(std::vector<PhysicsEvent>& events, PhysicsEventType type,
+                       std::uint32_t first, std::uint32_t second) {
+    if (events.size() >= kMaximumQueuedPhysicsEvents) events.erase(events.begin());
+    if (first > second) std::swap(first, second);
+    events.push_back({type, first, second});
+}
+
 Mat4 identity() {
     Mat4 result{};
     result[0] = result[5] = result[10] = result[15] = 1.0f;
@@ -171,6 +185,17 @@ bool Scene::destroyEntity(std::uint32_t id) {
         }
     }
 
+    for (auto pair = activeTriggerPairs_.begin(); pair != activeTriggerPairs_.end();) {
+        const std::uint32_t first = static_cast<std::uint32_t>(*pair >> 32U);
+        const std::uint32_t second = static_cast<std::uint32_t>(*pair);
+        if (removedIds.count(first) != 0 || removedIds.count(second) != 0) {
+            queuePhysicsEvent(physicsEvents_, PhysicsEventType::TriggerExit, first, second);
+            pair = activeTriggerPairs_.erase(pair);
+        } else {
+            ++pair;
+        }
+    }
+
     entities_.erase(std::remove_if(entities_.begin(), entities_.end(),
             [&removedIds](const Entity& entity) {
                 return removedIds.find(entity.id) != removedIds.end();
@@ -310,6 +335,15 @@ void Scene::clear() {
     elapsedSeconds_ = 0.0f;
     physicsSettings_ = PhysicsSettings{};
     physicsAccumulator_ = 0.0f;
+    activeTriggerPairs_.clear();
+    triggerPairsScratch_.clear();
+    colliderIndicesScratch_.clear();
+    physicsEvents_.clear();
+}
+
+void Scene::consumePhysicsEvents(std::vector<PhysicsEvent>& output) {
+    output.clear();
+    output.swap(physicsEvents_);
 }
 
 void Scene::simulatePhysics(float deltaSeconds) {
@@ -326,8 +360,11 @@ void Scene::simulatePhysics(float deltaSeconds) {
     }
     physicsAccumulator_ += deltaSeconds;
     const unsigned int maximumSubsteps = std::min(physicsSettings_.maximumSubsteps, 16U);
-    std::vector<std::size_t> colliderIndices;
+    std::vector<std::size_t>& colliderIndices = colliderIndicesScratch_;
+    colliderIndices.clear();
     colliderIndices.reserve(entities_.size());
+    std::vector<std::uint64_t>& currentTriggerPairs = triggerPairsScratch_;
+    currentTriggerPairs.clear();
 
     for (unsigned int substep = 0; substep < maximumSubsteps
             && physicsAccumulator_ >= step; ++substep) {
@@ -424,7 +461,6 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 firstColliderIndex < colliderIndices.size(); ++firstColliderIndex) {
             Entity& first = entities_[colliderIndices[firstColliderIndex]];
             const SphereColliderComponent& firstCollider = first.sphereCollider;
-            if (firstCollider.trigger) continue;
             const float firstScale = std::max({std::fabs(first.transform.scale[0]),
                     std::fabs(first.transform.scale[1]), std::fabs(first.transform.scale[2])});
             const float firstRadius = firstCollider.radius * firstScale;
@@ -432,7 +468,6 @@ void Scene::simulatePhysics(float deltaSeconds) {
                     secondColliderIndex < colliderIndices.size(); ++secondColliderIndex) {
                 Entity& second = entities_[colliderIndices[secondColliderIndex]];
                 const SphereColliderComponent& secondCollider = second.sphereCollider;
-                if (secondCollider.trigger) continue;
                 const float secondScale = std::max({std::fabs(second.transform.scale[0]),
                         std::fabs(second.transform.scale[1]), std::fabs(second.transform.scale[2])});
                 const float secondRadius = secondCollider.radius * secondScale;
@@ -444,6 +479,10 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 const float distanceSquared = dx * dx + dy * dy + dz * dz;
                 const float combinedRadius = firstRadius + secondRadius;
                 if (!std::isfinite(distanceSquared) || distanceSquared >= combinedRadius * combinedRadius) continue;
+                if (firstCollider.trigger || secondCollider.trigger) {
+                    currentTriggerPairs.push_back(triggerPairKey(first.id, second.id));
+                    continue;
+                }
                 const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
                 if (distance > 1.0e-6f) {
                     dx /= distance;
@@ -525,6 +564,23 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 }
             }
         }
+        std::sort(currentTriggerPairs.begin(), currentTriggerPairs.end());
+        for (const std::uint64_t key : currentTriggerPairs) {
+            if (!std::binary_search(activeTriggerPairs_.begin(), activeTriggerPairs_.end(), key)) {
+                queuePhysicsEvent(physicsEvents_, PhysicsEventType::TriggerEnter,
+                        static_cast<std::uint32_t>(key >> 32U),
+                        static_cast<std::uint32_t>(key));
+            }
+        }
+        for (const std::uint64_t key : activeTriggerPairs_) {
+            if (!std::binary_search(currentTriggerPairs.begin(), currentTriggerPairs.end(), key)) {
+                queuePhysicsEvent(physicsEvents_, PhysicsEventType::TriggerExit,
+                        static_cast<std::uint32_t>(key >> 32U),
+                        static_cast<std::uint32_t>(key));
+            }
+        }
+        activeTriggerPairs_.swap(currentTriggerPairs);
+        currentTriggerPairs.clear();
         physicsAccumulator_ -= step;
     }
     if (physicsAccumulator_ >= step) physicsAccumulator_ = std::fmod(physicsAccumulator_, step);
