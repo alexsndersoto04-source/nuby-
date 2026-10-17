@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -21,13 +22,15 @@ bool near(float actual, float expected, float epsilon = 0.00001f) {
     return std::fabs(actual - expected) <= epsilon;
 }
 
-std::string stripVersionFourTextureFields(const std::string& encoded) {
+std::string downgradeTextureSchema(const std::string& encoded,
+                                   unsigned int targetVersion,
+                                   unsigned int textureMapsToKeep) {
     std::istringstream input(encoded);
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 4") {
-            legacy << "NUBY_SCENE 3\n";
+        if (line == "NUBY_SCENE 5") {
+            legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL ", 0) == 0) {
             std::istringstream material(line);
             std::string tag;
@@ -37,6 +40,11 @@ std::string stripVersionFourTextureFields(const std::string& encoded) {
                 std::string field;
                 material >> field;
                 legacy << ' ' << field;
+            }
+            for (unsigned int map = 0; map < textureMapsToKeep; ++map) {
+                std::string path;
+                material >> std::quoted(path);
+                legacy << ' ' << std::quoted(path);
             }
             legacy << '\n';
         } else {
@@ -78,6 +86,8 @@ nuby::Scene makeScene() {
     mesh.material.normalTexture = "textures/hero normal.tga";
     mesh.material.metallicRoughnessTexture = "textures/hero metal-rough.tga";
     mesh.material.occlusionTexture = "textures/hero ao.tga";
+    mesh.material.metallicTexture = "textures/hero metallic.tga";
+    mesh.material.roughnessTexture = "textures/hero roughness.tga";
     mesh.spin.radiansPerSecond = {0.2f, 0.3f, 0.4f};
     mesh.orbit.enabled = true;
     mesh.orbit.center = {1.0f, 2.0f, 3.0f};
@@ -192,7 +202,9 @@ void testRoundTripAllSceneData() {
                        && mesh->material.normalTexture == "textures/hero normal.tga"
                        && mesh->material.metallicRoughnessTexture
                                == "textures/hero metal-rough.tga"
-                       && mesh->material.occlusionTexture == "textures/hero ao.tga",
+                       && mesh->material.occlusionTexture == "textures/hero ao.tga"
+                       && mesh->material.metallicTexture == "textures/hero metallic.tga"
+                       && mesh->material.roughnessTexture == "textures/hero roughness.tga",
                "PBR texture-map asset references are restored");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
@@ -266,11 +278,26 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "version-two physics scenes remain readable after adding character controllers");
     expect(target.entities().empty() && near(target.physicsSettings().gravity[1], -9.81f),
            "version-two scenes receive default character controller state");
-    const std::string versionThreeText = stripVersionFourTextureFields(valid.str());
+    const std::string versionFourText = downgradeTextureSchema(valid.str(), 4, 4);
+    std::stringstream legacyV4(versionFourText);
+    expect(nuby::SceneSerializer::load(target, legacyV4, error),
+           "version-four scenes remain readable after adding scalar PBR texture maps");
+    const nuby::Entity* legacyMesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyMesh = &entity;
+    }
+    expect(legacyMesh != nullptr
+                   && legacyMesh->material.albedoTexture == "textures/hero diffuse.tga"
+                   && legacyMesh->material.occlusionTexture == "textures/hero ao.tga"
+                   && legacyMesh->material.metallicTexture.empty()
+                   && legacyMesh->material.roughnessTexture.empty(),
+           "legacy version-four maps load and new scalar maps default empty");
+
+    const std::string versionThreeText = downgradeTextureSchema(valid.str(), 3, 0);
     std::stringstream legacyV3(versionThreeText);
     expect(nuby::SceneSerializer::load(target, legacyV3, error),
            "version-three scenes remain readable after PBR texture references are added");
-    const nuby::Entity* legacyMesh = nullptr;
+    legacyMesh = nullptr;
     for (const nuby::Entity& entity : target.entities()) {
         if (entity.name == "mesh") legacyMesh = &entity;
     }

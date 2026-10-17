@@ -32,6 +32,8 @@ struct Material {
     std::string albedoTexture;
     std::string normalTexture;
     std::string metallicRoughnessTexture;
+    std::string metallicTexture;
+    std::string roughnessTexture;
     std::string occlusionTexture;
 };
 

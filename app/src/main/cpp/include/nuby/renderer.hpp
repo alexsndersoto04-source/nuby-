@@ -65,10 +65,14 @@ private:
         GLint albedoTexture = -1;
         GLint normalTexture = -1;
         GLint metallicRoughnessTexture = -1;
+        GLint metallicTexture = -1;
+        GLint roughnessTexture = -1;
         GLint occlusionTexture = -1;
         GLint hasAlbedoTexture = -1;
         GLint hasNormalTexture = -1;
         GLint hasMetallicRoughnessTexture = -1;
+        GLint hasMetallicTexture = -1;
+        GLint hasRoughnessTexture = -1;
         GLint hasOcclusionTexture = -1;
         GLint cameraPosition = -1;
         GLint lightDirection = -1;

@@ -148,10 +148,14 @@ uniform float uAmbientOcclusion;
 uniform sampler2D uAlbedoTexture;
 uniform sampler2D uNormalTexture;
 uniform sampler2D uMetallicRoughnessTexture;
+uniform sampler2D uMetallicTexture;
+uniform sampler2D uRoughnessTexture;
 uniform sampler2D uOcclusionTexture;
 uniform int uHasAlbedoTexture;
 uniform int uHasNormalTexture;
 uniform int uHasMetallicRoughnessTexture;
+uniform int uHasMetallicTexture;
+uniform int uHasRoughnessTexture;
 uniform int uHasOcclusionTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
@@ -272,9 +276,17 @@ void main() {
     float metallic = clamp(uMetallic, 0.0, 1.0);
     if (uHasMetallicRoughnessTexture != 0) {
         vec4 materialSample = texture(uMetallicRoughnessTexture, vUv);
-        roughness = clamp(roughness * materialSample.g, 0.06, 1.0);
-        metallic = clamp(metallic * materialSample.b, 0.0, 1.0);
+        roughness *= materialSample.g;
+        metallic *= materialSample.b;
     }
+    if (uHasRoughnessTexture != 0) {
+        roughness = texture(uRoughnessTexture, vUv).r;
+    }
+    if (uHasMetallicTexture != 0) {
+        metallic = texture(uMetallicTexture, vUv).r;
+    }
+    roughness = clamp(roughness, 0.06, 1.0);
+    metallic = clamp(metallic, 0.0, 1.0);
     float occlusion = uAmbientOcclusion;
     if (uHasOcclusionTexture != 0) {
         occlusion *= texture(uOcclusionTexture, vUv).r;
@@ -853,11 +865,13 @@ void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> attemptedMeshes;
     std::unordered_set<std::string> attemptedTextures;
     for (const Entity& entity : scene_.entities()) {
-        const std::array<const std::string*, 4> materialTextures{{
+        const std::array<const std::string*, 6> materialTextures{{
                 &entity.material.albedoTexture,
                 &entity.material.normalTexture,
                 &entity.material.metallicRoughnessTexture,
-                &entity.material.occlusionTexture
+                &entity.material.occlusionTexture,
+                &entity.material.metallicTexture,
+                &entity.material.roughnessTexture
         }};
         for (const std::string* path : materialTextures) {
             if (path->empty() || textures_.find(*path) != textures_.end()
@@ -1161,10 +1175,14 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.albedoTexture = glGetUniformLocation(program_, "uAlbedoTexture");
     uniforms_.normalTexture = glGetUniformLocation(program_, "uNormalTexture");
     uniforms_.metallicRoughnessTexture = glGetUniformLocation(program_, "uMetallicRoughnessTexture");
+    uniforms_.metallicTexture = glGetUniformLocation(program_, "uMetallicTexture");
+    uniforms_.roughnessTexture = glGetUniformLocation(program_, "uRoughnessTexture");
     uniforms_.occlusionTexture = glGetUniformLocation(program_, "uOcclusionTexture");
     uniforms_.hasAlbedoTexture = glGetUniformLocation(program_, "uHasAlbedoTexture");
     uniforms_.hasNormalTexture = glGetUniformLocation(program_, "uHasNormalTexture");
     uniforms_.hasMetallicRoughnessTexture = glGetUniformLocation(program_, "uHasMetallicRoughnessTexture");
+    uniforms_.hasMetallicTexture = glGetUniformLocation(program_, "uHasMetallicTexture");
+    uniforms_.hasRoughnessTexture = glGetUniformLocation(program_, "uHasRoughnessTexture");
     uniforms_.hasOcclusionTexture = glGetUniformLocation(program_, "uHasOcclusionTexture");
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
@@ -1215,15 +1233,21 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const GLuint albedoTexture = textureFor(material.albedoTexture);
     const GLuint normalTexture = textureFor(material.normalTexture);
     const GLuint metallicRoughnessTexture = textureFor(material.metallicRoughnessTexture);
+    const GLuint metallicTexture = textureFor(material.metallicTexture);
+    const GLuint roughnessTexture = textureFor(material.roughnessTexture);
     const GLuint occlusionTexture = textureFor(material.occlusionTexture);
     glUniform1i(uniforms_.albedoTexture, 1);
     glUniform1i(uniforms_.normalTexture, 2);
     glUniform1i(uniforms_.metallicRoughnessTexture, 3);
     glUniform1i(uniforms_.occlusionTexture, 4);
+    glUniform1i(uniforms_.metallicTexture, 5);
+    glUniform1i(uniforms_.roughnessTexture, 6);
     glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasMetallicRoughnessTexture,
                 metallicRoughnessTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasMetallicTexture, metallicTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasRoughnessTexture, roughnessTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
     glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
@@ -1245,6 +1269,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindTexture(GL_TEXTURE_2D, metallicRoughnessTexture);
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, occlusionTexture);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, metallicTexture);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, roughnessTexture);
 
     glBindVertexArray(mesh.vao);
     glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);

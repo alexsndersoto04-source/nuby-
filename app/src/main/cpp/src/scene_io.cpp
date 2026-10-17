@@ -95,6 +95,8 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.albedoTexture)
             || !validTexturePath(entity.material.normalTexture)
             || !validTexturePath(entity.material.metallicRoughnessTexture)
+            || !validTexturePath(entity.material.metallicTexture)
+            || !validTexturePath(entity.material.roughnessTexture)
             || !validTexturePath(entity.material.occlusionTexture)
             || static_cast<unsigned int>(entity.primitive)
                     > static_cast<unsigned int>(Primitive::None)) {
@@ -273,7 +275,9 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.material.albedoTexture) << ' '
            << std::quoted(entity.material.normalTexture) << ' '
            << std::quoted(entity.material.metallicRoughnessTexture) << ' '
-           << std::quoted(entity.material.occlusionTexture) << '\n';
+           << std::quoted(entity.material.occlusionTexture) << ' '
+           << std::quoted(entity.material.metallicTexture) << ' '
+           << std::quoted(entity.material.roughnessTexture) << '\n';
 
     output << "SPIN";
     writeFloatArray(output, entity.spin.radiansPerSecond);
@@ -394,6 +398,13 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !validTexturePath(entity.material.metallicRoughnessTexture)
                 || !validTexturePath(entity.material.occlusionTexture))) {
         return fail(error, "Entity material texture path is invalid");
+    }
+    if (version >= 5
+            && (!(input >> std::quoted(entity.material.metallicTexture)
+                         >> std::quoted(entity.material.roughnessTexture))
+                || !validTexturePath(entity.material.metallicTexture)
+                || !validTexturePath(entity.material.roughnessTexture))) {
+        return fail(error, "Entity scalar PBR texture path is invalid");
     }
 
     if (!readTag(input, "SPIN", error)

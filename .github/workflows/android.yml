@@ -42,6 +42,14 @@ jobs:
           -o /tmp/nuby-image-tests
           && /tmp/nuby-image-tests
 
+      - name: Compile and run Wavefront material tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/mtl_loader.cpp tests/mtl_loader_tests.cpp
+          -o /tmp/nuby-mtl-tests
+          && /tmp/nuby-mtl-tests
+
       - name: Compile and run scene serialization tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic
