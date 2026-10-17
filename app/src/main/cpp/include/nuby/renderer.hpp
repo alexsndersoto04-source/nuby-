@@ -102,6 +102,7 @@ private:
         GLint opacityUvOffset = -1;
         std::array<GLint, 6> textureUvScale{};
         std::array<GLint, 6> textureUvOffset{};
+        std::array<GLint, 7> textureMapValueRange{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
         GLint lightViewProjection = -1;

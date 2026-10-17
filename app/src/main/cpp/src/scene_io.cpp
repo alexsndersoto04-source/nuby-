@@ -83,6 +83,22 @@ bool validTextureMapTransform(const TextureMapTransform& transform) {
     return true;
 }
 
+bool validTextureMapValueRange(const TextureMapValueRange& valueRange) {
+    return std::isfinite(valueRange.base) && std::isfinite(valueRange.gain)
+            && std::fabs(valueRange.base) <= 16.0f
+            && std::fabs(valueRange.gain) <= 16.0f;
+}
+
+bool readTextureMapValueRange(std::istream& input, TextureMapValueRange& valueRange) {
+    return (input >> valueRange.base >> valueRange.gain)
+            && validTextureMapValueRange(valueRange);
+}
+
+void writeTextureMapValueRange(std::ostream& output,
+                               const TextureMapValueRange& valueRange) {
+    output << ' ' << valueRange.base << ' ' << valueRange.gain;
+}
+
 bool readTextureMapTransform(std::istream& input, TextureMapTransform& transform,
                              bool hasSamplerSettings) {
     return readFloatArray(input, transform.uvScale)
@@ -136,7 +152,14 @@ bool validEntity(const Entity& entity) {
             || !validTextureMapTransform(entity.material.metallicMapTransform)
             || !validTextureMapTransform(entity.material.roughnessMapTransform)
             || !validTextureMapTransform(entity.material.occlusionMapTransform)
-            || !validTextureMapTransform(entity.material.opacityMapTransform)) {
+            || !validTextureMapTransform(entity.material.opacityMapTransform)
+            || !validTextureMapValueRange(entity.material.albedoMapValueRange)
+            || !validTextureMapValueRange(entity.material.normalMapValueRange)
+            || !validTextureMapValueRange(entity.material.metallicRoughnessMapValueRange)
+            || !validTextureMapValueRange(entity.material.metallicMapValueRange)
+            || !validTextureMapValueRange(entity.material.roughnessMapValueRange)
+            || !validTextureMapValueRange(entity.material.occlusionMapValueRange)
+            || !validTextureMapValueRange(entity.material.opacityMapValueRange)) {
         return false;
     }
     const auto finite = [](float value) { return std::isfinite(value); };
@@ -332,6 +355,15 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     output << '\n';
     output << "OPACITY_MAP_CHANNEL "
            << static_cast<unsigned int>(entity.material.opacityMapChannel) << '\n';
+    output << "MATERIAL_MAP_MM";
+    writeTextureMapValueRange(output, entity.material.albedoMapValueRange);
+    writeTextureMapValueRange(output, entity.material.normalMapValueRange);
+    writeTextureMapValueRange(output, entity.material.metallicRoughnessMapValueRange);
+    writeTextureMapValueRange(output, entity.material.metallicMapValueRange);
+    writeTextureMapValueRange(output, entity.material.roughnessMapValueRange);
+    writeTextureMapValueRange(output, entity.material.occlusionMapValueRange);
+    writeTextureMapValueRange(output, entity.material.opacityMapValueRange);
+    output << '\n';
 
     output << "SPIN";
     writeFloatArray(output, entity.spin.radiansPerSecond);
@@ -508,6 +540,18 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
         }
         entity.material.opacityMapChannel =
                 static_cast<ScalarTextureChannel>(opacityMapChannel);
+    }
+    if (version >= 11
+            && (!readTag(input, "MATERIAL_MAP_MM", error)
+                || !readTextureMapValueRange(input, entity.material.albedoMapValueRange)
+                || !readTextureMapValueRange(input, entity.material.normalMapValueRange)
+                || !readTextureMapValueRange(input,
+                        entity.material.metallicRoughnessMapValueRange)
+                || !readTextureMapValueRange(input, entity.material.metallicMapValueRange)
+                || !readTextureMapValueRange(input, entity.material.roughnessMapValueRange)
+                || !readTextureMapValueRange(input, entity.material.occlusionMapValueRange)
+                || !readTextureMapValueRange(input, entity.material.opacityMapValueRange))) {
+        return fail(error, "Material map base/gain range is invalid");
     }
 
     if (!readTag(input, "SPIN", error)

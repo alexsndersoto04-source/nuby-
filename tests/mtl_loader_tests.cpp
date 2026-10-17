@@ -45,8 +45,10 @@ void testPackagedSampleMaterialLibrary() {
                        && material.opacityMapChannel == nuby::ScalarTextureChannel::Matte
                        && material.opacityMapTransform.clampToEdge
                        && near(material.opacityMapTransform.uvScale[0], 1.25f)
-                       && near(material.opacityMapTransform.uvOffset[0], 0.05f),
-               "sample MTL resolves the matte mask and its independent UV/wrap settings");
+                       && near(material.opacityMapTransform.uvOffset[0], 0.05f)
+                       && near(material.opacityMapValueRange.base, 0.02f)
+                       && near(material.opacityMapValueRange.gain, 0.96f),
+               "sample MTL resolves matte UV, wrap and base/gain settings");
         expect(near(material.albedoMapTransform.uvScale[0], 1.25f)
                        && near(material.albedoMapTransform.uvOffset[0], 0.05f)
                        && material.albedoMapTransform.clampToEdge
@@ -66,12 +68,12 @@ Ns 198.0
 Pm 0.72
 Pr 0.31
 d 0.65
-map_Kd -s 0.5 0.75 1 -o 0.1 0.2 0 textures/sun albedo.tga
-norm -s 2 2 textures/sun normal.tga
-map_d -imfchan m -s 0.75 0.8 1 -o 0.2 0.1 0 -clamp on textures/sun opacity.tga
-map_Pr -o -0.2 0.25 textures/roughness.tga
-map_Pm -clamp on textures/metallic.tga
-map_AO -clamp off textures/occlusion.tga
+map_Kd -mm -0.1 1.3 -s 0.5 0.75 1 -o 0.1 0.2 0 textures/sun albedo.tga
+norm -mm -0.05 1.1 -s 2 2 textures/sun normal.tga
+map_d -imfchan m -mm 0.2 0.7 -s 0.75 0.8 1 -o 0.2 0.1 0 -clamp on textures/sun opacity.tga
+map_Pr -mm 0.03 0.9 -o -0.2 0.25 textures/roughness.tga
+map_Pm -mm -0.02 1.2 -clamp on textures/metallic.tga
+map_AO -mm 0.1 0.8 -clamp off textures/occlusion.tga
 
 newmtl Stone
 Kd 0.34 0.31 0.27
@@ -113,10 +115,14 @@ illum 2
         expect(relic.opacityMapChannel == nuby::ScalarTextureChannel::Matte
                        && materials[1].material.opacityMapChannel
                                == nuby::ScalarTextureChannel::Luminance
+                       && near(materials[1].material.opacityMapValueRange.base, 0.0f)
+                       && near(materials[1].material.opacityMapValueRange.gain, 1.0f)
                        && relic.opacityMapTransform.clampToEdge
                        && near(relic.opacityMapTransform.uvScale[0], 0.75f)
-                       && near(relic.opacityMapTransform.uvOffset[1], 0.1f),
-               "opacity channel and its independent UV/wrap settings are parsed");
+                       && near(relic.opacityMapTransform.uvOffset[1], 0.1f)
+                       && near(relic.opacityMapValueRange.base, 0.2f)
+                       && near(relic.opacityMapValueRange.gain, 0.7f),
+               "opacity channel, UV/wrap and value range settings are parsed independently");
         expect(relic.metallicMapTransform.clampToEdge
                        && !relic.occlusionMapTransform.clampToEdge
                        && !relic.albedoMapTransform.clampToEdge,
@@ -126,9 +132,19 @@ illum 2
                        && near(relic.albedoMapTransform.uvOffset[0], 0.1f)
                        && near(relic.albedoMapTransform.uvOffset[1], 0.2f)
                        && near(relic.normalMapTransform.uvScale[0], 2.0f)
+                       && near(relic.albedoMapValueRange.base, -0.1f)
+                       && near(relic.albedoMapValueRange.gain, 1.3f)
+                       && near(relic.normalMapValueRange.base, -0.05f)
+                       && near(relic.normalMapValueRange.gain, 1.1f)
                        && near(relic.roughnessMapTransform.uvOffset[0], -0.2f)
-                       && near(relic.roughnessMapTransform.uvOffset[1], 0.25f),
-               "common per-map UV scale and offset options are parsed independently");
+                       && near(relic.roughnessMapTransform.uvOffset[1], 0.25f)
+                       && near(relic.roughnessMapValueRange.base, 0.03f)
+                       && near(relic.roughnessMapValueRange.gain, 0.9f)
+                       && near(relic.metallicMapValueRange.base, -0.02f)
+                       && near(relic.metallicMapValueRange.gain, 1.2f)
+                       && near(relic.occlusionMapValueRange.base, 0.1f)
+                       && near(relic.occlusionMapValueRange.gain, 0.8f),
+               "UV settings and base/gain ranges parse independently for every supported MTL map");
         expect(near(materials[1].material.roughness,
                     std::sqrt(2.0f / 20.0f)),
                "classic specular exponent maps to a PBR roughness fallback");
@@ -177,7 +193,9 @@ void testInvalidMaterialsAndTraversalAreRejectedTransactionally() {
         "newmtl Bad\nmap_Kd -blendu on texture.tga\n",
         "newmtl Bad\nmap_Kd -imfchan r texture.tga\n",
         "newmtl Bad\nmap_Kd -clamp sideways texture.tga\n",
-        "newmtl Bad\nmap_Kd -s 2000 2000 texture.tga\n"
+        "newmtl Bad\nmap_Kd -s 2000 2000 texture.tga\n",
+        "newmtl Bad\nmap_Kd -mm nan 1 texture.tga\n",
+        "newmtl Bad\nmap_d -mm 0 17 mask.tga\n"
     };
     for (const std::string& source : invalidLibraries) {
         expect(!nuby::parseMtl(source, "materials/model.mtl", materials, error),

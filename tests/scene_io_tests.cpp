@@ -30,7 +30,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 10") {
+        if (line == "NUBY_SCENE 11") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
             if (targetVersion < 7) continue;
@@ -57,6 +57,9 @@ std::string downgradeTextureSchema(const std::string& encoded,
             legacy << '\n';
         } else if (line.rfind("OPACITY_MAP_CHANNEL ", 0) == 0
                 && targetVersion < 10) {
+            continue;
+        } else if (line.rfind("MATERIAL_MAP_MM ", 0) == 0
+                && targetVersion < 11) {
             continue;
         } else if (line.rfind("OVERRIDE_MTL_MATERIALS ", 0) == 0
                 && targetVersion < 6) {
@@ -131,6 +134,13 @@ nuby::Scene makeScene() {
     mesh.material.opacityMapTransform.uvScale = {0.7f, 0.8f};
     mesh.material.opacityMapTransform.uvOffset = {0.12f, -0.08f};
     mesh.material.opacityMapTransform.clampToEdge = true;
+    mesh.material.albedoMapValueRange = {-0.1f, 1.35f};
+    mesh.material.normalMapValueRange = {0.1f, 0.8f};
+    mesh.material.metallicRoughnessMapValueRange = {0.2f, 0.7f};
+    mesh.material.metallicMapValueRange = {-0.3f, 1.2f};
+    mesh.material.roughnessMapValueRange = {0.04f, 0.9f};
+    mesh.material.occlusionMapValueRange = {0.0f, 1.4f};
+    mesh.material.opacityMapValueRange = {0.05f, 0.95f};
     mesh.material.albedoMapTransform.uvScale = {0.5f, 0.75f};
     mesh.material.albedoMapTransform.uvOffset = {0.1f, 0.2f};
     mesh.material.albedoMapTransform.clampToEdge = true;
@@ -272,8 +282,22 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.opacityMapTransform.uvOffset[1], -0.08f)
                        && mesh->material.opacityMapTransform.clampToEdge
                        && mesh->material.opacityMapChannel
-                               == nuby::ScalarTextureChannel::Matte,
-               "per-map UV, edge-clamp and opacity-channel settings survive serialization");
+                               == nuby::ScalarTextureChannel::Matte
+                       && near(mesh->material.albedoMapValueRange.base, -0.1f)
+                       && near(mesh->material.albedoMapValueRange.gain, 1.35f)
+                       && near(mesh->material.normalMapValueRange.base, 0.1f)
+                       && near(mesh->material.normalMapValueRange.gain, 0.8f)
+                       && near(mesh->material.metallicRoughnessMapValueRange.base, 0.2f)
+                       && near(mesh->material.metallicRoughnessMapValueRange.gain, 0.7f)
+                       && near(mesh->material.metallicMapValueRange.base, -0.3f)
+                       && near(mesh->material.metallicMapValueRange.gain, 1.2f)
+                       && near(mesh->material.roughnessMapValueRange.base, 0.04f)
+                       && near(mesh->material.roughnessMapValueRange.gain, 0.9f)
+                       && near(mesh->material.occlusionMapValueRange.base, 0.0f)
+                       && near(mesh->material.occlusionMapValueRange.gain, 1.4f)
+                       && near(mesh->material.opacityMapValueRange.base, 0.05f)
+                       && near(mesh->material.opacityMapValueRange.gain, 0.95f),
+               "per-map UV, sampler, channel and base/gain settings survive serialization");
         expect(near(mesh->orbit.angularSpeed, 0.7f), "orbit component is restored");
         expect(near(mesh->pulse.amplitude, 0.1f), "pulse component is restored");
         expect(mesh->animation.position.keyframes.size() == 2
@@ -420,6 +444,21 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
                            == nuby::ScalarTextureChannel::Luminance,
            "version-nine opacity loads and opacity-map additions receive safe defaults");
 
+    const std::string versionTenText = downgradeTextureSchema(valid.str(), 10, 6);
+    std::stringstream legacyV10(versionTenText);
+    expect(nuby::SceneSerializer::load(target, legacyV10, error),
+           "version-ten opacity maps remain readable after adding per-map value ranges");
+    const nuby::Entity* legacyV10Mesh = nullptr;
+    for (const nuby::Entity& entity : target.entities()) {
+        if (entity.name == "mesh") legacyV10Mesh = &entity;
+    }
+    expect(legacyV10Mesh != nullptr
+                   && near(legacyV10Mesh->material.opacity, 0.42f)
+                   && legacyV10Mesh->material.opacityTexture == "textures/hero opacity.tga"
+                   && near(legacyV10Mesh->material.opacityMapValueRange.base, 0.0f)
+                   && near(legacyV10Mesh->material.opacityMapValueRange.gain, 1.0f),
+           "version-ten map data loads and newly added base/gain ranges default to identity");
+
     const std::string versionSevenText = downgradeTextureSchema(valid.str(), 7, 6);
     std::stringstream legacyV7(versionSevenText);
     expect(nuby::SceneSerializer::load(target, legacyV7, error),
@@ -528,6 +567,14 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(!nuby::SceneSerializer::save(
                    invalidOpacityChannel, invalidOpacityChannelOutput, error),
            "scene serialization rejects unknown opacity-map channel values");
+
+    nuby::Scene invalidMapValueRange;
+    invalidMapValueRange.create("invalid map range", nuby::Primitive::ImportedMesh)
+            .material.albedoMapValueRange.gain = 16.1f;
+    std::stringstream invalidMapValueRangeOutput;
+    expect(!nuby::SceneSerializer::save(
+                   invalidMapValueRange, invalidMapValueRangeOutput, error),
+           "scene serialization rejects unbounded texture map base/gain values");
 }
 }  // namespace
 

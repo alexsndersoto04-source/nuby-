@@ -28,6 +28,12 @@ struct TextureMapTransform {
     bool clampToEdge = false;
 };
 
+// Wavefront -mm range adjustment applied as clamp(base + gain * sample, 0, 1).
+struct TextureMapValueRange {
+    float base = 0.0f;
+    float gain = 1.0f;
+};
+
 enum class ScalarTextureChannel : std::uint8_t {
     Red,
     Green,
@@ -58,6 +64,13 @@ struct Material {
     TextureMapTransform roughnessMapTransform;
     TextureMapTransform occlusionMapTransform;
     TextureMapTransform opacityMapTransform;
+    TextureMapValueRange albedoMapValueRange;
+    TextureMapValueRange normalMapValueRange;
+    TextureMapValueRange metallicRoughnessMapValueRange;
+    TextureMapValueRange metallicMapValueRange;
+    TextureMapValueRange roughnessMapValueRange;
+    TextureMapValueRange occlusionMapValueRange;
+    TextureMapValueRange opacityMapValueRange;
     ScalarTextureChannel opacityMapChannel = ScalarTextureChannel::Luminance;
 };
 
