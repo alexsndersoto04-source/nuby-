@@ -133,6 +133,7 @@ void AdventureGame::buildScene(Scene& scene) {
     head.transform.position = {0.0f, 1.1f, 0.0f};
     head.transform.scale = {0.5f, 0.5f, 0.5f};
     head.material.color = {0.73f, 0.48f, 0.31f};
+    head.material.albedoTexture = "textures/wayfarer_face.tga";
     head.material.roughness = 0.72f;
     scene.setParent(head.id, playerId_);
 
@@ -182,6 +183,9 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
         const float worldZ = -std::sin(yaw) * moveInput_[0]
                 - std::cos(yaw) * moveInput_[1];
         scene.setCharacterMoveInput(playerId_, worldX, worldZ);
+        if (std::hypot(worldX, worldZ) > 0.05f) {
+            player->transform.rotation[1] = std::atan2(-worldX, -worldZ);
+        }
         camera->orbitCamera.target = {player->transform.position[0],
                 player->transform.position[1] + 0.36f,
                 player->transform.position[2]};

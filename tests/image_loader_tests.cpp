@@ -124,6 +124,20 @@ void testPackagedAdventureMaterialMapsDecode() {
     }
 }
 
+void testPackagedWayfarerFaceTextureDecodes() {
+    std::ifstream file("app/src/main/assets/textures/wayfarer_face.tga", std::ios::binary);
+    expect(file.good(), "packaged wayfarer face texture exists");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    nuby::ImageRgba8 image;
+    std::string error;
+    expect(nuby::decodeTga(source, image, error),
+           "wayfarer face texture decodes through the engine TGA loader");
+    expect(image.width == 256 && image.height == 256,
+           "facial details use a compact 256-pixel texture for readability");
+}
+
 void testPackagedOpacityMaskContainsVariableMatteAlpha() {
     std::ifstream file("app/src/main/assets/meshes/orbital_shard_opacity.tga",
                        std::ios::binary);
@@ -185,6 +199,7 @@ int main() {
     testUncompressedTopOriginConvertsToBottomLeftRgba();
     testRleAndRightOriginImagesDecode();
     testPackagedAdventureMaterialMapsDecode();
+    testPackagedWayfarerFaceTextureDecodes();
     testPackagedOpacityMaskContainsVariableMatteAlpha();
     testMalformedAndUnsupportedImagesAreRejectedTransactionally();
     if (failures != 0) {

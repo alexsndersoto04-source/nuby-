@@ -51,12 +51,32 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
            "adventure player uses the character controller and scene physics");
     expect(camera != nullptr && camera->orbitCamera.enabled,
            "adventure has an orbit-follow camera");
+    const nuby::Entity* head = scene.find(findEntityId(scene, "Wayfarer Head"));
+    expect(head != nullptr && head->parentId == game.playerId()
+                   && head->material.albedoTexture == "textures/wayfarer_face.tga",
+           "wayfarer has a face-textured head attached to the moving player");
     expect(scene.physicsSettings().floorEnabled && scene.entities().size() > 15,
            "adventure constructs a standalone courtyard and its own scenery");
     expect(game.relicsCollected() == 0 && !game.completed(),
            "a new adventure starts with three relics to find and a sealed gate");
     expect(game.statusText().find("0/3") != std::string::npos,
            "adventure exposes objective progress for the HUD");
+}
+
+void testCharacterFacesItsMovementDirection() {
+    nuby::AdventureGame game;
+    nuby::Scene scene;
+    game.start(scene);
+    const nuby::Entity* camera = scene.activeCamera();
+    const float cameraYaw = camera == nullptr ? 0.0f : camera->orbitCamera.yaw;
+    expect(game.setMoveInput(scene, 1.0f, 0.0f),
+           "sideways input is accepted for character-facing test");
+    advance(game, scene, 1);
+    const nuby::Entity* player = scene.find(game.playerId());
+    const float expectedYaw = std::atan2(-std::cos(cameraYaw), std::sin(cameraYaw));
+    expect(player != nullptr && std::fabs(player->transform.rotation[1]
+                    - expectedYaw) < 0.001f,
+           "character turns toward its camera-relative world-space movement direction");
 }
 
 void testMovementJumpAndCameraFollow() {
@@ -134,6 +154,7 @@ void testRelicsUnlockTheGateAndRestartResetsProgress() {
 
 int main() {
     testAdventureBuildsItsOwnCharacterAndScene();
+    testCharacterFacesItsMovementDirection();
     testMovementJumpAndCameraFollow();
     testRelicsUnlockTheGateAndRestartResetsProgress();
     if (failures != 0) {
