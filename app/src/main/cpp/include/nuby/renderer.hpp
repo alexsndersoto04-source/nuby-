@@ -114,7 +114,7 @@ private:
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
         GLint view = -1;
-        GLint lightViewProjection = -1;
+        std::array<GLint, kDirectionalShadowCascadeCount> lightViewProjection{};
         GLint cascadeFarSplits = -1;
         GLint shadowMap = -1;
         GLint shadowsEnabled = -1;

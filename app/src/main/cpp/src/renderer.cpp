@@ -237,8 +237,10 @@ uniform int uHasEmissiveTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 #ifndef NUBY_DISABLE_CSM
-uniform sampler2DArray uShadowMap;
-uniform mat4 uLightViewProjection[3];
+uniform sampler2D uShadowMap;
+uniform mat4 uLightViewProjection0;
+uniform mat4 uLightViewProjection1;
+uniform mat4 uLightViewProjection2;
 uniform vec3 uCascadeFarSplits;
 #endif
 uniform int uShadowsEnabled;
@@ -274,11 +276,11 @@ float shadowAmount(vec3 normal, vec3 lightDirection) {
     vec4 worldPosition = vec4(vWorldPosition, 1.0);
     vec4 lightPosition;
     if (cascade == 0) {
-        lightPosition = uLightViewProjection[0] * worldPosition;
+        lightPosition = uLightViewProjection0 * worldPosition;
     } else if (cascade == 1) {
-        lightPosition = uLightViewProjection[1] * worldPosition;
+        lightPosition = uLightViewProjection1 * worldPosition;
     } else {
-        lightPosition = uLightViewProjection[2] * worldPosition;
+        lightPosition = uLightViewProjection2 * worldPosition;
     }
     vec3 projected = lightPosition.xyz / max(lightPosition.w, 0.0001);
     projected = projected * 0.5 + 0.5;
@@ -287,13 +289,20 @@ float shadowAmount(vec3 normal, vec3 lightDirection) {
         projected.z < 0.0 || projected.z > 1.0) return 0.0;
 
     float bias = max(0.0015 * (1.0 - dot(normal, lightDirection)), 0.00045);
-    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0).xy);
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float cascadeWidth = 1.0 / 3.0;
+    vec2 atlasUv = vec2((float(cascade) + projected.x) * cascadeWidth,
+                        projected.y);
+    vec2 atlasMinimum = vec2(float(cascade) * cascadeWidth + texel.x * 0.5,
+                             texel.y * 0.5);
+    vec2 atlasMaximum = vec2(float(cascade + 1) * cascadeWidth - texel.x * 0.5,
+                             1.0 - texel.y * 0.5);
     float occlusion = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            vec2 sampleUv = projected.xy + vec2(float(x), float(y)) * texel;
-            float closestDepth = texture(uShadowMap,
-                    vec3(sampleUv, float(cascade))).r;
+            vec2 sampleUv = clamp(atlasUv + vec2(float(x), float(y)) * texel,
+                                  atlasMinimum, atlasMaximum);
+            float closestDepth = texture(uShadowMap, sampleUv).r;
             occlusion += projected.z - bias > closestDepth ? 1.0 : 0.0;
         }
     }
@@ -1180,22 +1189,22 @@ void Renderer::initializeShadowMap() {
     shadowProgramLightViewProjection_ = glGetUniformLocation(shadowProgram_, "uLightViewProjection");
     shadowProgramModel_ = glGetUniformLocation(shadowProgram_, "uModel");
 
+    constexpr GLsizei atlasWidth = kShadowMapSize
+            * static_cast<GLsizei>(kDirectionalShadowCascadeCount);
     glGenTextures(1, &shadowDepthTexture_);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, shadowDepthTexture_);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16,
-                 kShadowMapSize, kShadowMapSize,
-                 static_cast<GLsizei>(kDirectionalShadowCascadeCount), 0,
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16,
+                 atlasWidth, kShadowMapSize, 0,
                  GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glGenFramebuffers(1, &shadowFramebuffer_);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer_);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                              shadowDepthTexture_, 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, shadowDepthTexture_, 0);
     const GLenum noColorBuffer = GL_NONE;
     glDrawBuffers(1, &noColorBuffer);
     glReadBuffer(GL_NONE);
@@ -1203,7 +1212,7 @@ void Renderer::initializeShadowMap() {
     const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     shadowsAvailable_ = status == GL_FRAMEBUFFER_COMPLETE;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 
     if (!shadowsAvailable_) {
         __android_log_print(ANDROID_LOG_WARN, kLogTag,
@@ -1216,29 +1225,29 @@ void Renderer::initializeShadowMap() {
     }
 
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Cascaded directional shadows enabled (%zu x %dx%d)",
-            kDirectionalShadowCascadeCount, kShadowMapSize, kShadowMapSize);
+            "Cascaded directional shadows enabled: %zu x %d atlas (%dx%d per cascade)",
+            kDirectionalShadowCascadeCount,
+            kShadowMapSize * static_cast<int>(kDirectionalShadowCascadeCount),
+            kShadowMapSize, kShadowMapSize);
 }
 
 void Renderer::renderShadowMaps() {
     if (!shadowsAvailable_ || !shadowCascadesValid_ || shadowProgram_ == 0) return;
 
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer_);
-    glViewport(0, 0, kShadowMapSize, kShadowMapSize);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.5f);
     glUseProgram(shadowProgram_);
 
     for (std::size_t cascade = 0; cascade < kDirectionalShadowCascadeCount; ++cascade) {
-        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                  shadowDepthTexture_, 0,
-                                  static_cast<GLint>(cascade));
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            shadowCascadesValid_ = false;
-            break;
-        }
+        const GLint tileX = static_cast<GLint>(cascade)
+                * static_cast<GLint>(kShadowMapSize);
+        glViewport(tileX, 0, kShadowMapSize, kShadowMapSize);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(tileX, 0, kShadowMapSize, kShadowMapSize);
         glClear(GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
         glUniformMatrix4fv(shadowProgramLightViewProjection_, 1, GL_FALSE,
                            shadowViewProjections_[cascade].data());
 
@@ -1270,6 +1279,7 @@ void Renderer::renderShadowMaps() {
     }
 
     glBindVertexArray(0);
+    glDisable(GL_SCISSOR_TEST);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, width_, height_);
@@ -1559,8 +1569,10 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
     uniforms_.view = glGetUniformLocation(program_, "uView");
-    uniforms_.lightViewProjection =
-            glGetUniformLocation(program_, "uLightViewProjection[0]");
+    uniforms_.lightViewProjection = {{
+            glGetUniformLocation(program_, "uLightViewProjection0"),
+            glGetUniformLocation(program_, "uLightViewProjection1"),
+            glGetUniformLocation(program_, "uLightViewProjection2")}};
     uniforms_.cascadeFarSplits = glGetUniformLocation(program_, "uCascadeFarSplits");
     uniforms_.shadowMap = glGetUniformLocation(program_, "uShadowMap");
     uniforms_.shadowsEnabled = glGetUniformLocation(program_, "uShadowsEnabled");
@@ -1594,9 +1606,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUseProgram(program_);
     glUniformMatrix4fv(uniforms_.viewProjection, 1, GL_FALSE, viewProjection_.data());
     glUniformMatrix4fv(uniforms_.view, 1, GL_FALSE, view_.data());
-    glUniformMatrix4fv(uniforms_.lightViewProjection,
-                       static_cast<GLsizei>(shadowViewProjections_.size()), GL_FALSE,
-                       shadowViewProjections_[0].data());
+    for (std::size_t cascade = 0; cascade < uniforms_.lightViewProjection.size(); ++cascade) {
+        glUniformMatrix4fv(uniforms_.lightViewProjection[cascade], 1, GL_FALSE,
+                           shadowViewProjections_[cascade].data());
+    }
     glUniform3fv(uniforms_.cascadeFarSplits, 1, shadowCascadeFarSplits_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
     glUniform3fv(uniforms_.color, 1, material.color.data());
@@ -1682,7 +1695,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform4fv(uniforms_.pointLightColorIntensity, kMaxPointLights,
                  pointLightColorIntensities_.data());
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, shadowDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, albedoTexture);
     glActiveTexture(GL_TEXTURE2);
