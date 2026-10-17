@@ -128,7 +128,10 @@ struct RigidbodyComponent {
     bool enabled = false;
     float mass = 1.0f;
     std::array<float, 3> velocity{0.0f, 0.0f, 0.0f};
+    // World-space radians per second. Sphere contacts apply frictional torque.
+    std::array<float, 3> angularVelocity{0.0f, 0.0f, 0.0f};
     float linearDamping = 0.02f;
+    float angularDamping = 0.05f;
     float gravityScale = 1.0f;
 };
 

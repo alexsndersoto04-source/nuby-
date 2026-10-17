@@ -17,6 +17,84 @@ std::uint64_t triggerPairKey(std::uint32_t first, std::uint32_t second) {
     return (static_cast<std::uint64_t>(first) << 32U) | second;
 }
 
+using Vec3 = std::array<float, 3>;
+using Quaternion = std::array<float, 4>;  // x, y, z, w
+
+Vec3 cross(const Vec3& a, const Vec3& b) {
+    return {a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]};
+}
+
+Quaternion multiply(const Quaternion& a, const Quaternion& b) {
+    return {a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]};
+}
+
+Quaternion quaternionFromEuler(const Vec3& euler) {
+    const float hx = euler[0] * 0.5f;
+    const float hy = euler[1] * 0.5f;
+    const float hz = euler[2] * 0.5f;
+    const Quaternion qx{std::sin(hx), 0.0f, 0.0f, std::cos(hx)};
+    const Quaternion qy{0.0f, std::sin(hy), 0.0f, std::cos(hy)};
+    const Quaternion qz{0.0f, 0.0f, std::sin(hz), std::cos(hz)};
+    Quaternion result = multiply(qy, multiply(qx, qz));
+    const float norm = std::sqrt(result[0] * result[0] + result[1] * result[1]
+            + result[2] * result[2] + result[3] * result[3]);
+    if (!std::isfinite(norm) || norm <= 1.0e-8f) return {0.0f, 0.0f, 0.0f, 1.0f};
+    for (float& component : result) component /= norm;
+    return result;
+}
+
+Vec3 eulerFromQuaternion(const Quaternion& q) {
+    const float x = q[0];
+    const float y = q[1];
+    const float z = q[2];
+    const float w = q[3];
+    const float r02 = 2.0f * (x * z + y * w);
+    const float r12 = 2.0f * (y * z - x * w);
+    const float r22 = 1.0f - 2.0f * (x * x + y * y);
+    const float r10 = 2.0f * (x * y + z * w);
+    const float r11 = 1.0f - 2.0f * (x * x + z * z);
+    const float pitch = std::asin(std::clamp(-r12, -1.0f, 1.0f));
+    const float cosinePitch = std::cos(pitch);
+    if (std::fabs(cosinePitch) > 1.0e-5f) {
+        return {pitch, std::atan2(r02, r22), std::atan2(r10, r11)};
+    }
+    return {pitch, std::atan2(2.0f * (x * y - z * w),
+                              1.0f - 2.0f * (y * y + z * z)), 0.0f};
+}
+
+void integrateRotation(Transform& transform, const Vec3& angularVelocity, float dt) {
+    const float speed = std::sqrt(angularVelocity[0] * angularVelocity[0]
+            + angularVelocity[1] * angularVelocity[1]
+            + angularVelocity[2] * angularVelocity[2]);
+    if (!std::isfinite(speed) || speed <= 1.0e-8f || !std::isfinite(dt)) return;
+    const float halfAngle = speed * dt * 0.5f;
+    const float scale = std::sin(halfAngle) / speed;
+    const Quaternion delta{angularVelocity[0] * scale, angularVelocity[1] * scale,
+                           angularVelocity[2] * scale, std::cos(halfAngle)};
+    transform.rotation = eulerFromQuaternion(multiply(delta,
+            quaternionFromEuler(transform.rotation)));
+}
+
+float inverseSphereInertia(float inverseMass, float radius) {
+    if (inverseMass <= 0.0f || !std::isfinite(radius) || radius <= 1.0e-6f) return 0.0f;
+    // A solid sphere has I = 2/5 m r^2.
+    return 2.5f * inverseMass / (radius * radius);
+}
+
+void applyAngularImpulse(RigidbodyComponent& body, float inverseInertia,
+                         const Vec3& arm, const Vec3& impulse) {
+    if (inverseInertia <= 0.0f) return;
+    const Vec3 torque = cross(arm, impulse);
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        body.angularVelocity[axis] += torque[axis] * inverseInertia;
+    }
+}
+
 void queuePhysicsEvent(std::vector<PhysicsEvent>& events, PhysicsEventType type,
                        std::uint32_t first, std::uint32_t second) {
     if (events.size() >= kMaximumQueuedPhysicsEvents) events.erase(events.begin());
@@ -439,9 +517,15 @@ void Scene::simulatePhysics(float deltaSeconds) {
             const float damping = std::max(body.linearDamping, 0.0f);
             const float dampingFactor = std::exp(-damping * dt);
             for (float& velocity : body.velocity) velocity *= dampingFactor;
+            const float angularDampingFactor = std::exp(-std::max(body.angularDamping, 0.0f) * dt);
+            for (float& velocity : body.angularVelocity) {
+                if (!std::isfinite(velocity)) velocity = 0.0f;
+                velocity *= angularDampingFactor;
+            }
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 entity.transform.position[axis] += body.velocity[axis] * dt;
             }
+            integrateRotation(entity.transform, body.angularVelocity, dt);
         }
 
         if (physicsSettings_.floorEnabled && std::isfinite(physicsSettings_.floorHeight)
@@ -465,19 +549,41 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 const float radius = collider.radius * scale;
                 const float penetration = physicsSettings_.floorHeight + radius
                         - entity.transform.position[1];
-                if (penetration <= 0.0f || !std::isfinite(penetration)) continue;
-                entity.transform.position[1] += penetration;
+                if (penetration < -0.0001f || !std::isfinite(penetration)) continue;
+                if (penetration > 0.0f) entity.transform.position[1] += penetration;
+                const float inverseMass = 1.0f / body.mass;
+                const float inverseInertia = inverseSphereInertia(inverseMass, radius);
+                const Vec3 contactArm{0.0f, -radius, 0.0f};
+                const Vec3 spinVelocity = cross(body.angularVelocity, contactArm);
+                const float contactNormalVelocity = body.velocity[1] + spinVelocity[1];
                 const float restitution = std::clamp(std::min(collider.restitution,
                         physicsSettings_.floorRestitution), 0.0f, 1.0f);
-                if (body.velocity[1] < 0.0f) body.velocity[1] = -body.velocity[1] * restitution;
+                float normalImpulse = 0.0f;
+                if (contactNormalVelocity < 0.0f) {
+                    normalImpulse = -(1.0f + restitution) * contactNormalVelocity / inverseMass;
+                    body.velocity[1] += normalImpulse * inverseMass;
+                }
                 if (entity.characterController.enabled && body.velocity[1] <= 0.0f) {
                     entity.characterController.grounded = true;
                 }
-                const float friction = std::max(0.0f, std::min(collider.friction,
-                        physicsSettings_.floorFriction));
-                const float frictionFactor = std::max(0.0f, 1.0f - friction * dt * 9.81f);
-                body.velocity[0] *= frictionFactor;
-                body.velocity[2] *= frictionFactor;
+                const Vec3 contactVelocity{body.velocity[0] + spinVelocity[0], 0.0f,
+                                           body.velocity[2] + spinVelocity[2]};
+                const float tangentSpeed = std::hypot(contactVelocity[0], contactVelocity[2]);
+                const float friction = std::clamp(std::min(collider.friction,
+                        physicsSettings_.floorFriction), 0.0f, 1.0f);
+                const float tangentDenominator = inverseMass
+                        + radius * radius * inverseInertia;
+                if (tangentSpeed > 1.0e-6f && tangentDenominator > 0.0f
+                        && normalImpulse > 0.0f) {
+                    const float tangentImpulse = std::min(tangentSpeed / tangentDenominator,
+                            normalImpulse * friction);
+                    const Vec3 impulse{-contactVelocity[0] / tangentSpeed * tangentImpulse,
+                                       0.0f,
+                                       -contactVelocity[2] / tangentSpeed * tangentImpulse};
+                    body.velocity[0] += impulse[0] * inverseMass;
+                    body.velocity[2] += impulse[2] * inverseMass;
+                    applyAngularImpulse(body, inverseInertia, contactArm, impulse);
+                }
             }
         }
 
@@ -487,7 +593,7 @@ void Scene::simulatePhysics(float deltaSeconds) {
             const SphereColliderComponent& collider = entity.sphereCollider;
             if (!collider.enabled || entity.parentId != 0
                     || !std::isfinite(collider.radius) || collider.radius <= 0.0f
-                    || !std::isfinite(collider.restitution)
+                    || !std::isfinite(collider.restitution) || !std::isfinite(collider.friction)
                     || !std::isfinite(entity.transform.scale[0])
                     || !std::isfinite(entity.transform.scale[1])
                     || !std::isfinite(entity.transform.scale[2])
@@ -565,57 +671,73 @@ void Scene::simulatePhysics(float deltaSeconds) {
                     first.transform.position[axis] -= normal * correction * firstInverseMass;
                     second.transform.position[axis] += normal * correction * secondInverseMass;
                 }
-                const float firstVx = firstBody.velocity[0];
-                const float firstVy = firstBody.velocity[1];
-                const float firstVz = firstBody.velocity[2];
-                const float secondVx = secondBody.velocity[0];
-                const float secondVy = secondBody.velocity[1];
-                const float secondVz = secondBody.velocity[2];
-                const float relativeNormalVelocity = (secondVx - firstVx) * dx
-                        + (secondVy - firstVy) * dy + (secondVz - firstVz) * dz;
+                const float firstInverseInertia = inverseSphereInertia(firstInverseMass, firstRadius);
+                const float secondInverseInertia = inverseSphereInertia(secondInverseMass, secondRadius);
+                const Vec3 firstArm{dx * firstRadius, dy * firstRadius, dz * firstRadius};
+                const Vec3 secondArm{-dx * secondRadius, -dy * secondRadius, -dz * secondRadius};
+                const Vec3 firstSpinVelocity = firstInverseMass > 0.0f
+                        ? cross(firstBody.angularVelocity, firstArm) : Vec3{0.0f, 0.0f, 0.0f};
+                const Vec3 secondSpinVelocity = secondInverseMass > 0.0f
+                        ? cross(secondBody.angularVelocity, secondArm) : Vec3{0.0f, 0.0f, 0.0f};
+                const Vec3 relativeVelocity{
+                    secondBody.velocity[0] + secondSpinVelocity[0]
+                            - firstBody.velocity[0] - firstSpinVelocity[0],
+                    secondBody.velocity[1] + secondSpinVelocity[1]
+                            - firstBody.velocity[1] - firstSpinVelocity[1],
+                    secondBody.velocity[2] + secondSpinVelocity[2]
+                            - firstBody.velocity[2] - firstSpinVelocity[2]};
+                const float relativeNormalVelocity = relativeVelocity[0] * dx
+                        + relativeVelocity[1] * dy + relativeVelocity[2] * dz;
                 if (relativeNormalVelocity >= 0.0f) continue;
                 const float restitution = std::clamp(std::min(firstCollider.restitution,
                         secondCollider.restitution), 0.0f, 1.0f);
-                const float impulse = -(1.0f + restitution) * relativeNormalVelocity / inverseMassSum;
-                const float impulseX = impulse * dx;
-                const float impulseY = impulse * dy;
-                const float impulseZ = impulse * dz;
+                const float impulse = -(1.0f + restitution) * relativeNormalVelocity
+                        / inverseMassSum;
+                const Vec3 normalImpulse{impulse * dx, impulse * dy, impulse * dz};
                 if (firstInverseMass > 0.0f) {
-                    firstBody.velocity[0] -= impulseX * firstInverseMass;
-                    firstBody.velocity[1] -= impulseY * firstInverseMass;
-                    firstBody.velocity[2] -= impulseZ * firstInverseMass;
+                    firstBody.velocity[0] -= normalImpulse[0] * firstInverseMass;
+                    firstBody.velocity[1] -= normalImpulse[1] * firstInverseMass;
+                    firstBody.velocity[2] -= normalImpulse[2] * firstInverseMass;
+                    applyAngularImpulse(firstBody, firstInverseInertia, firstArm,
+                            {-normalImpulse[0], -normalImpulse[1], -normalImpulse[2]});
                 }
                 if (secondInverseMass > 0.0f) {
-                    secondBody.velocity[0] += impulseX * secondInverseMass;
-                    secondBody.velocity[1] += impulseY * secondInverseMass;
-                    secondBody.velocity[2] += impulseZ * secondInverseMass;
+                    secondBody.velocity[0] += normalImpulse[0] * secondInverseMass;
+                    secondBody.velocity[1] += normalImpulse[1] * secondInverseMass;
+                    secondBody.velocity[2] += normalImpulse[2] * secondInverseMass;
+                    applyAngularImpulse(secondBody, secondInverseInertia, secondArm, normalImpulse);
                 }
 
-                const float relativeX = secondVx - firstVx;
-                const float relativeY = secondVy - firstVy;
-                const float relativeZ = secondVz - firstVz;
-                const float tangentX = relativeX - relativeNormalVelocity * dx;
-                const float tangentY = relativeY - relativeNormalVelocity * dy;
-                const float tangentZ = relativeZ - relativeNormalVelocity * dz;
+                const float tangentX = relativeVelocity[0] - relativeNormalVelocity * dx;
+                const float tangentY = relativeVelocity[1] - relativeNormalVelocity * dy;
+                const float tangentZ = relativeVelocity[2] - relativeNormalVelocity * dz;
                 const float tangentSpeed = std::sqrt(tangentX * tangentX + tangentY * tangentY
                                                      + tangentZ * tangentZ);
+                const float rotationalDenominator = firstRadius * firstRadius * firstInverseInertia
+                        + secondRadius * secondRadius * secondInverseInertia;
                 if (tangentSpeed > 1.0e-6f) {
                     const float friction = std::sqrt(std::max(0.0f,
                             firstCollider.friction * secondCollider.friction));
-                    const float tangentImpulse = std::min(tangentSpeed / inverseMassSum,
+                    const float tangentDenominator = inverseMassSum + rotationalDenominator;
+                    const float tangentImpulse = std::min(tangentSpeed / tangentDenominator,
                                                            impulse * friction);
-                    const float tx = tangentX / tangentSpeed * tangentImpulse;
-                    const float ty = tangentY / tangentSpeed * tangentImpulse;
-                    const float tz = tangentZ / tangentSpeed * tangentImpulse;
+                    const Vec3 frictionImpulse{-tangentX / tangentSpeed * tangentImpulse,
+                                               -tangentY / tangentSpeed * tangentImpulse,
+                                               -tangentZ / tangentSpeed * tangentImpulse};
                     if (firstInverseMass > 0.0f) {
-                        firstBody.velocity[0] += tx * firstInverseMass;
-                        firstBody.velocity[1] += ty * firstInverseMass;
-                        firstBody.velocity[2] += tz * firstInverseMass;
+                        firstBody.velocity[0] -= frictionImpulse[0] * firstInverseMass;
+                        firstBody.velocity[1] -= frictionImpulse[1] * firstInverseMass;
+                        firstBody.velocity[2] -= frictionImpulse[2] * firstInverseMass;
+                        applyAngularImpulse(firstBody, firstInverseInertia, firstArm,
+                                {-frictionImpulse[0], -frictionImpulse[1],
+                                 -frictionImpulse[2]});
                     }
                     if (secondInverseMass > 0.0f) {
-                        secondBody.velocity[0] -= tx * secondInverseMass;
-                        secondBody.velocity[1] -= ty * secondInverseMass;
-                        secondBody.velocity[2] -= tz * secondInverseMass;
+                        secondBody.velocity[0] += frictionImpulse[0] * secondInverseMass;
+                        secondBody.velocity[1] += frictionImpulse[1] * secondInverseMass;
+                        secondBody.velocity[2] += frictionImpulse[2] * secondInverseMass;
+                        applyAngularImpulse(secondBody, secondInverseInertia, secondArm,
+                                frictionImpulse);
                     }
                 }
             }

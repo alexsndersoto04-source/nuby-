@@ -258,6 +258,63 @@ void testPhysicsFixedStepGravityAndFloorContact() {
            "zero-restitution floor contact removes downward velocity");
 }
 
+void testRigidBodyRotationAndRollingFriction() {
+    nuby::Scene freeScene;
+    freeScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    nuby::Entity& spinner = freeScene.create("angular body", nuby::Primitive::Sphere);
+    spinner.rigidbody.enabled = true;
+    spinner.rigidbody.linearDamping = 0.0f;
+    spinner.rigidbody.angularDamping = 0.0f;
+    spinner.rigidbody.angularVelocity = {0.0f, 0.0f, 2.0f};
+    for (int frame = 0; frame < 30; ++frame) freeScene.update(1.0f / 60.0f);
+    expect(near(spinner.transform.rotation[2], 1.0f, 0.0001f),
+           "world angular velocity integrates body orientation through quaternions");
+
+    nuby::Scene rollingScene;
+    rollingScene.physicsSettings().floorEnabled = true;
+    rollingScene.physicsSettings().floorRestitution = 0.0f;
+    rollingScene.physicsSettings().floorFriction = 1.0f;
+    nuby::Entity& ball = rollingScene.create("rolling sphere", nuby::Primitive::Sphere);
+    ball.transform.position[1] = 0.5f;
+    ball.rigidbody.enabled = true;
+    ball.rigidbody.linearDamping = 0.0f;
+    ball.rigidbody.angularDamping = 0.0f;
+    ball.rigidbody.velocity[0] = 2.0f;
+    ball.sphereCollider.enabled = true;
+    ball.sphereCollider.radius = 0.5f;
+    ball.sphereCollider.restitution = 0.0f;
+    ball.sphereCollider.friction = 1.0f;
+    for (int frame = 0; frame < 30; ++frame) rollingScene.update(1.0f / 60.0f);
+    expect(ball.rigidbody.velocity[0] < 2.0f
+                   && std::fabs(ball.rigidbody.angularVelocity[2]) > 0.1f,
+           "floor friction transfers rolling motion into angular velocity");
+
+    nuby::Scene collisionScene;
+    collisionScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t firstId = collisionScene.create(
+            "first sphere", nuby::Primitive::Sphere).id;
+    const std::uint32_t secondId = collisionScene.create(
+            "second sphere", nuby::Primitive::Sphere).id;
+    nuby::Entity* first = collisionScene.find(firstId);
+    nuby::Entity* second = collisionScene.find(secondId);
+    first->transform.position[0] = -0.49f;
+    second->transform.position[0] = 0.49f;
+    for (nuby::Entity* body : {first, second}) {
+        body->rigidbody.enabled = true;
+        body->rigidbody.linearDamping = 0.0f;
+        body->rigidbody.angularDamping = 0.0f;
+        body->sphereCollider.enabled = true;
+        body->sphereCollider.restitution = 0.0f;
+        body->sphereCollider.friction = 1.0f;
+    }
+    first->rigidbody.velocity = {1.0f, 1.0f, 0.0f};
+    second->rigidbody.velocity = {-1.0f, -1.0f, 0.0f};
+    collisionScene.update(1.0f / 60.0f);
+    expect(std::fabs(first->rigidbody.angularVelocity[2]) > 0.01f
+                   && std::fabs(second->rigidbody.angularVelocity[2]) > 0.01f,
+           "sphere contact friction generates angular impulses from solid-sphere inertia");
+}
+
 void testPhysicsSphereImpulseAndHierarchySafety() {
     nuby::Scene scene;
     scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
@@ -449,6 +506,7 @@ int main() {
     testPointLightCollectionUsesWorldTransformsAndFiltersInvalidLights();
     testKeyframedAnimationInterpolationAndLooping();
     testPhysicsFixedStepGravityAndFloorContact();
+    testRigidBodyRotationAndRollingFriction();
     testPhysicsSphereImpulseAndHierarchySafety();
     testTriggerEventsReportEnterExitWithoutApplyingImpulse();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();

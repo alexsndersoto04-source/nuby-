@@ -30,7 +30,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 12") {
+        if (line == "NUBY_SCENE 13") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
             if (targetVersion < 7) continue;
@@ -57,6 +57,17 @@ std::string downgradeTextureSchema(const std::string& encoded,
                 }
             } else {
                 legacy << line.substr(tag.size());
+            }
+            legacy << '\n';
+        } else if (line.rfind("RIGIDBODY ", 0) == 0 && targetVersion < 13) {
+            std::istringstream rigidbody(line);
+            std::string tag;
+            rigidbody >> tag;
+            legacy << tag;
+            for (int value = 0; value < 7; ++value) {
+                std::string field;
+                rigidbody >> field;
+                legacy << ' ' << field;
             }
             legacy << '\n';
         } else if (line.rfind("OPACITY_MAP_CHANNEL ", 0) == 0
@@ -125,7 +136,9 @@ nuby::Scene makeScene() {
     root.rigidbody.enabled = true;
     root.rigidbody.mass = 2.5f;
     root.rigidbody.velocity = {1.0f, -2.0f, 0.5f};
+    root.rigidbody.angularVelocity = {0.15f, -0.25f, 0.35f};
     root.rigidbody.linearDamping = 0.08f;
+    root.rigidbody.angularDamping = 0.12f;
     root.rigidbody.gravityScale = 0.0f;
     root.sphereCollider.enabled = true;
     root.sphereCollider.radius = 0.65f;
@@ -270,6 +283,8 @@ void testRoundTripAllSceneData() {
            "quoted entity names are escaped and restored");
     expect(root != nullptr && root->rigidbody.enabled && near(root->rigidbody.mass, 2.5f)
                    && near(root->rigidbody.velocity[1], -2.0f, 0.005f)
+                   && near(root->rigidbody.angularVelocity[2], 0.35f, 0.005f)
+                   && near(root->rigidbody.angularDamping, 0.12f)
                    && root->sphereCollider.enabled && root->sphereCollider.trigger
                    && near(root->sphereCollider.radius, 0.65f),
            "rigidbody and sphere collider components are restored");
@@ -489,6 +504,16 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
                    && near(legacyV10Mesh->material.opacityMapValueRange.gain, 1.0f),
            "version-ten map data loads and newly added base/gain ranges default to identity");
 
+    const std::string versionTwelveText = downgradeTextureSchema(valid.str(), 12, 6);
+    std::stringstream legacyV12(versionTwelveText);
+    expect(nuby::SceneSerializer::load(target, legacyV12, error),
+           "version-twelve scenes load without the newly added angular rigidbody state");
+    const nuby::Entity* legacyV12Root = target.find(1);
+    expect(legacyV12Root != nullptr
+                   && near(legacyV12Root->rigidbody.angularVelocity[0], 0.0f)
+                   && near(legacyV12Root->rigidbody.angularDamping, 0.05f),
+           "version-twelve rigidbodies receive safe angular velocity and damping defaults");
+
     const std::string versionElevenText = downgradeTextureSchema(valid.str(), 11, 6);
     std::stringstream legacyV11(versionElevenText);
     expect(nuby::SceneSerializer::load(target, legacyV11, error),
@@ -584,6 +609,14 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream invalidPhysicsOutput;
     expect(!nuby::SceneSerializer::save(invalidPhysics, invalidPhysicsOutput, error),
            "scene serialization rejects invalid physics settings");
+
+    nuby::Scene invalidAngularDamping;
+    invalidAngularDamping.create("invalid angular damping", nuby::Primitive::Sphere)
+            .rigidbody.angularDamping = -0.1f;
+    std::stringstream invalidAngularDampingOutput;
+    expect(!nuby::SceneSerializer::save(
+                   invalidAngularDamping, invalidAngularDampingOutput, error),
+           "scene serialization rejects negative angular damping");
 
     nuby::Scene invalidUvTransform;
     invalidUvTransform.create("invalid UV transform", nuby::Primitive::ImportedMesh)

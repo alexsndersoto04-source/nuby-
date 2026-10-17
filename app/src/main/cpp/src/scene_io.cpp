@@ -183,7 +183,9 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.pulse.phase) || !finite(entity.animation.playbackRate)
             || !finite(entity.animation.timeSeconds) || !finite(entity.animation.durationSeconds)
             || !finite(entity.rigidbody.mass) || !finite3(entity.rigidbody.velocity)
-            || !finite(entity.rigidbody.linearDamping) || !finite(entity.rigidbody.gravityScale)
+            || !finite3(entity.rigidbody.angularVelocity)
+            || !finite(entity.rigidbody.linearDamping)
+            || !finite(entity.rigidbody.angularDamping) || !finite(entity.rigidbody.gravityScale)
             || !finite(entity.sphereCollider.radius)
             || !finite(entity.sphereCollider.restitution)
             || !finite(entity.sphereCollider.friction)
@@ -204,7 +206,7 @@ bool validEntity(const Entity& entity) {
         return false;
     }
     if ((entity.rigidbody.enabled && entity.rigidbody.mass < 1.0e-6f)
-            || entity.rigidbody.linearDamping < 0.0f
+            || entity.rigidbody.linearDamping < 0.0f || entity.rigidbody.angularDamping < 0.0f
             || (entity.sphereCollider.enabled && entity.sphereCollider.radius <= 0.0f)
             || entity.sphereCollider.restitution < 0.0f || entity.sphereCollider.restitution > 1.0f
             || entity.sphereCollider.friction < 0.0f || entity.sphereCollider.friction > 1.0f
@@ -414,7 +416,9 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     output << "RIGIDBODY " << (entity.rigidbody.enabled ? 1 : 0) << ' '
            << entity.rigidbody.mass;
     writeFloatArray(output, entity.rigidbody.velocity);
-    output << ' ' << entity.rigidbody.linearDamping << ' ' << entity.rigidbody.gravityScale << '\n';
+    output << ' ' << entity.rigidbody.linearDamping << ' ' << entity.rigidbody.gravityScale;
+    writeFloatArray(output, entity.rigidbody.angularVelocity);
+    output << ' ' << entity.rigidbody.angularDamping << '\n';
 
     output << "SPHERE_COLLIDER " << (entity.sphereCollider.enabled ? 1 : 0) << ' '
            << entity.sphereCollider.radius << ' ' << entity.sphereCollider.restitution << ' '
@@ -664,6 +668,13 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.rigidbody.linearDamping)
                 || !std::isfinite(entity.rigidbody.gravityScale)) {
             return fail(error, "Entity rigidbody component is invalid");
+        }
+        if (version >= 13
+                && (!readFloatArray(input, entity.rigidbody.angularVelocity)
+                    || !(input >> entity.rigidbody.angularDamping)
+                    || !std::isfinite(entity.rigidbody.angularDamping)
+                    || entity.rigidbody.angularDamping < 0.0f)) {
+            return fail(error, "Entity angular rigidbody state is invalid");
         }
         if (!readTag(input, "SPHERE_COLLIDER", error)
                 || !readBool(input, entity.sphereCollider.enabled)
