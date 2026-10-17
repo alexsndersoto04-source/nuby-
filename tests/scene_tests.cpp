@@ -1,5 +1,6 @@
 #include "nuby/scene.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -563,6 +564,119 @@ void testMixedShapeTriggersReportTransitionsWithoutImpulses() {
            "mixed-shape triggers do not alter rigidbody velocity");
 }
 
+void testContinuousSphereCollisionPreventsTunneling() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    scene.physicsSettings().floorEnabled = false;
+    const std::uint32_t wallId = scene.create("thin wall", nuby::Primitive::None).id;
+    nuby::Entity* wall = scene.find(wallId);
+    wall->boxCollider.enabled = true;
+    wall->boxCollider.halfExtents = {0.05f, 1.0f, 1.0f};
+    wall->transform.rotation[1] = 0.6f;
+    wall->boxCollider.restitution = 0.0f;
+
+    nuby::Entity& projectile = scene.create("fast sphere", nuby::Primitive::Sphere);
+    const nuby::Entity& orientedWall = *scene.find(wallId);
+    projectile.transform.position = {-2.0f, 0.0f, 0.0f};
+    projectile.rigidbody.enabled = true;
+    projectile.rigidbody.mass = 1.0f;
+    projectile.rigidbody.velocity[0] = 300.0f;
+    projectile.rigidbody.linearDamping = 0.0f;
+    projectile.sphereCollider.enabled = true;
+    projectile.sphereCollider.radius = 0.25f;
+    projectile.sphereCollider.restitution = 0.0f;
+    scene.update(1.0f / 60.0f);
+
+    const float cosine = std::cos(orientedWall.transform.rotation[1]);
+    const float sine = std::sin(orientedWall.transform.rotation[1]);
+    const float localX = cosine * projectile.transform.position[0]
+            - sine * projectile.transform.position[2];
+    const float localZ = sine * projectile.transform.position[0]
+            + cosine * projectile.transform.position[2];
+    const float outsideX = std::max(std::fabs(localX) - orientedWall.boxCollider.halfExtents[0], 0.0f);
+    const float outsideY = std::max(std::fabs(projectile.transform.position[1])
+            - orientedWall.boxCollider.halfExtents[1], 0.0f);
+    const float outsideZ = std::max(std::fabs(localZ) - orientedWall.boxCollider.halfExtents[2], 0.0f);
+    const float boxDistance = std::sqrt(outsideX * outsideX + outsideY * outsideY
+            + outsideZ * outsideZ);
+    expect(boxDistance >= projectile.sphereCollider.radius - 0.002f
+                   && projectile.rigidbody.velocity[0] < 299.0f,
+           "continuous sphere-versus-rotated OBB collision prevents tunneling through a thin wall");
+
+    nuby::Scene sphereScene;
+    sphereScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    nuby::Entity& target = sphereScene.create("static sphere", nuby::Primitive::Sphere);
+    target.sphereCollider.enabled = true;
+    target.sphereCollider.radius = 0.25f;
+    target.sphereCollider.restitution = 0.0f;
+    nuby::Entity& fastSphere = sphereScene.create("fast sphere", nuby::Primitive::Sphere);
+    fastSphere.transform.position = {-2.0f, 0.0f, 0.0f};
+    fastSphere.rigidbody.enabled = true;
+    fastSphere.rigidbody.velocity[0] = 300.0f;
+    fastSphere.rigidbody.linearDamping = 0.0f;
+    fastSphere.sphereCollider.enabled = true;
+    fastSphere.sphereCollider.radius = 0.25f;
+    fastSphere.sphereCollider.restitution = 0.0f;
+    sphereScene.update(1.0f / 60.0f);
+    expect(fastSphere.transform.position[0] < -0.49f
+                   && std::fabs(fastSphere.rigidbody.velocity[0]) < 0.01f,
+           "continuous sphere-versus-sphere collision prevents tunneling");
+}
+
+void testContinuousSphereTriggerReportsTransientCrossing() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    nuby::Entity& sensor = scene.create("thin sensor", nuby::Primitive::None);
+    sensor.boxCollider.enabled = true;
+    sensor.boxCollider.halfExtents = {0.05f, 1.0f, 1.0f};
+    sensor.boxCollider.trigger = true;
+    nuby::Entity& projectile = scene.create("trigger projectile", nuby::Primitive::Sphere);
+    projectile.transform.position = {-2.0f, 0.0f, 0.0f};
+    projectile.rigidbody.enabled = true;
+    projectile.rigidbody.velocity[0] = 300.0f;
+    projectile.rigidbody.linearDamping = 0.0f;
+    projectile.sphereCollider.enabled = true;
+    projectile.sphereCollider.radius = 0.25f;
+
+    scene.update(1.0f / 60.0f);
+    std::vector<nuby::PhysicsEvent> events;
+    scene.consumePhysicsEvents(events);
+    bool sawEnter = false;
+    for (const nuby::PhysicsEvent& event : events) {
+        if (event.type == nuby::PhysicsEventType::TriggerEnter) sawEnter = true;
+    }
+    expect(sawEnter && near(projectile.transform.position[0], 3.0f, 0.01f),
+           "swept trigger detects a fast transient crossing without blocking the sphere");
+
+    scene.update(1.0f / 60.0f);
+    scene.consumePhysicsEvents(events);
+    bool sawExit = false;
+    for (const nuby::PhysicsEvent& event : events) {
+        if (event.type == nuby::PhysicsEventType::TriggerExit) sawExit = true;
+    }
+    expect(sawExit, "transient swept trigger overlap emits its exit on the following step");
+}
+
+void testContinuousSphereCollisionWithFloor() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    scene.physicsSettings().floorEnabled = true;
+    scene.physicsSettings().floorRestitution = 0.0f;
+    nuby::Entity& falling = scene.create("fast falling sphere", nuby::Primitive::Sphere);
+    falling.transform.position[1] = 2.0f;
+    falling.rigidbody.enabled = true;
+    falling.rigidbody.velocity[1] = -300.0f;
+    falling.rigidbody.linearDamping = 0.0f;
+    falling.sphereCollider.enabled = true;
+    falling.sphereCollider.radius = 0.5f;
+    falling.sphereCollider.restitution = 0.0f;
+
+    scene.update(1.0f / 60.0f);
+    expect(near(falling.transform.position[1], 0.5f, 0.002f)
+                   && std::fabs(falling.rigidbody.velocity[1]) < 0.01f,
+           "continuous sphere-floor collision prevents tunneling below the floor");
+}
+
 void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     nuby::Scene scene;
     scene.physicsSettings().floorEnabled = true;
@@ -667,6 +781,9 @@ int main() {
     testBoxCollidersHandleFloorAndMixedShapeContacts();
     testRotatedBoxCollidersUseOrientedGeometry();
     testMixedShapeTriggersReportTransitionsWithoutImpulses();
+    testContinuousSphereCollisionPreventsTunneling();
+    testContinuousSphereTriggerReportsTransientCrossing();
+    testContinuousSphereCollisionWithFloor();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();

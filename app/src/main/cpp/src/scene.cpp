@@ -190,6 +190,77 @@ bool collisionShape(const Entity& entity, CollisionShape& shape) {
     return true;
 }
 
+bool sweepSphereAgainstShape(const Vec3& start, const Vec3& displacement, float radius,
+                             const CollisionShape& target, float& timeOfImpact,
+                             Vec3& normal) {
+    if (target.sphere) {
+        const Vec3 relative{start[0] - target.center[0], start[1] - target.center[1],
+                            start[2] - target.center[2]};
+        const float combinedRadius = radius + target.radius;
+        const float c = dot(relative, relative) - combinedRadius * combinedRadius;
+        const float a = dot(displacement, displacement);
+        if (!std::isfinite(a) || a <= 1.0e-12f || c <= 0.0f) return false;
+        const float b = 2.0f * dot(relative, displacement);
+        const float discriminant = b * b - 4.0f * a * c;
+        if (!std::isfinite(discriminant) || discriminant < 0.0f) return false;
+        const float candidate = (-b - std::sqrt(discriminant)) / (2.0f * a);
+        if (candidate < 0.0f || candidate > 1.0f) return false;
+        const Vec3 center{start[0] + displacement[0] * candidate,
+                          start[1] + displacement[1] * candidate,
+                          start[2] + displacement[2] * candidate};
+        const Vec3 towardTarget{target.center[0] - center[0],
+                                target.center[1] - center[1],
+                                target.center[2] - center[2]};
+        const float distance = std::sqrt(std::max(dot(towardTarget, towardTarget), 0.0f));
+        if (distance <= 1.0e-8f) return false;
+        timeOfImpact = candidate;
+        for (std::size_t axis = 0; axis < 3; ++axis) normal[axis] = towardTarget[axis] / distance;
+        return true;
+    }
+
+    // Conservative advancement against the exact closest point on the OBB.
+    // Unlike inflating each box face by the sphere radius, this avoids corner
+    // false positives while keeping the sweep bounded to a small iteration count.
+    float candidate = 0.0f;
+    for (unsigned int iteration = 0; iteration < 24; ++iteration) {
+        const Vec3 center{start[0] + displacement[0] * candidate,
+                          start[1] + displacement[1] * candidate,
+                          start[2] + displacement[2] * candidate};
+        const Vec3 relative{center[0] - target.center[0], center[1] - target.center[1],
+                            center[2] - target.center[2]};
+        Vec3 closest = target.center;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const float local = std::clamp(dot(relative, target.axes[axis]),
+                    -target.halfExtents[axis], target.halfExtents[axis]);
+            for (std::size_t component = 0; component < 3; ++component) {
+                closest[component] += target.axes[axis][component] * local;
+            }
+        }
+        Vec3 towardTarget{closest[0] - center[0], closest[1] - center[1],
+                          closest[2] - center[2]};
+        const float distanceSquared = dot(towardTarget, towardTarget);
+        if (!std::isfinite(distanceSquared)) return false;
+        if (distanceSquared <= (radius + 1.0e-5f) * (radius + 1.0e-5f)) {
+            const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
+            if (distance <= 1.0e-8f || candidate <= 1.0e-7f) return false;
+            timeOfImpact = candidate;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                normal[axis] = towardTarget[axis] / distance;
+            }
+            return true;
+        }
+        const float distance = std::sqrt(distanceSquared);
+        for (float& component : towardTarget) component /= distance;
+        const float closingDistance = dot(displacement, towardTarget);
+        if (closingDistance <= 1.0e-8f) return false;
+        const float advance = (distance - radius) / closingDistance;
+        if (!std::isfinite(advance) || advance <= 1.0e-7f) return false;
+        candidate += advance;
+        if (candidate > 1.0f) return false;
+    }
+    return false;
+}
+
 bool collideShapes(const CollisionShape& first, const CollisionShape& second,
                    CollisionContact& contact) {
     if (first.sphere && second.sphere) return false;
@@ -728,10 +799,15 @@ void Scene::simulatePhysics(float deltaSeconds) {
     colliderIndices.reserve(entities_.size());
     std::vector<std::uint64_t>& currentTriggerPairs = triggerPairsScratch_;
     currentTriggerPairs.clear();
+    std::vector<Vec3> previousPositions(entities_.size());
 
     for (unsigned int substep = 0; substep < maximumSubsteps
             && physicsAccumulator_ >= step; ++substep) {
         const float dt = step;
+        previousPositions.resize(entities_.size());
+        for (std::size_t index = 0; index < entities_.size(); ++index) {
+            previousPositions[index] = entities_[index].transform.position;
+        }
         for (Entity& entity : entities_) {
             RigidbodyComponent& body = entity.rigidbody;
             if (!body.enabled || entity.parentId != 0 || !std::isfinite(body.mass)
@@ -783,6 +859,112 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 entity.transform.position[axis] += body.velocity[axis] * dt;
             }
             integrateRotation(entity.transform, body.angularVelocity, dt);
+        }
+
+        // Continuous collision detection for moving spheres against static
+        // sphere/OBB colliders and the world floor. Discrete contacts remain the
+        // general path for slower motion and for pairs of moving bodies.
+        for (std::size_t movingIndex = 0; movingIndex < entities_.size(); ++movingIndex) {
+            Entity& moving = entities_[movingIndex];
+            const float movingInverseMass = moving.rigidbody.enabled
+                    && std::isfinite(moving.rigidbody.mass)
+                    && moving.rigidbody.mass >= 1.0e-6f
+                    ? 1.0f / moving.rigidbody.mass : 0.0f;
+            if (movingInverseMass <= 0.0f || !moving.sphereCollider.enabled
+                    || moving.boxCollider.enabled || moving.parentId != 0
+                    || !std::isfinite(moving.sphereCollider.radius)
+                    || moving.sphereCollider.radius <= 0.0f) continue;
+            const float movingScale = std::max({std::fabs(moving.transform.scale[0]),
+                    std::fabs(moving.transform.scale[1]), std::fabs(moving.transform.scale[2])});
+            const float movingRadius = moving.sphereCollider.radius * movingScale;
+            const Vec3 start = previousPositions[movingIndex];
+            const Vec3 displacement{moving.transform.position[0] - start[0],
+                    moving.transform.position[1] - start[1],
+                    moving.transform.position[2] - start[2]};
+            const float displacementSquared = dot(displacement, displacement);
+            if (!std::isfinite(movingRadius) || movingRadius <= 0.0f
+                    || !std::isfinite(displacementSquared)
+                    || displacementSquared <= movingRadius * movingRadius * 0.25f) continue;
+
+            float earliestTime = 1.0f;
+            Vec3 earliestNormal{0.0f, 0.0f, 0.0f};
+            float earliestRestitution = 0.0f;
+            bool foundSolidImpact = false;
+            for (std::size_t targetIndex = 0; targetIndex < entities_.size(); ++targetIndex) {
+                if (targetIndex == movingIndex) continue;
+                Entity& targetEntity = entities_[targetIndex];
+                CollisionShape target;
+                if (!collisionShape(targetEntity, target)) continue;
+                const RigidbodyComponent& targetBody = targetEntity.rigidbody;
+                const float targetInverseMass = targetBody.enabled
+                        && std::isfinite(targetBody.mass) && targetBody.mass >= 1.0e-6f
+                        ? 1.0f / targetBody.mass : 0.0f;
+                if (targetInverseMass > 0.0f) continue;
+                bool sweptBoundsOverlap = true;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const float sweptMinimum = std::min(start[axis],
+                            moving.transform.position[axis]);
+                    const float sweptMaximum = std::max(start[axis],
+                            moving.transform.position[axis]);
+                    const float targetMinimum = target.center[axis]
+                            - target.worldHalfExtents[axis] - movingRadius;
+                    const float targetMaximum = target.center[axis]
+                            + target.worldHalfExtents[axis] + movingRadius;
+                    if (sweptMaximum < targetMinimum || sweptMinimum > targetMaximum) {
+                        sweptBoundsOverlap = false;
+                        break;
+                    }
+                }
+                if (!sweptBoundsOverlap) continue;
+                float timeOfImpact = 0.0f;
+                Vec3 normal{0.0f, 0.0f, 0.0f};
+                if (!sweepSphereAgainstShape(start, displacement, movingRadius,
+                        target, timeOfImpact, normal)) continue;
+                if (target.trigger || moving.sphereCollider.trigger) {
+                    currentTriggerPairs.push_back(triggerPairKey(moving.id, targetEntity.id));
+                    continue;
+                }
+                if (timeOfImpact < earliestTime) {
+                    earliestTime = timeOfImpact;
+                    earliestNormal = normal;
+                    earliestRestitution = std::clamp(std::min(moving.sphereCollider.restitution,
+                            target.restitution), 0.0f, 1.0f);
+                    foundSolidImpact = true;
+                }
+            }
+
+            if (physicsSettings_.floorEnabled && std::isfinite(physicsSettings_.floorHeight)
+                    && displacement[1] < -1.0e-8f
+                    && start[1] > physicsSettings_.floorHeight + movingRadius + 1.0e-4f) {
+                const float timeOfImpact = (physicsSettings_.floorHeight + movingRadius
+                        - start[1]) / displacement[1];
+                if (timeOfImpact > 1.0e-5f && timeOfImpact <= 1.0f
+                        && timeOfImpact < earliestTime) {
+                    earliestTime = timeOfImpact;
+                    earliestNormal = {0.0f, -1.0f, 0.0f};
+                    earliestRestitution = std::clamp(std::min(moving.sphereCollider.restitution,
+                            physicsSettings_.floorRestitution), 0.0f, 1.0f);
+                    foundSolidImpact = true;
+                }
+            }
+            if (foundSolidImpact) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    moving.transform.position[axis] = start[axis]
+                            + displacement[axis] * earliestTime;
+                }
+                const float impactSpeed = dot(moving.rigidbody.velocity, earliestNormal);
+                if (impactSpeed > 0.0f) {
+                    const float velocityChange = (1.0f + earliestRestitution) * impactSpeed;
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        moving.rigidbody.velocity[axis] -= earliestNormal[axis] * velocityChange;
+                    }
+                }
+                const float remainingTime = dt * (1.0f - earliestTime);
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    moving.transform.position[axis] += moving.rigidbody.velocity[axis]
+                            * remainingTime;
+                }
+            }
         }
 
         if (physicsSettings_.floorEnabled && std::isfinite(physicsSettings_.floorHeight)
@@ -1195,6 +1377,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
         }
 
         std::sort(currentTriggerPairs.begin(), currentTriggerPairs.end());
+        currentTriggerPairs.erase(std::unique(currentTriggerPairs.begin(),
+                currentTriggerPairs.end()), currentTriggerPairs.end());
         for (const std::uint64_t key : currentTriggerPairs) {
             if (!std::binary_search(activeTriggerPairs_.begin(), activeTriggerPairs_.end(), key)) {
                 queuePhysicsEvent(physicsEvents_, PhysicsEventType::TriggerEnter,
