@@ -15,6 +15,7 @@
 #include "nuby/obj_loader.hpp"
 #include "nuby/sample_game.hpp"
 #include "nuby/scene.hpp"
+#include "nuby/shadow_cascades.hpp"
 
 namespace nuby {
 
@@ -109,7 +110,9 @@ private:
         std::array<GLint, 8> textureMapValueRange{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
+        GLint view = -1;
         GLint lightViewProjection = -1;
+        GLint cascadeFarSplits = -1;
         GLint shadowMap = -1;
         GLint shadowsEnabled = -1;
         GLint grid = -1;
@@ -132,7 +135,7 @@ private:
     void buildScene();
     void loadSceneAssets();
     void initializeShadowMap();
-    void renderShadowMap(const std::array<float, 16>& lightViewProjection);
+    void renderShadowMaps();
     void initializePostProcessing();
     void resizePostProcessing();
     void releasePostProcessing();
@@ -161,6 +164,7 @@ private:
     GLuint fullscreenVao_ = 0;
     GLuint fullscreenVbo_ = 0;
     bool shadowsAvailable_ = false;
+    bool shadowCascadesValid_ = false;
     bool postProcessingAvailable_ = false;
     int bloomWidth_ = 1;
     int bloomHeight_ = 1;
@@ -192,7 +196,9 @@ private:
     float lastPinchDistance_ = 0.0f;
     float gameSwipeDistance_ = 0.0f;
     std::array<float, 16> viewProjection_{};
-    std::array<float, 16> lightViewProjection_{};
+    std::array<float, 16> view_{};
+    std::array<ShadowMatrix4, kDirectionalShadowCascadeCount> shadowViewProjections_{};
+    std::array<float, 3> shadowCascadeFarSplits_{};
     std::array<float, 3> cameraPosition_{};
 };
 

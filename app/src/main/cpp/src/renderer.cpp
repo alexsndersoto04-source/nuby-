@@ -89,18 +89,6 @@ Mat4 perspective(float verticalFov, float aspect, float nearPlane, float farPlan
     return result;
 }
 
-Mat4 orthographic(float left, float right, float bottom, float top,
-                  float nearPlane, float farPlane) {
-    Mat4 result = identity();
-    result[0] = 2.0f / (right - left);
-    result[5] = 2.0f / (top - bottom);
-    result[10] = -2.0f / (farPlane - nearPlane);
-    result[12] = -(right + left) / (right - left);
-    result[13] = -(top + bottom) / (top - bottom);
-    result[14] = -(farPlane + nearPlane) / (farPlane - nearPlane);
-    return result;
-}
-
 void appendTriangle(std::vector<MeshVertex>& vertices,
                     const MeshVertex& a,
                     const MeshVertex& b,
@@ -176,18 +164,18 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
 uniform mat4 uViewProjection;
-uniform mat4 uLightViewProjection;
+uniform mat4 uView;
 uniform mat4 uModel;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
 out vec2 vUv;
-out vec4 vLightPosition;
+out float vViewDepth;
 void main() {
     vec4 world = uModel * vec4(aPosition, 1.0);
     vWorldPosition = world.xyz;
     vWorldNormal = mat3(uModel) * aNormal;
     vUv = aUv;
-    vLightPosition = uLightViewProjection * world;
+    vViewDepth = -(uView * world).z;
     gl_Position = uViewProjection * world;
 }
 )";
@@ -198,7 +186,7 @@ precision highp float;
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
 in vec2 vUv;
-in vec4 vLightPosition;
+in float vViewDepth;
 uniform vec3 uColor;
 uniform vec3 uEmission;
 uniform float uMetallic;
@@ -248,7 +236,9 @@ uniform int uHasOpacityTexture;
 uniform int uHasEmissiveTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
-uniform sampler2D uShadowMap;
+uniform sampler2DArray uShadowMap;
+uniform mat4 uLightViewProjection[3];
+uniform vec3 uCascadeFarSplits;
 uniform int uShadowsEnabled;
 uniform int uGrid;
 uniform int uPointLightCount;
@@ -271,20 +261,24 @@ float adjustTextureValue(float sampleValue, vec2 baseGain) {
 }
 
 float shadowAmount(vec3 normal, vec3 lightDirection) {
-    if (uShadowsEnabled == 0) return 0.0;
-    vec3 projected = vLightPosition.xyz / max(vLightPosition.w, 0.0001);
+    if (uShadowsEnabled == 0 || vViewDepth > uCascadeFarSplits.z) return 0.0;
+    int cascade = vViewDepth <= uCascadeFarSplits.x ? 0
+            : (vViewDepth <= uCascadeFarSplits.y ? 1 : 2);
+    vec4 lightPosition = uLightViewProjection[cascade] * vec4(vWorldPosition, 1.0);
+    vec3 projected = lightPosition.xyz / max(lightPosition.w, 0.0001);
     projected = projected * 0.5 + 0.5;
     if (projected.x < 0.0 || projected.x > 1.0 ||
         projected.y < 0.0 || projected.y > 1.0 ||
         projected.z < 0.0 || projected.z > 1.0) return 0.0;
 
     float bias = max(0.0015 * (1.0 - dot(normal, lightDirection)), 0.00045);
-    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0).xy);
     float occlusion = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
+            vec2 sampleUv = projected.xy + vec2(float(x), float(y)) * texel;
             float closestDepth = texture(uShadowMap,
-                    projected.xy + vec2(float(x), float(y)) * texel).r;
+                    vec3(sampleUv, float(cascade))).r;
             occlusion += projected.z - bias > closestDepth ? 1.0 : 0.0;
         }
     }
@@ -1138,19 +1132,21 @@ void Renderer::initializeShadowMap() {
     shadowProgramModel_ = glGetUniformLocation(shadowProgram_, "uModel");
 
     glGenTextures(1, &shadowDepthTexture_);
-    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16,
-                 kShadowMapSize, kShadowMapSize, 0,
+    glBindTexture(GL_TEXTURE_2D_ARRAY, shadowDepthTexture_);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16,
+                 kShadowMapSize, kShadowMapSize,
+                 static_cast<GLsizei>(kDirectionalShadowCascadeCount), 0,
                  GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
     glGenFramebuffers(1, &shadowFramebuffer_);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                           GL_TEXTURE_2D, shadowDepthTexture_, 0);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              shadowDepthTexture_, 0, 0);
     const GLenum noColorBuffer = GL_NONE;
     glDrawBuffers(1, &noColorBuffer);
     glReadBuffer(GL_NONE);
@@ -1158,7 +1154,7 @@ void Renderer::initializeShadowMap() {
     const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     shadowsAvailable_ = status == GL_FRAMEBUFFER_COMPLETE;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
     if (!shadowsAvailable_) {
         __android_log_print(ANDROID_LOG_WARN, kLogTag,
@@ -1171,46 +1167,57 @@ void Renderer::initializeShadowMap() {
     }
 
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
-                        "Dynamic shadow map enabled at %dx%d", kShadowMapSize, kShadowMapSize);
+            "Cascaded directional shadows enabled (%zu x %dx%d)",
+            kDirectionalShadowCascadeCount, kShadowMapSize, kShadowMapSize);
 }
 
-void Renderer::renderShadowMap(const Mat4& lightViewProjection) {
-    if (!shadowsAvailable_ || shadowProgram_ == 0) return;
+void Renderer::renderShadowMaps() {
+    if (!shadowsAvailable_ || !shadowCascadesValid_ || shadowProgram_ == 0) return;
 
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer_);
     glViewport(0, 0, kShadowMapSize, kShadowMapSize);
-    glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.5f);
     glUseProgram(shadowProgram_);
-    glUniformMatrix4fv(shadowProgramLightViewProjection_, 1, GL_FALSE,
-                       lightViewProjection.data());
 
-    for (const Entity& entity : scene_.entities()) {
-        if (!entity.visible || entity.primitive == Primitive::Ground) continue;
-        const Mat4 model = scene_.worldMatrix(entity.id);
-        glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
-        if (entity.primitive == Primitive::ImportedMesh) {
-            const auto imported = importedMeshes_.find(entity.meshAsset);
-            if (imported != importedMeshes_.end()) {
-                for (const ImportedPart& part : imported->second.parts) {
-                    const Material& material = part.hasMaterial && !entity.overrideMtlMaterials
-                            ? part.material : entity.material;
-                    if (part.mesh.vao == 0 || material.opacity < 1.0f
-                            || !material.opacityTexture.empty()) continue;
-                    glBindVertexArray(part.mesh.vao);
-                    glDrawArrays(GL_TRIANGLES, 0, part.mesh.vertexCount);
-                }
-                continue;
-            }
+    for (std::size_t cascade = 0; cascade < kDirectionalShadowCascadeCount; ++cascade) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  shadowDepthTexture_, 0,
+                                  static_cast<GLint>(cascade));
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            shadowCascadesValid_ = false;
+            break;
         }
-        if (entity.material.opacity < 1.0f
-                || !entity.material.opacityTexture.empty()) continue;
-        const Mesh* mesh = meshFor(entity);
-        if (mesh == nullptr || mesh->vao == 0) continue;
-        glBindVertexArray(mesh->vao);
-        glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUniformMatrix4fv(shadowProgramLightViewProjection_, 1, GL_FALSE,
+                           shadowViewProjections_[cascade].data());
+
+        for (const Entity& entity : scene_.entities()) {
+            if (!entity.visible || entity.primitive == Primitive::Ground) continue;
+            const Mat4 model = scene_.worldMatrix(entity.id);
+            glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
+            if (entity.primitive == Primitive::ImportedMesh) {
+                const auto imported = importedMeshes_.find(entity.meshAsset);
+                if (imported != importedMeshes_.end()) {
+                    for (const ImportedPart& part : imported->second.parts) {
+                        const Material& material = part.hasMaterial
+                                && !entity.overrideMtlMaterials ? part.material : entity.material;
+                        if (part.mesh.vao == 0 || material.opacity < 1.0f
+                                || !material.opacityTexture.empty()) continue;
+                        glBindVertexArray(part.mesh.vao);
+                        glDrawArrays(GL_TRIANGLES, 0, part.mesh.vertexCount);
+                    }
+                    continue;
+                }
+            }
+            if (entity.material.opacity < 1.0f
+                    || !entity.material.opacityTexture.empty()) continue;
+            const Mesh* mesh = meshFor(entity);
+            if (mesh == nullptr || mesh->vao == 0) continue;
+            glBindVertexArray(mesh->vao);
+            glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
+        }
     }
 
     glBindVertexArray(0);
@@ -1474,7 +1481,10 @@ void Renderer::initialize(AAssetManager* assetManager) {
     }
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
-    uniforms_.lightViewProjection = glGetUniformLocation(program_, "uLightViewProjection");
+    uniforms_.view = glGetUniformLocation(program_, "uView");
+    uniforms_.lightViewProjection =
+            glGetUniformLocation(program_, "uLightViewProjection[0]");
+    uniforms_.cascadeFarSplits = glGetUniformLocation(program_, "uCascadeFarSplits");
     uniforms_.shadowMap = glGetUniformLocation(program_, "uShadowMap");
     uniforms_.shadowsEnabled = glGetUniformLocation(program_, "uShadowsEnabled");
     uniforms_.grid = glGetUniformLocation(program_, "uGrid");
@@ -1506,8 +1516,11 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
 
     glUseProgram(program_);
     glUniformMatrix4fv(uniforms_.viewProjection, 1, GL_FALSE, viewProjection_.data());
-    glUniformMatrix4fv(uniforms_.lightViewProjection, 1, GL_FALSE,
-                       lightViewProjection_.data());
+    glUniformMatrix4fv(uniforms_.view, 1, GL_FALSE, view_.data());
+    glUniformMatrix4fv(uniforms_.lightViewProjection,
+                       static_cast<GLsizei>(shadowViewProjections_.size()), GL_FALSE,
+                       shadowViewProjections_[0].data());
+    glUniform3fv(uniforms_.cascadeFarSplits, 1, shadowCascadeFarSplits_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
     glUniform3fv(uniforms_.color, 1, material.color.data());
     glUniform3fv(uniforms_.emission, 1, material.emission.data());
@@ -1583,7 +1596,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
     glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
     glUniform1i(uniforms_.shadowMap, 0);
-    glUniform1i(uniforms_.shadowsEnabled, shadowsAvailable_ ? 1 : 0);
+    glUniform1i(uniforms_.shadowsEnabled,
+                shadowsAvailable_ && shadowCascadesValid_ ? 1 : 0);
     glUniform1i(uniforms_.grid, material.proceduralGrid ? 1 : 0);
     glUniform1i(uniforms_.pointLightCount, static_cast<GLint>(pointLights_.size()));
     glUniform4fv(uniforms_.pointLightPositionRange, kMaxPointLights,
@@ -1591,7 +1605,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform4fv(uniforms_.pointLightColorIntensity, kMaxPointLights,
                  pointLightColorIntensities_.data());
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, shadowDepthTexture_);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, albedoTexture);
     glActiveTexture(GL_TEXTURE2);
@@ -1652,12 +1666,6 @@ void Renderer::render(float deltaSeconds) {
         pointLightColorIntensities_[offset + 3] = light.intensity;
     }
 
-    const Vec3 lightPosition{4.5f, 8.2f, 3.4f};
-    const Mat4 lightView = lookAt(lightPosition, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
-    const Mat4 lightProjection = orthographic(-4.2f, 4.2f, -4.2f, 4.2f, 0.1f, 20.0f);
-    lightViewProjection_ = multiply(lightProjection, lightView);
-    renderShadowMap(lightViewProjection_);
-
     const Entity* cameraEntity = scene_.activeCamera();
     const CameraComponent camera = cameraEntity == nullptr
             ? CameraComponent{} : cameraEntity->camera;
@@ -1690,9 +1698,32 @@ void Renderer::render(float deltaSeconds) {
     }
     const float nearPlane = std::max(camera.nearPlane, 0.01f);
     const float farPlane = std::max(camera.farPlane, nearPlane + 0.01f);
-    const Mat4 projection = perspective(std::clamp(camera.verticalFovRadians, 0.1f, 2.8f),
-            static_cast<float>(width_) / static_cast<float>(height_), nearPlane, farPlane);
+    const float aspectRatio = static_cast<float>(width_)
+            / static_cast<float>(std::max(height_, 1));
+    const float verticalFov = std::clamp(camera.verticalFovRadians, 0.1f, 2.8f);
+    const Mat4 projection = perspective(verticalFov, aspectRatio, nearPlane, farPlane);
+    view_ = view;
     viewProjection_ = multiply(projection, view);
+
+    if (shadowsAvailable_) {
+        const ShadowCameraFrustum shadowCamera{
+                cameraPosition_,
+                {-view[2], -view[6], -view[10]},
+                {view[1], view[5], view[9]},
+                verticalFov, aspectRatio, nearPlane, farPlane};
+        std::array<DirectionalShadowCascade, kDirectionalShadowCascadeCount> cascades{};
+        shadowCascadesValid_ = buildDirectionalShadowCascades(
+                shadowCamera, {-0.45f, -0.82f, -0.34f}, kShadowMapSize, cascades);
+        if (shadowCascadesValid_) {
+            for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade) {
+                shadowViewProjections_[cascade] = cascades[cascade].lightViewProjection;
+                shadowCascadeFarSplits_[cascade] = cascades[cascade].farSplit;
+            }
+            renderShadowMaps();
+        }
+    } else {
+        shadowCascadesValid_ = false;
+    }
 
     if (postProcessingAvailable_) {
         glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);

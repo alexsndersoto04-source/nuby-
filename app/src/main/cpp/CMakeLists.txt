@@ -11,6 +11,7 @@ add_library(nuby-engine SHARED
     src/scene.cpp
     src/sample_game.cpp
     src/scene_io.cpp
+    src/shadow_cascades.cpp
     src/obj_loader.cpp
 )
 

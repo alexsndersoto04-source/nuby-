@@ -74,6 +74,13 @@ jobs:
           tests/adventure_game_tests.cpp -o /tmp/nuby-adventure-game-tests
           && /tmp/nuby-adventure-game-tests
 
+      - name: Compile and run directional shadow cascade tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/shadow_cascades.cpp tests/shadow_cascades_tests.cpp
+          -o /tmp/nuby-shadow-tests && /tmp/nuby-shadow-tests
+
       - name: Compile and run standalone project tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic
