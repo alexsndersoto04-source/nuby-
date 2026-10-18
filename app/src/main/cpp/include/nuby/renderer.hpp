@@ -158,7 +158,7 @@ private:
     bool loadObjAsset(const std::string& assetPath, ImportedModel& model);
     bool loadGlbAsset(const std::string& assetPath, ImportedModel& model);
     void uploadSkinPalette(const SkeletalPose* pose);
-    bool loadTgaAsset(const std::string& assetPath, GLuint& texture);
+    bool loadImageAsset(const std::string& assetPath, GLuint& texture);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
     Mesh makeGround();

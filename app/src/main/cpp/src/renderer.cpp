@@ -1206,7 +1206,7 @@ bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) 
     return true;
 }
 
-bool Renderer::loadTgaAsset(const std::string& assetPath, GLuint& texture) {
+bool Renderer::loadImageAsset(const std::string& assetPath, GLuint& texture) {
     texture = 0;
     if (assetManager_ == nullptr) return false;
     AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
@@ -1223,7 +1223,7 @@ bool Renderer::loadTgaAsset(const std::string& assetPath, GLuint& texture) {
                 "Texture asset has invalid size: %s", assetPath.c_str());
         return false;
     }
-    std::string encoded(static_cast<std::size_t>(length), '\\0');
+    std::string encoded(static_cast<std::size_t>(length), '\0');
     std::size_t bytesRead = 0;
     while (bytesRead < encoded.size()) {
         const int count = AAsset_read(asset, encoded.data() + bytesRead,
@@ -1236,9 +1236,9 @@ bool Renderer::loadTgaAsset(const std::string& assetPath, GLuint& texture) {
 
     ImageRgba8 image;
     std::string error;
-    if (!decodeTga(encoded, image, error)) {
+    if (!decodeImage(encoded, image, error)) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "TGA decode failed for %s: %s", assetPath.c_str(), error.c_str());
+                "Image decode failed for %s: %s", assetPath.c_str(), error.c_str());
         return false;
     }
     GLint maximumTextureSize = 0;
@@ -1764,7 +1764,7 @@ void Renderer::loadSceneAssets() {
     for (const std::string& assetPath : requiredTextures) {
         if (textures_.find(assetPath) != textures_.end()) continue;
         GLuint texture = 0;
-        if (loadTgaAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
+        if (loadImageAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
     }
 }
 
