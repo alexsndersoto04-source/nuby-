@@ -48,19 +48,6 @@ void AdventureGame::buildScene(Scene& scene) {
     ground.material.roughness = 0.91f;
     ground.material.proceduralGrid = true;
 
-    // Stylized, low-cost stone forms mark a route through the courtyard.
-    for (int index = 0; index < 6; ++index) {
-        const float z = -2.0f - static_cast<float>(index) * 2.25f;
-        for (int side : {-1, 1}) {
-            Entity& pillar = scene.create("Weathered Ruin Pillar", Primitive::Sphere);
-            pillar.transform.position = {static_cast<float>(side) * 4.35f,
-                                         -0.12f, z};
-            pillar.transform.scale = {0.38f, 1.18f, 0.42f};
-            pillar.material.color = {0.34f, 0.30f, 0.22f};
-            pillar.material.roughness = 0.96f;
-        }
-    }
-
     const std::array<std::array<float, 3>, 3> relicPositions{{
             {{-2.15f, -0.42f, -3.0f}},
             {{2.05f, -0.42f, -5.8f}},
@@ -162,6 +149,65 @@ void AdventureGame::buildScene(Scene& scene) {
     pack.material.color = {0.55f, 0.27f, 0.11f};
     pack.material.roughness = 0.84f;
     scene.setParent(pack.id, playerId_);
+
+    for (std::vector<std::uint32_t>& entityIds : streamedZoneEntityIds_) entityIds.clear();
+    const std::vector<WorldZoneDefinition> zones{
+            {1U, {0.0f, 0.0f, -2.5f}, 5.5f, 8.5f},
+            {2U, {0.0f, 0.0f, -8.0f}, 5.5f, 8.5f},
+            {3U, {0.0f, 0.0f, -13.5f}, 5.5f, 8.5f}
+    };
+    std::string streamingError;
+    if (worldZoneStreamer_.configure(zones, streamingError)) {
+        const Entity* playerEntity = scene.find(playerId_);
+        if (playerEntity != nullptr
+                && worldZoneStreamer_.update(playerEntity->transform.position,
+                                             zoneTransitionsScratch_)) {
+            applyZoneTransitions(scene);
+        }
+    } else {
+        // Keep the scene playable if a future authored zone manifest is invalid.
+        for (std::uint32_t zoneId = 1; zoneId <= streamedZoneEntityIds_.size(); ++zoneId) {
+            loadZone(scene, zoneId);
+        }
+    }
+}
+
+void AdventureGame::loadZone(Scene& scene, std::uint32_t zoneId) {
+    if (zoneId == 0 || zoneId > streamedZoneEntityIds_.size()) return;
+    std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneId - 1U];
+    if (!entityIds.empty()) return;
+
+    const int firstPillar = static_cast<int>((zoneId - 1U) * 2U);
+    for (int localIndex = 0; localIndex < 2; ++localIndex) {
+        const int pillarIndex = firstPillar + localIndex;
+        const float z = -2.0f - static_cast<float>(pillarIndex) * 2.25f;
+        for (int side : {-1, 1}) {
+            Entity& pillar = scene.create("Ruin Zone " + std::to_string(zoneId)
+                    + " Pillar " + std::to_string(pillarIndex * 2 + (side > 0 ? 2 : 1)),
+                    Primitive::Sphere);
+            pillar.transform.position = {static_cast<float>(side) * 4.35f, -0.12f, z};
+            pillar.transform.scale = {0.38f, 1.18f, 0.42f};
+            pillar.material.color = {0.34f, 0.30f, 0.22f};
+            pillar.material.roughness = 0.96f;
+            entityIds.push_back(pillar.id);
+        }
+    }
+}
+
+void AdventureGame::unloadZone(Scene& scene, std::uint32_t zoneId) {
+    if (zoneId == 0 || zoneId > streamedZoneEntityIds_.size()) return;
+    std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneId - 1U];
+    for (auto entity = entityIds.rbegin(); entity != entityIds.rend(); ++entity) {
+        scene.destroyEntity(*entity);
+    }
+    entityIds.clear();
+}
+
+void AdventureGame::applyZoneTransitions(Scene& scene) {
+    for (const WorldZoneTransition& transition : zoneTransitionsScratch_) {
+        if (transition.load) loadZone(scene, transition.zoneId);
+        else unloadZone(scene, transition.zoneId);
+    }
 }
 
 void AdventureGame::start(Scene& scene) {
@@ -231,6 +277,11 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
                     player->transform.position[1] + 0.36f,
                     player->transform.position[2]};
         }
+    }
+
+    if (player != nullptr
+            && worldZoneStreamer_.update(player->transform.position, zoneTransitionsScratch_)) {
+        applyZoneTransitions(scene);
     }
 
     std::vector<PhysicsEvent> events;

@@ -36,6 +36,14 @@ std::uint32_t findEntityId(const nuby::Scene& scene, const std::string& name) {
     return 0;
 }
 
+std::size_t countEntityName(const nuby::Scene& scene, const std::string& name) {
+    std::size_t count = 0;
+    for (const nuby::Entity& entity : scene.entities()) {
+        if (entity.name == name) ++count;
+    }
+    return count;
+}
+
 void testAdventureBuildsItsOwnCharacterAndScene() {
     nuby::AdventureGame game;
     nuby::Scene scene;
@@ -69,8 +77,8 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
     expect(head != nullptr && head->parentId == game.playerId()
                    && head->material.albedoTexture == "textures/wayfarer_face.tga",
            "wayfarer has a face-textured head attached to the moving player");
-    expect(scene.physicsSettings().floorEnabled && scene.entities().size() > 15,
-           "adventure constructs a standalone courtyard and its own scenery");
+    expect(scene.physicsSettings().floorEnabled && scene.entities().size() >= 15,
+           "adventure constructs a standalone courtyard with its starting streamed sector");
     expect(game.relicsCollected() == 0 && !game.completed(),
            "a new adventure starts with three relics to find and a sealed gate");
     expect(game.statusText().find("0/3") != std::string::npos,
@@ -130,6 +138,46 @@ void testWayfarerSelectsIdleWalkRunAndJumpClips() {
     expect(player != nullptr && player->characterController.grounded
                    && body != nullptr && body->skeletalAnimation.clipName == "idle",
            "landing restores the idle clip after the jump");
+}
+
+void testAdventureStreamsSceneryByPlayerZone() {
+    nuby::AdventureGame game;
+    nuby::Scene scene;
+    game.start(scene);
+
+    const std::string firstZonePillar = "Ruin Zone 1 Pillar 1";
+    const std::string secondZonePillar = "Ruin Zone 2 Pillar 5";
+    const std::string thirdZonePillar = "Ruin Zone 3 Pillar 9";
+    expect(findEntityId(scene, firstZonePillar) != 0
+                   && findEntityId(scene, secondZonePillar) == 0
+                   && findEntityId(scene, thirdZonePillar) == 0,
+           "adventure starts with nearby scenery only");
+
+    movePlayerTo(scene, game.playerId(), 0.0f, -9.0f);
+    advance(game, scene, 1);
+    expect(findEntityId(scene, secondZonePillar) != 0
+                   && findEntityId(scene, thirdZonePillar) != 0,
+           "walking into the route loads adjacent scenery sectors");
+    expect(findEntityId(scene, firstZonePillar) != 0,
+           "hysteresis keeps the previous sector resident near its boundary");
+
+    movePlayerTo(scene, game.playerId(), 0.0f, -12.0f);
+    advance(game, scene, 1);
+    expect(findEntityId(scene, firstZonePillar) == 0
+                   && findEntityId(scene, secondZonePillar) != 0
+                   && findEntityId(scene, thirdZonePillar) != 0,
+           "distant scenery unloads while current and next sectors remain loaded");
+    expect(findEntityId(scene, "Sun Relic 1") != 0
+                   && findEntityId(scene, "Sun Relic 2") != 0
+                   && findEntityId(scene, "Sun Relic 3") != 0,
+           "streaming scenery does not unload mission-critical relics");
+
+    movePlayerTo(scene, game.playerId(), 0.0f, 0.0f);
+    advance(game, scene, 1);
+    expect(findEntityId(scene, firstZonePillar) != 0
+                   && findEntityId(scene, thirdZonePillar) == 0
+                   && countEntityName(scene, firstZonePillar) == 1,
+           "returning to the starting area reloads scenery once without duplicates");
 }
 
 void testMovementJumpAndCameraFollow() {
@@ -209,6 +257,7 @@ int main() {
     testAdventureBuildsItsOwnCharacterAndScene();
     testCharacterFacesItsMovementDirection();
     testWayfarerSelectsIdleWalkRunAndJumpClips();
+    testAdventureStreamsSceneryByPlayerZone();
     testMovementJumpAndCameraFollow();
     testRelicsUnlockTheGateAndRestartResetsProgress();
     if (failures != 0) {

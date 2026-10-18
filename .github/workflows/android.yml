@@ -71,7 +71,8 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic
           -Iapp/src/main/cpp/include
           app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/adventure_game.cpp
-          tests/adventure_game_tests.cpp -o /tmp/nuby-adventure-game-tests
+          app/src/main/cpp/src/world_streaming.cpp tests/adventure_game_tests.cpp
+          -o /tmp/nuby-adventure-game-tests
           && /tmp/nuby-adventure-game-tests
 
       - name: Compile and run directional shadow cascade tests
@@ -123,6 +124,14 @@ jobs:
           tests/game_project_runtime_tests.cpp
           -o /tmp/nuby-game-project-runtime-tests
           && /tmp/nuby-game-project-runtime-tests
+
+      - name: Compile and run world streaming tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/world_streaming.cpp tests/world_streaming_tests.cpp
+          -o /tmp/nuby-world-streaming-tests
+          && /tmp/nuby-world-streaming-tests
 
   build-debug-apk:
     name: Build native Android APK

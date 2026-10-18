@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nuby/scene.hpp"
+#include "nuby/world_streaming.hpp"
 
 #include <array>
 #include <cstdint>
@@ -27,12 +28,18 @@ public:
 
 private:
     void buildScene(Scene& scene);
+    void applyZoneTransitions(Scene& scene);
+    void loadZone(Scene& scene, std::uint32_t zoneId);
+    void unloadZone(Scene& scene, std::uint32_t zoneId);
 
     std::uint32_t playerId_ = 0;
     std::uint32_t cameraId_ = 0;
     std::uint32_t gateTriggerId_ = 0;
     std::vector<std::uint32_t> relicIds_;
     std::array<float, 2> moveInput_{0.0f, 0.0f};
+    std::array<std::vector<std::uint32_t>, 3> streamedZoneEntityIds_;
+    std::vector<WorldZoneTransition> zoneTransitionsScratch_;
+    WorldZoneStreamer worldZoneStreamer_;
     int relicsCollected_ = 0;
     bool completed_ = false;
 };
