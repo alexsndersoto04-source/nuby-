@@ -384,9 +384,22 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("pbrMetallicRoughness":{"baseColorFactor":[-0.1,0,0,1]})JSON"),
                    primitives, error),
            "out-of-range glTF base color factors are rejected");
+    expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("alphaMode":"MASK")JSON"), primitives, error)
+                   && primitives.size() == 1U && primitives[0].material.alphaMask
+                   && !primitives[0].material.alphaBlend
+                   && std::fabs(primitives[0].material.alphaCutoff - 0.5f) < 1.0e-6f,
+           "masked materials retain the default alpha cutoff as an opaque cutout mode");
+    expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("alphaMode":"MASK","alphaCutoff":0.25)JSON"),
+                   primitives, error)
+                   && primitives.size() == 1U
+                   && std::fabs(primitives[0].material.alphaCutoff - 0.25f) < 1.0e-6f,
+           "masked material custom alpha cutoff is retained");
     expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
-                   R"JSON("alphaMode":"MASK")JSON"), primitives, error),
-           "masked materials are rejected until alpha-cutout rendering is supported");
+                   R"JSON("alphaMode":"MASK","alphaCutoff":1.1)JSON"),
+                   primitives, error),
+           "out-of-range alpha cutoffs are rejected");
     expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"rotation":0.5}}}})JSON"),
                    primitives, error),
@@ -399,6 +412,27 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0}})JSON"),
                    primitives, error),
            "unsupported glTF material textures are not silently discarded");
+}
+
+void testGlbAlphaMaskMaterials() {
+    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.7,0.8,0.9,0.6],"baseColorTexture":{"index":0}},"alphaMode":"MASK","alphaCutoff":0.35)JSON";
+    const std::string glb = makeTexturedTriangleGlb(material);
+    std::vector<nuby::GltfPrimitive> primitives;
+    std::string error;
+    expect(nuby::parseGlbMeshes(glb, primitives, error)
+                   && primitives.size() == 1U && primitives[0].hasMaterial
+                   && primitives[0].material.alphaMask
+                   && !primitives[0].material.alphaBlend
+                   && primitives[0].material.baseColorTexture.imageIndex == 0
+                   && std::fabs(primitives[0].material.baseColorFactor[3] - 0.6f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.alphaCutoff - 0.35f) < 1.0e-6f,
+           "textured GLB MASK keeps its alpha map, factor, and cutoff for camera and shadow rendering");
+    nuby::GltfStaticAsset asset;
+    expect(nuby::parseGlbStaticAsset(glb, asset, error)
+                   && asset.primitives.size() == 1U
+                   && asset.primitives[0].material.alphaMask
+                   && std::fabs(asset.primitives[0].material.alphaCutoff - 0.35f) < 1.0e-6f,
+           "static scene import preserves alpha-mask settings for rendering");
 }
 
 void testGlbMaterialsBindEmbeddedPngTextures() {
@@ -457,9 +491,6 @@ void testGlbMaterialsBindEmbeddedPngTextures() {
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":1}})JSON"),
                    primitives, error),
            "glTF material UV sets other than TEXCOORD_0 are rejected");
-    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
-                   R"JSON("alphaMode":"MASK")JSON"), primitives, error),
-           "alpha-mask materials remain rejected until cutout rendering is implemented");
 }
 
 void testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms() {
@@ -539,6 +570,39 @@ void testSkeletalGlbImportsJointsBindMatricesAndClips() {
     expect(asset.primitives.size() == 1 && asset.primitives[0].hasSkinAttributes
                    && asset.primitives[0].influences[0].jointIndices[0] == 1,
            "mesh skin indices map into the imported skeleton palette");
+}
+
+void testPackagedAlphaMaskFixture() {
+    std::ifstream input("app/src/main/assets/engine-tests/alpha_mask_card.glb", std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    expect(input.good() || input.eof(), "packaged alpha-mask validation GLB is readable");
+    nuby::GltfStaticAsset asset;
+    std::string error;
+    expect(nuby::parseGlbStaticAsset(bytes, asset, error),
+           "alpha-mask validation GLB parses through the static scene importer");
+    expect(asset.primitives.size() == 1U && asset.images.size() == 1U
+                   && asset.primitives[0].hasMaterial
+                   && asset.primitives[0].material.alphaMask
+                   && asset.primitives[0].material.baseColorTexture.imageIndex == 0
+                   && asset.primitives[0].material.alphaCutoff == 0.5f,
+           "validation scene exposes its embedded texture and default cutout material");
+    if (asset.images.size() == 1U) {
+        nuby::ImageRgba8 decoded;
+        expect(nuby::decodePng(asset.images[0].bytes, decoded, error)
+                       && decoded.width == 64U && decoded.height == 96U,
+               "validation material image decodes through the engine PNG path");
+        if (!decoded.pixels.empty()) {
+            bool hasTransparent = false;
+            bool hasOpaque = false;
+            for (std::size_t pixel = 3U; pixel < decoded.pixels.size(); pixel += 4U) {
+                hasTransparent = hasTransparent || decoded.pixels[pixel] == 0U;
+                hasOpaque = hasOpaque || decoded.pixels[pixel] == 255U;
+            }
+            expect(hasTransparent && hasOpaque,
+                   "validation PNG contains both cutout and solid fragments");
+        }
+    }
 }
 
 void testPackagedWayfarerAsset() {
@@ -671,9 +735,11 @@ int main() {
     testGlbRejectsInvalidHeadersAndLengths();
     testGlbImportsTriangleAndSkinAttributes();
     testGltfPbrMaterialFactors();
+    testGlbAlphaMaskMaterials();
     testGlbMaterialsBindEmbeddedPngTextures();
     testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
+    testPackagedAlphaMaskFixture();
     testPackagedWayfarerAsset();
     testGltfJsonSyntaxAndVersionValidation();
     testGlbRequiresOneLeadingJsonChunk();

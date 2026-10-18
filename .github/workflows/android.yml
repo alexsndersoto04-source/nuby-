@@ -22,6 +22,11 @@ jobs:
           python3 tools/generate_wayfarer_animations.py
           git diff --exit-code -- app/src/main/assets/characters/wayfarer_skeletal.glb
 
+      - name: Verify deterministic alpha-mask validation asset
+        run: |
+          python3 tools/generate_alpha_mask_sample.py
+          git diff --exit-code -- app/src/main/assets/engine-tests/alpha_mask_card.glb
+
       - name: Compile scene tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic

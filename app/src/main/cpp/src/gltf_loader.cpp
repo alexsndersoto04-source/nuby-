@@ -881,15 +881,18 @@ bool parseGltfMaterials(const JsonValue& root,
         for (float value : material.emissiveFactor) {
             if (value < 0.0f) return fail(error, "GLB emissiveFactor cannot be negative");
         }
+        if (!optionalFloat(source, "alphaCutoff", 0.5f, material.alphaCutoff)
+                || material.alphaCutoff < 0.0f || material.alphaCutoff > 1.0f) {
+            return fail(error, "GLB alphaCutoff must be finite and in [0, 1]");
+        }
         const JsonValue* alphaMode = member(source, "alphaMode");
         if (alphaMode != nullptr) {
             if (alphaMode->type != JsonValue::Type::String) {
                 return fail(error, "GLB alphaMode must be a string");
             }
             if (alphaMode->stringValue == "BLEND") material.alphaBlend = true;
-            else if (alphaMode->stringValue == "MASK") {
-                return fail(error, "GLB MASK alpha mode is unsupported without alpha-cutout rendering");
-            } else if (alphaMode->stringValue != "OPAQUE") {
+            else if (alphaMode->stringValue == "MASK") material.alphaMask = true;
+            else if (alphaMode->stringValue != "OPAQUE") {
                 return fail(error, "GLB alphaMode is unknown");
             }
         }

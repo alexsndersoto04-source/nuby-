@@ -333,6 +333,8 @@ uniform vec3 uEmission;
 uniform float uMetallic;
 uniform float uRoughness;
 uniform float uOpacity;
+uniform int uAlphaMaskEnabled;
+uniform float uAlphaCutoff;
 uniform float uAmbientOcclusion;
 uniform sampler2D uAlbedoTexture;
 uniform sampler2D uNormalTexture;
@@ -520,6 +522,14 @@ void main() {
         opacity *= adjustTextureValue(mapOpacity, uOpacityMapBaseGain);
     }
 
+    vec2 albedoUv = vUv * uAlbedoUvScale + uAlbedoUvOffset;
+    vec4 albedoSample = vec4(1.0);
+    if (uHasAlbedoTexture != 0) albedoSample = texture(uAlbedoTexture, albedoUv);
+    if (uAlphaMaskEnabled != 0) {
+        if (opacity * albedoSample.a < uAlphaCutoff) discard;
+        opacity = 1.0;
+    }
+
     if (uGrid == 1) {
         float gridVisibility = 1.0 - shadowAmount(normal, lightDirection) * 0.82;
         vec2 coordinate = vWorldPosition.xz * 0.5;
@@ -536,7 +546,6 @@ void main() {
     }
 
     vec3 baseColor = uColor;
-    vec2 albedoUv = vUv * uAlbedoUvScale + uAlbedoUvOffset;
     vec2 normalUv = vUv * uNormalUvScale + uNormalUvOffset;
     vec2 metallicRoughnessUv = vUv * uMetallicRoughnessUvScale
                              + uMetallicRoughnessUvOffset;
@@ -545,8 +554,8 @@ void main() {
     vec2 occlusionUv = vUv * uOcclusionUvScale + uOcclusionUvOffset;
     vec2 emissiveUv = vUv * uEmissiveUvScale + uEmissiveUvOffset;
     if (uHasAlbedoTexture != 0) {
-        vec3 albedoSample = texture(uAlbedoTexture, albedoUv).rgb;
-        baseColor *= srgbToLinear(adjustTextureValues(albedoSample, uAlbedoMapBaseGain));
+        baseColor *= srgbToLinear(adjustTextureValues(
+                albedoSample.rgb, uAlbedoMapBaseGain));
     }
     if (uHasNormalTexture != 0) {
         vec3 normalSample = texture(uNormalTexture, normalUv).rgb;
@@ -635,6 +644,7 @@ constexpr const char* kFallbackVertexShader = R"(
 precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUv;
 layout(location = 7) in uvec4 aJointIndices;
 layout(location = 8) in vec4 aJointWeights;
 layout(std140) uniform SkinPalette { mat4 uJointMatrices[64]; };
@@ -642,6 +652,7 @@ uniform mat4 uViewProjection;
 uniform mat4 uModel;
 uniform int uSkinningEnabled;
 out vec3 vFallbackNormal;
+out vec2 vFallbackUv;
 void main() {
     vec4 localPosition = vec4(aPosition, 1.0);
     vec3 localNormal = aNormal;
@@ -656,6 +667,7 @@ void main() {
     }
     vec4 worldPosition = uModel * localPosition;
     vFallbackNormal = normalize(mat3(uModel) * localNormal);
+    vFallbackUv = aUv;
     gl_Position = uViewProjection * worldPosition;
 }
 )";
@@ -664,15 +676,31 @@ constexpr const char* kFallbackFragmentShader = R"(
 #version 300 es
 precision highp float;
 in vec3 vFallbackNormal;
+in vec2 vFallbackUv;
 uniform vec3 uColor;
 uniform vec3 uEmission;
 uniform float uOpacity;
+uniform int uAlphaMaskEnabled;
+uniform float uAlphaCutoff;
+uniform sampler2D uAlbedoTexture;
+uniform int uHasAlbedoTexture;
+uniform vec2 uAlbedoUvScale;
+uniform vec2 uAlbedoUvOffset;
 out vec4 fragmentColor;
 void main() {
+    float opacity = clamp(uOpacity, 0.0, 1.0);
+    if (uAlphaMaskEnabled != 0) {
+        if (uHasAlbedoTexture != 0) {
+            opacity *= texture(uAlbedoTexture,
+                    vFallbackUv * uAlbedoUvScale + uAlbedoUvOffset).a;
+        }
+        if (opacity < uAlphaCutoff) discard;
+        opacity = 1.0;
+    }
     vec3 normal = normalize(vFallbackNormal);
     vec3 lightDirection = normalize(vec3(-0.45, 0.82, 0.34));
     float diffuse = 0.28 + 0.72 * max(dot(normal, lightDirection), 0.0);
-    fragmentColor = vec4(uColor * diffuse + uEmission, clamp(uOpacity, 0.0, 1.0));
+    fragmentColor = vec4(uColor * diffuse + uEmission, opacity);
 }
 )";
 
@@ -680,6 +708,7 @@ constexpr const char* kShadowVertexShader = R"(
 #version 300 es
 precision highp float;
 layout(location = 0) in vec3 aPosition;
+layout(location = 2) in vec2 aUv;
 layout(location = 3) in mat4 aInstanceModel;
 layout(location = 7) in uvec4 aJointIndices;
 layout(location = 8) in vec4 aJointWeights;
@@ -688,6 +717,7 @@ uniform mat4 uLightViewProjection;
 uniform mat4 uModel;
 uniform int uUseInstancing;
 uniform int uSkinningEnabled;
+out vec2 vShadowUv;
 void main() {
     mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
     vec4 localPosition = vec4(aPosition, 1.0);
@@ -699,6 +729,7 @@ void main() {
         skin += uJointMatrices[int(aJointIndices.w)] * aJointWeights.w;
         localPosition = skin * localPosition;
     }
+    vShadowUv = aUv;
     gl_Position = uLightViewProjection * model * localPosition;
 }
 )";
@@ -706,7 +737,24 @@ void main() {
 constexpr const char* kShadowFragmentShader = R"(
 #version 300 es
 precision highp float;
-void main() { }
+in vec2 vShadowUv;
+uniform sampler2D uAlbedoTexture;
+uniform int uHasAlbedoTexture;
+uniform int uAlphaMaskEnabled;
+uniform float uAlphaCutoff;
+uniform float uBaseColorAlpha;
+uniform vec2 uAlbedoUvScale;
+uniform vec2 uAlbedoUvOffset;
+void main() {
+    if (uAlphaMaskEnabled != 0) {
+        float alpha = uBaseColorAlpha;
+        if (uHasAlbedoTexture != 0) {
+            alpha *= texture(uAlbedoTexture,
+                    vShadowUv * uAlbedoUvScale + uAlbedoUvOffset).a;
+        }
+        if (alpha < uAlphaCutoff) discard;
+    }
+}
 )";
 
 constexpr const char* kFullscreenVertexShader = R"(
@@ -1060,8 +1108,10 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
         part.material.color = {primitive.material.baseColorFactor[0],
                                primitive.material.baseColorFactor[1],
                                primitive.material.baseColorFactor[2]};
-        part.material.opacity = primitive.material.alphaBlend
+        part.material.opacity = primitive.material.alphaBlend || primitive.material.alphaMask
                 ? primitive.material.baseColorFactor[3] : 1.0f;
+        part.alphaMask = primitive.material.alphaMask;
+        part.alphaCutoff = primitive.material.alphaCutoff;
         part.material.emission = primitive.material.emissiveFactor;
         part.material.metallic = primitive.material.metallicFactor;
         part.material.roughness = primitive.material.roughnessFactor;
@@ -1496,6 +1546,13 @@ void Renderer::buildScene() {
     innerCore.material.metallic = 0.08f;
     innerCore.material.roughness = 0.16f;
 
+    // Engine-lab fixture: its punched PNG must cut out identically in the camera and CSM depth map.
+    Entity& alphaMaskCard = scene_.create("GLB Alpha Mask and Shadow Sample",
+            Primitive::ImportedMesh);
+    alphaMaskCard.meshAsset = "engine-tests/alpha_mask_card.glb";
+    alphaMaskCard.transform.position = {1.18f, -1.22f, 0.38f};
+    alphaMaskCard.transform.scale = {0.42f, 0.42f, 0.42f};
+
     for (int index = 0; index < 3; ++index) {
         const bool useImportedMesh = index == 1;
         Entity& satellite = scene_.create("Orbiting Shard " + std::to_string(index + 1),
@@ -1887,6 +1944,13 @@ void Renderer::initializeShadowMap() {
     shadowProgramModel_ = glGetUniformLocation(shadowProgram_, "uModel");
     shadowProgramUseInstancing_ = glGetUniformLocation(shadowProgram_, "uUseInstancing");
     shadowProgramSkinningEnabled_ = glGetUniformLocation(shadowProgram_, "uSkinningEnabled");
+    shadowProgramAlphaMaskEnabled_ = glGetUniformLocation(shadowProgram_, "uAlphaMaskEnabled");
+    shadowProgramAlphaCutoff_ = glGetUniformLocation(shadowProgram_, "uAlphaCutoff");
+    shadowProgramBaseColorAlpha_ = glGetUniformLocation(shadowProgram_, "uBaseColorAlpha");
+    shadowProgramAlbedoTexture_ = glGetUniformLocation(shadowProgram_, "uAlbedoTexture");
+    shadowProgramHasAlbedoTexture_ = glGetUniformLocation(shadowProgram_, "uHasAlbedoTexture");
+    shadowProgramAlbedoUvScale_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvScale");
+    shadowProgramAlbedoUvOffset_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvOffset");
     const GLuint paletteBlock = glGetUniformBlockIndex(shadowProgram_, "SkinPalette");
     if (paletteBlock != GL_INVALID_INDEX) {
         glUniformBlockBinding(shadowProgram_, paletteBlock, kSkinPaletteBindingPoint);
@@ -1996,14 +2060,19 @@ void Renderer::renderShadowMaps() {
                     const SkeletalPose* poseData = pose == evaluatedSkeletalPoses_.end()
                             ? nullptr : &pose->second;
                     for (const ImportedPart& part : imported->second.parts) {
-                        const Material& material = part.hasMaterial
-                                && !entity.overrideMtlMaterials ? part.material : entity.material;
+                        const bool useImportedMaterial = part.hasMaterial
+                                && !entity.overrideMtlMaterials;
+                        const Material& material = useImportedMaterial
+                                ? part.material : entity.material;
+                        const bool alphaMask = useImportedMaterial && part.alphaMask;
                         const SkeletalPose* partPose = part.skinned ? poseData : nullptr;
-                        if (part.mesh.vao == 0 || material.opacity < 1.0f
-                                || !material.opacityTexture.empty()
+                        if (part.mesh.vao == 0 || (!alphaMask
+                                && (material.opacity < 1.0f
+                                    || !material.opacityTexture.empty()))
                                 || (partPose == nullptr
                                     && !meshIntersectsFrustum(part.mesh, model, cascadeFrustum))) continue;
-                        shadowDrawItems_.push_back({&part.mesh, model, partPose});
+                        shadowDrawItems_.push_back({&part.mesh, model, partPose,
+                                alphaMask ? &material : nullptr, alphaMask, part.alphaCutoff});
                     }
                     continue;
                 }
@@ -2020,15 +2089,26 @@ void Renderer::renderShadowMaps() {
                     if (left.mesh != right.mesh) {
                         return std::less<const Mesh*>{}(left.mesh, right.mesh);
                     }
-                    return std::less<const SkeletalPose*>{}(left.pose, right.pose);
+                    if (left.pose != right.pose) {
+                        return std::less<const SkeletalPose*>{}(left.pose, right.pose);
+                    }
+                    if (left.material != right.material) {
+                        return std::less<const Material*>{}(left.material, right.material);
+                    }
+                    if (left.alphaMask != right.alphaMask) return left.alphaMask < right.alphaMask;
+                    return left.alphaCutoff < right.alphaCutoff;
                 });
         for (std::size_t begin = 0; begin < shadowDrawItems_.size();) {
             const ShadowDrawItem& first = shadowDrawItems_[begin];
             std::size_t end = begin + 1;
             while (end < shadowDrawItems_.size()
                     && shadowDrawItems_[end].mesh == first.mesh
-                    && shadowDrawItems_[end].pose == first.pose) ++end;
-            const bool useInstances = first.pose == nullptr && end - begin > 1 && instanceBuffer_ != 0
+                    && shadowDrawItems_[end].pose == first.pose
+                    && shadowDrawItems_[end].material == first.material
+                    && shadowDrawItems_[end].alphaMask == first.alphaMask
+                    && shadowDrawItems_[end].alphaCutoff == first.alphaCutoff) ++end;
+            const bool useInstances = !first.alphaMask && first.pose == nullptr
+                    && end - begin > 1 && instanceBuffer_ != 0
                     && shadowProgramUseInstancing_ >= 0
                     && end - begin <= static_cast<std::size_t>(
                             std::numeric_limits<GLsizei>::max());
@@ -2037,6 +2117,32 @@ void Renderer::renderShadowMaps() {
             glUniform1i(shadowProgramUseInstancing_, useInstances ? 1 : 0);
             const bool useSkinning = skinPaletteBuffer_ != 0 && first.pose != nullptr;
             glUniform1i(shadowProgramSkinningEnabled_, useSkinning ? 1 : 0);
+            glUniform1i(shadowProgramAlphaMaskEnabled_, first.alphaMask ? 1 : 0);
+            glUniform1f(shadowProgramAlphaCutoff_, first.alphaCutoff);
+            const Material* shadowMaterial = first.material;
+            GLuint shadowAlbedoTexture = 0U;
+            if (first.alphaMask && shadowMaterial != nullptr
+                    && !shadowMaterial->albedoTexture.empty()) {
+                const std::string texturePath = projectAssetPath(shadowMaterial->albedoTexture);
+                const auto texture = textures_.find(texturePath);
+                if (texture != textures_.end()) shadowAlbedoTexture = texture->second;
+            }
+            glUniform1i(shadowProgramAlbedoTexture_, 0);
+            glUniform1i(shadowProgramHasAlbedoTexture_,
+                        shadowAlbedoTexture != 0U ? 1 : 0);
+            glUniform1f(shadowProgramBaseColorAlpha_,
+                        shadowMaterial != nullptr ? shadowMaterial->opacity : 1.0f);
+            const TextureMapTransform defaultTransform{};
+            const TextureMapTransform& albedoTransform = shadowMaterial != nullptr
+                    ? shadowMaterial->albedoMapTransform : defaultTransform;
+            glUniform2fv(shadowProgramAlbedoUvScale_, 1, albedoTransform.uvScale.data());
+            glUniform2fv(shadowProgramAlbedoUvOffset_, 1, albedoTransform.uvOffset.data());
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, shadowAlbedoTexture);
+            const GLuint shadowSampler = shadowMaterial != nullptr
+                    && shadowMaterial->albedoMapTransform.clampToEdge
+                    ? clampSampler_ : repeatSampler_;
+            glBindSampler(0, first.alphaMask ? shadowSampler : 0U);
             if (useSkinning) uploadSkinPalette(first.pose);
             if (useInstances) {
                 instanceModelsScratch_.clear();
@@ -2073,6 +2179,9 @@ void Renderer::renderShadowMaps() {
     }
 
     glBindVertexArray(0);
+    glBindSampler(0, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -2354,6 +2463,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.metallic = glGetUniformLocation(program_, "uMetallic");
     uniforms_.roughness = glGetUniformLocation(program_, "uRoughness");
     uniforms_.opacity = glGetUniformLocation(program_, "uOpacity");
+    uniforms_.alphaMaskEnabled = glGetUniformLocation(program_, "uAlphaMaskEnabled");
+    uniforms_.alphaCutoff = glGetUniformLocation(program_, "uAlphaCutoff");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.ambientSphericalHarmonics = glGetUniformLocation(program_, "uAmbientSH[0]");
     uniforms_.albedoTexture = glGetUniformLocation(program_, "uAlbedoTexture");
@@ -2444,7 +2555,8 @@ void Renderer::uploadSkinPalette(const SkeletalPose* pose) {
 }
 
 void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& material,
-                    const std::vector<Mat4>* instanceModels, const SkeletalPose* pose) {
+                    const std::vector<Mat4>* instanceModels, const SkeletalPose* pose,
+                    bool alphaMask, float alphaCutoff) {
     if (program_ == 0 || mesh.vao == 0) return;
 
     glUseProgram(program_);
@@ -2475,6 +2587,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.metallic, material.metallic);
     glUniform1f(uniforms_.roughness, material.roughness);
     glUniform1f(uniforms_.opacity, material.opacity);
+    glUniform1i(uniforms_.alphaMaskEnabled, alphaMask ? 1 : 0);
+    glUniform1f(uniforms_.alphaCutoff, alphaCutoff);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
                  ambientSphericalHarmonics_.data());
@@ -2759,15 +2873,19 @@ void Renderer::render(float deltaSeconds) {
     transparentDrawItems_.clear();
     const auto queueDraw = [this, &cameraFrustum](const Mesh& mesh, const Mat4& model,
                                                    const Material& material,
-                                                   const SkeletalPose* pose) {
-        if (material.opacity <= 0.0f
+                                                   const SkeletalPose* pose,
+                                                   bool alphaMask, float alphaCutoff) {
+        if ((!alphaMask && material.opacity <= 0.0f)
                 || (pose == nullptr && !meshIntersectsFrustum(mesh, model, cameraFrustum))) return;
         const float dx = model[12] - cameraPosition_[0];
         const float dy = model[13] - cameraPosition_[1];
         const float dz = model[14] - cameraPosition_[2];
-        DrawItem item{&mesh, model, &material, materialBatchHash(material),
-                      dx * dx + dy * dy + dz * dz, pose};
-        if (material.opacity < 1.0f || !material.opacityTexture.empty()) {
+        std::size_t sortKey = materialBatchHash(material);
+        hashValue(sortKey, alphaMask);
+        hashValue(sortKey, alphaCutoff);
+        DrawItem item{&mesh, model, &material, sortKey,
+                      dx * dx + dy * dy + dz * dz, pose, alphaMask, alphaCutoff};
+        if (!alphaMask && (material.opacity < 1.0f || !material.opacityTexture.empty())) {
             transparentDrawItems_.push_back(item);
         } else {
             opaqueDrawItems_.push_back(item);
@@ -2785,16 +2903,19 @@ void Renderer::render(float deltaSeconds) {
                         ? nullptr : &pose->second;
                 for (const ImportedPart& part : imported->second.parts) {
                     if (part.mesh.vao == 0) continue;
-                    const Material& material = part.hasMaterial && !entity.overrideMtlMaterials
+                    const bool useImportedMaterial = part.hasMaterial
+                            && !entity.overrideMtlMaterials;
+                    const Material& material = useImportedMaterial
                             ? part.material : entity.material;
-                    queueDraw(part.mesh, model, material, part.skinned ? poseData : nullptr);
+                    queueDraw(part.mesh, model, material, part.skinned ? poseData : nullptr,
+                             useImportedMaterial && part.alphaMask, part.alphaCutoff);
                 }
                 continue;
             }
         }
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr) continue;
-        queueDraw(*mesh, model, entity.material, nullptr);
+        queueDraw(*mesh, model, entity.material, nullptr, false, 0.5f);
     }
     std::sort(opaqueDrawItems_.begin(), opaqueDrawItems_.end(),
             [](const DrawItem& left, const DrawItem& right) {
@@ -2810,6 +2931,8 @@ void Renderer::render(float deltaSeconds) {
                 && opaqueDrawItems_[end].mesh == first.mesh
                 && opaqueDrawItems_[end].materialSortKey == first.materialSortKey
                 && opaqueDrawItems_[end].pose == first.pose
+                && opaqueDrawItems_[end].alphaMask == first.alphaMask
+                && opaqueDrawItems_[end].alphaCutoff == first.alphaCutoff
                 && sameMaterial(*opaqueDrawItems_[end].material, *first.material)) {
             ++end;
         }
@@ -2822,11 +2945,13 @@ void Renderer::render(float deltaSeconds) {
             for (std::size_t index = begin; index < end; ++index) {
                 instanceModelsScratch_.push_back(opaqueDrawItems_[index].model);
             }
-            draw(*first.mesh, first.model, *first.material, &instanceModelsScratch_);
+            draw(*first.mesh, first.model, *first.material, &instanceModelsScratch_,
+                 nullptr, first.alphaMask, first.alphaCutoff);
         } else {
             for (std::size_t index = begin; index < end; ++index) {
                 const DrawItem& item = opaqueDrawItems_[index];
-                draw(*item.mesh, item.model, *item.material, nullptr, item.pose);
+                draw(*item.mesh, item.model, *item.material, nullptr, item.pose,
+                     item.alphaMask, item.alphaCutoff);
             }
         }
         begin = end;

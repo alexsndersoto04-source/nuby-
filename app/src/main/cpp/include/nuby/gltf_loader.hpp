@@ -29,7 +29,9 @@ struct GltfMaterial {
     GltfTextureBinding normalTexture;
     GltfTextureBinding occlusionTexture;
     GltfTextureBinding emissiveTexture;
+    float alphaCutoff = 0.5f;
     bool alphaBlend = false;
+    bool alphaMask = false;
 };
 
 struct GltfEmbeddedImage {
@@ -81,8 +83,7 @@ bool validateGltf2Json(std::string_view json, std::string& error);
 // and image-index references to embedded PNGs used by standard texture slots.
 // It retains repeat/clamp addressing and KHR_texture_transform offset/scale.
 // Higher-level asset APIs return encoded image bytes. External images, non-PNG
-// formats, custom filters, rotated transforms, nonzero UV sets and MASK alpha
-// are rejected.
+// formats, custom filters, rotated transforms and nonzero UV sets are rejected.
 bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                     std::string& error);
 

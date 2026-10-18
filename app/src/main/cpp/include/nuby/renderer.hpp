@@ -69,6 +69,8 @@ private:
         Material material;
         bool hasMaterial = false;
         bool skinned = false;
+        bool alphaMask = false;
+        float alphaCutoff = 0.5f;
     };
 
     struct ImportedModel {
@@ -84,12 +86,17 @@ private:
         std::size_t materialSortKey = 0;
         float cameraDistanceSquared = 0.0f;
         const SkeletalPose* pose = nullptr;
+        bool alphaMask = false;
+        float alphaCutoff = 0.5f;
     };
 
     struct ShadowDrawItem {
         const Mesh* mesh = nullptr;
         std::array<float, 16> model{};
         const SkeletalPose* pose = nullptr;
+        const Material* material = nullptr;
+        bool alphaMask = false;
+        float alphaCutoff = 0.5f;
     };
 
     struct PostUniforms {
@@ -111,6 +118,8 @@ private:
         GLint metallic = -1;
         GLint roughness = -1;
         GLint opacity = -1;
+        GLint alphaMaskEnabled = -1;
+        GLint alphaCutoff = -1;
         GLint ambientOcclusion = -1;
         GLint ambientSphericalHarmonics = -1;
         GLint albedoTexture = -1;
@@ -166,7 +175,8 @@ private:
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
               const Material& material,
               const std::vector<std::array<float, 16>>* instanceModels = nullptr,
-              const SkeletalPose* pose = nullptr);
+              const SkeletalPose* pose = nullptr,
+              bool alphaMask = false, float alphaCutoff = 0.5f);
     bool meshIntersectsFrustum(const Mesh& mesh, const std::array<float, 16>& model,
                                const ViewFrustum& frustum) const;
     void buildScene();
@@ -225,6 +235,13 @@ private:
     GLint shadowProgramModel_ = -1;
     GLint shadowProgramUseInstancing_ = -1;
     GLint shadowProgramSkinningEnabled_ = -1;
+    GLint shadowProgramAlphaMaskEnabled_ = -1;
+    GLint shadowProgramAlphaCutoff_ = -1;
+    GLint shadowProgramBaseColorAlpha_ = -1;
+    GLint shadowProgramAlbedoTexture_ = -1;
+    GLint shadowProgramHasAlbedoTexture_ = -1;
+    GLint shadowProgramAlbedoUvScale_ = -1;
+    GLint shadowProgramAlbedoUvOffset_ = -1;
     static constexpr int kMaximumGpuJoints = 64;
     static constexpr GLuint kSkinPaletteBindingPoint = 0;
     static constexpr int kShadowMapSize = 512;
