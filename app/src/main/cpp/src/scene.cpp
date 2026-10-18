@@ -645,6 +645,161 @@ bool Scene::raycast(const std::array<float, 3>& origin,
     return found;
 }
 
+bool Scene::sphereCast(const std::array<float, 3>& origin,
+                       const std::array<float, 3>& direction, float radius,
+                       float maximumDistance, SphereCastHit& hit,
+                       std::uint32_t queryLayer, std::uint32_t queryMask) const {
+    hit = SphereCastHit{};
+    if (!std::isfinite(radius) || radius <= 0.0f || !std::isfinite(maximumDistance)
+            || maximumDistance < 0.0f || queryLayer == 0U || queryMask == 0U) return false;
+    const float queryRadiusSquared = radius * radius;
+    if (!std::isfinite(queryRadiusSquared)) return false;
+    for (float component : origin) {
+        if (!std::isfinite(component)) return false;
+    }
+    for (float component : direction) {
+        if (!std::isfinite(component)) return false;
+    }
+    const float directionLength = std::sqrt(dot(direction, direction));
+    if (!std::isfinite(directionLength) || directionLength <= 1.0e-8f) return false;
+    const Vec3 unitDirection{direction[0] / directionLength,
+            direction[1] / directionLength, direction[2] / directionLength};
+    const Vec3 displacement{unitDirection[0] * maximumDistance,
+            unitDirection[1] * maximumDistance, unitDirection[2] * maximumDistance};
+
+    bool found = false;
+    float closestDistance = maximumDistance;
+    for (const Entity& entity : entities_) {
+        CollisionShape target;
+        if (!collisionShape(entity, target)
+                || (queryMask & target.collisionLayer) == 0U
+                || (target.collisionMask & queryLayer) == 0U) continue;
+
+        float distance = 0.0f;
+        Vec3 contactPoint{};
+        Vec3 normal{};
+        bool initiallyOverlapping = false;
+        if (target.sphere) {
+            Vec3 fromTarget{origin[0] - target.center[0], origin[1] - target.center[1],
+                    origin[2] - target.center[2]};
+            const float distanceSquared = dot(fromTarget, fromTarget);
+            const float combinedRadius = radius + target.radius;
+            const float combinedRadiusSquared = combinedRadius * combinedRadius;
+            if (!std::isfinite(distanceSquared) || !std::isfinite(combinedRadiusSquared)) continue;
+            initiallyOverlapping = distanceSquared <= combinedRadiusSquared;
+            if (initiallyOverlapping) {
+                const float centerDistance = std::sqrt(std::max(distanceSquared, 0.0f));
+                if (centerDistance > 1.0e-8f) {
+                    for (float& component : fromTarget) component /= centerDistance;
+                    normal = fromTarget;
+                } else {
+                    normal = {-unitDirection[0], -unitDirection[1], -unitDirection[2]};
+                }
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    contactPoint[axis] = target.center[axis] + normal[axis] * target.radius;
+                }
+            }
+        } else {
+            const Vec3 relative{origin[0] - target.center[0], origin[1] - target.center[1],
+                    origin[2] - target.center[2]};
+            contactPoint = target.center;
+            Vec3 local{};
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                local[axis] = dot(relative, target.axes[axis]);
+                const float coordinate = std::clamp(local[axis], -target.halfExtents[axis],
+                        target.halfExtents[axis]);
+                for (std::size_t component = 0; component < 3; ++component) {
+                    contactPoint[component] += target.axes[axis][component] * coordinate;
+                }
+            }
+            Vec3 fromSurface{origin[0] - contactPoint[0], origin[1] - contactPoint[1],
+                    origin[2] - contactPoint[2]};
+            const float distanceSquared = dot(fromSurface, fromSurface);
+            if (!std::isfinite(distanceSquared)) continue;
+            initiallyOverlapping = distanceSquared <= queryRadiusSquared;
+            if (initiallyOverlapping) {
+                if (distanceSquared > 1.0e-12f) {
+                    const float centerDistance = std::sqrt(distanceSquared);
+                    for (float& component : fromSurface) component /= centerDistance;
+                    normal = fromSurface;
+                } else {
+                    std::size_t nearestAxis = 0;
+                    float nearestFaceDistance = std::numeric_limits<float>::max();
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        const float faceDistance = target.halfExtents[axis]
+                                - std::fabs(local[axis]);
+                        if (faceDistance < nearestFaceDistance) {
+                            nearestFaceDistance = faceDistance;
+                            nearestAxis = axis;
+                        }
+                    }
+                    const float side = local[nearestAxis] >= 0.0f ? 1.0f : -1.0f;
+                    for (std::size_t component = 0; component < 3; ++component) {
+                        normal[component] = target.axes[nearestAxis][component] * side;
+                        contactPoint[component] = target.center[component]
+                                + target.axes[nearestAxis][component]
+                                        * side * target.halfExtents[nearestAxis];
+                    }
+                }
+            }
+        }
+
+        if (!initiallyOverlapping) {
+            if (maximumDistance <= 0.0f) continue;
+            float fraction = 0.0f;
+            Vec3 sweepNormal{};
+            if (!sweepSphereAgainstShape(origin, displacement, radius, target,
+                                         fraction, sweepNormal)) continue;
+            distance = fraction * maximumDistance;
+            const Vec3 castCenter{origin[0] + displacement[0] * fraction,
+                    origin[1] + displacement[1] * fraction,
+                    origin[2] + displacement[2] * fraction};
+            if (target.sphere) {
+                Vec3 fromSurface{castCenter[0] - target.center[0],
+                        castCenter[1] - target.center[1], castCenter[2] - target.center[2]};
+                const float normalLength = std::sqrt(dot(fromSurface, fromSurface));
+                if (!std::isfinite(normalLength) || normalLength <= 1.0e-8f) continue;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    normal[axis] = fromSurface[axis] / normalLength;
+                    contactPoint[axis] = target.center[axis] + normal[axis] * target.radius;
+                }
+            } else {
+                const Vec3 relative{castCenter[0] - target.center[0],
+                        castCenter[1] - target.center[1], castCenter[2] - target.center[2]};
+                contactPoint = target.center;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const float coordinate = std::clamp(dot(relative, target.axes[axis]),
+                            -target.halfExtents[axis], target.halfExtents[axis]);
+                    for (std::size_t component = 0; component < 3; ++component) {
+                        contactPoint[component] += target.axes[axis][component] * coordinate;
+                    }
+                }
+                Vec3 fromSurface{castCenter[0] - contactPoint[0],
+                        castCenter[1] - contactPoint[1], castCenter[2] - contactPoint[2]};
+                const float normalLength = std::sqrt(dot(fromSurface, fromSurface));
+                if (normalLength > 1.0e-8f) {
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        normal[axis] = fromSurface[axis] / normalLength;
+                    }
+                } else {
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        normal[axis] = -sweepNormal[axis];
+                    }
+                }
+            }
+        }
+
+        if (found && distance >= closestDistance) continue;
+        found = true;
+        closestDistance = distance;
+        hit.entityId = entity.id;
+        hit.distance = distance;
+        hit.position = contactPoint;
+        hit.normal = normal;
+    }
+    return found;
+}
+
 std::size_t Scene::overlapSphere(const std::array<float, 3>& center, float radius,
                                  std::vector<std::uint32_t>& entityIds,
                                  std::uint32_t queryLayer,

@@ -996,6 +996,50 @@ void testOverlapQueriesRespectSphereAndOrientedBoxGeometry() {
            "invalid overlap-query inputs clear prior result IDs");
 }
 
+void testSphereCastFindsFilteredSphereAndOrientedBoxContacts() {
+    nuby::Scene scene;
+    const std::uint32_t sphereId = scene.create("sphere-cast sphere", nuby::Primitive::None).id;
+    const std::uint32_t boxId = scene.create("sphere-cast OBB", nuby::Primitive::None).id;
+    nuby::Entity* sphere = scene.find(sphereId);
+    nuby::Entity* box = scene.find(boxId);
+    sphere->transform.position[0] = 4.0f;
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.5f;
+    sphere->sphereCollider.collisionLayer = 4U;
+    sphere->sphereCollider.collisionMask = 2U;
+    sphere->sphereCollider.trigger = true;
+    box->transform.position[0] = 8.0f;
+    box->transform.rotation[1] = 0.6f;
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.5f, 0.5f, 0.1f};
+    box->boxCollider.collisionLayer = 8U;
+    box->boxCollider.collisionMask = 2U;
+
+    nuby::SphereCastHit hit;
+    expect(scene.sphereCast({0.0f, 0.0f, 0.0f}, {5.0f, 0.0f, 0.0f},
+                   0.5f, 10.0f, hit, 2U, 12U)
+                   && hit.entityId == sphereId && near(hit.distance, 3.0f)
+                   && near(hit.position[0], 3.5f) && near(hit.normal[0], -1.0f),
+           "sphere cast reports the nearest sphere contact and normal with normalized direction");
+    expect(scene.sphereCast({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f},
+                   0.2f, 10.0f, hit, 2U, 8U)
+                   && hit.entityId == boxId && near(hit.distance, 7.469f, 0.025f)
+                   && near(std::sqrt(hit.normal[0] * hit.normal[0]
+                               + hit.normal[1] * hit.normal[1]
+                               + hit.normal[2] * hit.normal[2]), 1.0f, 0.002f),
+           "sphere cast sweeps against rotated OBB geometry and respects reciprocal filters");
+    expect(!scene.sphereCast({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f},
+                   0.2f, 1.0f, hit, 2U, 8U) && hit.entityId == 0,
+           "sphere cast respects maximum travel distance and clears misses");
+    expect(scene.sphereCast({4.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f},
+                   0.2f, 0.0f, hit, 2U, 4U)
+                   && hit.entityId == sphereId && near(hit.distance, 0.0f),
+           "sphere cast reports a starting overlap even with zero travel distance");
+    expect(!scene.sphereCast({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+                   0.2f, 1.0f, hit) && hit.entityId == 0,
+           "sphere cast rejects a zero direction and clears the output hit");
+}
+
 void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     nuby::Scene scene;
     scene.physicsSettings().floorEnabled = true;
@@ -1108,6 +1152,7 @@ int main() {
     testCollisionLayersFilterContactsTriggersAndFloor();
     testRaycastQueriesNearestSphereAndFilteredOrientedBox();
     testOverlapQueriesRespectSphereAndOrientedBoxGeometry();
+    testSphereCastFindsFilteredSphereAndOrientedBoxContacts();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();

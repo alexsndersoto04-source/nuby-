@@ -201,6 +201,14 @@ struct RaycastHit {
     std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
 };
 
+// Sphere sweep result; position is the contact point on the target collider.
+struct SphereCastHit {
+    std::uint32_t entityId = 0;
+    float distance = 0.0f;
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
+};
+
 struct PointLightComponent {
     bool enabled = false;
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
@@ -283,6 +291,13 @@ public:
                  const std::array<float, 3>& direction, float maximumDistance,
                  RaycastHit& hit, std::uint32_t queryLayer = 1U,
                  std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    // Sweeps a fixed-radius sphere; starting overlaps report distance zero.
+    // Position is the target-surface contact point; triggers and reciprocal filters apply.
+    bool sphereCast(const std::array<float, 3>& origin,
+                    const std::array<float, 3>& direction, float radius,
+                    float maximumDistance, SphereCastHit& hit,
+                    std::uint32_t queryLayer = 1U,
+                    std::uint32_t queryMask = 0xFFFFFFFFU) const;
     // Overlap queries include triggers; touching without penetration is excluded.
     std::size_t overlapSphere(const std::array<float, 3>& center, float radius,
                               std::vector<std::uint32_t>& entityIds,
