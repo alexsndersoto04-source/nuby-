@@ -188,6 +188,7 @@ private:
     std::unordered_map<std::string, ImportedModel> importedMeshes_;
     std::unordered_map<std::uint32_t, SkeletalPose> evaluatedSkeletalPoses_;
     std::unordered_map<std::string, GLuint> textures_;
+    std::unordered_map<std::string, std::string> embeddedImageData_;
     std::vector<DrawItem> opaqueDrawItems_;
     std::vector<DrawItem> transparentDrawItems_;
     std::vector<ShadowDrawItem> shadowDrawItems_;

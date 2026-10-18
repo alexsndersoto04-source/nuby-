@@ -1052,7 +1052,9 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
                 "GLB asset is unavailable or exceeds limits: %s", assetPath.c_str());
         return false;
     }
-    const auto applyGltfMaterial = [](const GltfPrimitive& primitive, ImportedPart& part) {
+    const auto applyGltfMaterial = [this, &assetPath](
+            const GltfPrimitive& primitive,
+            const std::vector<GltfEmbeddedImage>& images, ImportedPart& part) {
         part.hasMaterial = primitive.hasMaterial;
         if (!primitive.hasMaterial) return;
         part.material.color = {primitive.material.baseColorFactor[0],
@@ -1063,6 +1065,31 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
         part.material.emission = primitive.material.emissiveFactor;
         part.material.metallic = primitive.material.metallicFactor;
         part.material.roughness = primitive.material.roughnessFactor;
+        part.material.ambientOcclusion = primitive.material.occlusionStrength;
+        const auto texturePath = [this, &assetPath, &images](std::int32_t imageIndex) {
+            if (imageIndex < 0 || static_cast<std::size_t>(imageIndex) >= images.size()) {
+                return std::string{};
+            }
+            const std::string relative = "__nuby_internal/gltf/" + assetPath
+                    + "/image_" + std::to_string(imageIndex) + ".png";
+            const std::string resolved = projectAssetPath(relative);
+            if (resolved.empty()) return std::string{};
+            if (embeddedImageData_.find(resolved) == embeddedImageData_.end()) {
+                embeddedImageData_.emplace(
+                        resolved, images[static_cast<std::size_t>(imageIndex)].bytes);
+            }
+            return relative;
+        };
+        part.material.albedoTexture = texturePath(primitive.material.baseColorImage);
+        part.material.metallicRoughnessTexture = texturePath(
+                primitive.material.metallicRoughnessImage);
+        part.material.normalTexture = texturePath(primitive.material.normalImage);
+        part.material.occlusionTexture = texturePath(primitive.material.occlusionImage);
+        part.material.emissiveTexture = texturePath(primitive.material.emissiveImage);
+        if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
+            part.material.opacityTexture = part.material.albedoTexture;
+            part.material.opacityMapChannel = ScalarTextureChannel::Matte;
+        }
     };
     GltfSkeletalAsset parsed;
     std::string error;
@@ -1079,7 +1106,7 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
         staticModel.parts.reserve(staticAsset.primitives.size());
         for (const GltfPrimitive& primitive : staticAsset.primitives) {
             ImportedPart part{};
-            applyGltfMaterial(primitive, part);
+            applyGltfMaterial(primitive, staticAsset.images, part);
             part.mesh = uploadStaticGltfMesh(primitive);
             if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
                 if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -1109,7 +1136,7 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
     for (GltfPrimitive& primitive : parsed.primitives) {
         ImportedPart part{};
         part.skinned = true;
-        applyGltfMaterial(primitive, part);
+        applyGltfMaterial(primitive, parsed.images, part);
         part.mesh = uploadSkinnedMesh(primitive);
         if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -1208,31 +1235,37 @@ bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) 
 
 bool Renderer::loadImageAsset(const std::string& assetPath, GLuint& texture) {
     texture = 0;
-    if (assetManager_ == nullptr) return false;
-    AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
-    if (asset == nullptr) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "Texture asset not found: %s", assetPath.c_str());
-        return false;
-    }
-    constexpr off_t kMaximumAssetBytes = 64 * 1024 * 1024;
-    const off_t length = AAsset_getLength(asset);
-    if (length <= 0 || length > kMaximumAssetBytes) {
+    std::string encoded;
+    const auto embedded = embeddedImageData_.find(assetPath);
+    if (embedded != embeddedImageData_.end()) {
+        encoded = embedded->second;
+    } else {
+        if (assetManager_ == nullptr) return false;
+        AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
+        if (asset == nullptr) {
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "Texture asset not found: %s", assetPath.c_str());
+            return false;
+        }
+        constexpr off_t kMaximumAssetBytes = 64 * 1024 * 1024;
+        const off_t length = AAsset_getLength(asset);
+        if (length <= 0 || length > kMaximumAssetBytes) {
+            AAsset_close(asset);
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "Texture asset has invalid size: %s", assetPath.c_str());
+            return false;
+        }
+        encoded.resize(static_cast<std::size_t>(length));
+        std::size_t bytesRead = 0;
+        while (bytesRead < encoded.size()) {
+            const int count = AAsset_read(asset, encoded.data() + bytesRead,
+                                          encoded.size() - bytesRead);
+            if (count <= 0) break;
+            bytesRead += static_cast<std::size_t>(count);
+        }
         AAsset_close(asset);
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "Texture asset has invalid size: %s", assetPath.c_str());
-        return false;
+        if (bytesRead != encoded.size()) return false;
     }
-    std::string encoded(static_cast<std::size_t>(length), '\0');
-    std::size_t bytesRead = 0;
-    while (bytesRead < encoded.size()) {
-        const int count = AAsset_read(asset, encoded.data() + bytesRead,
-                                      encoded.size() - bytesRead);
-        if (count <= 0) break;
-        bytesRead += static_cast<std::size_t>(count);
-    }
-    AAsset_close(asset);
-    if (bytesRead != encoded.size()) return false;
 
     ImageRgba8 image;
     std::string error;
@@ -1268,7 +1301,7 @@ bool Renderer::loadImageAsset(const std::string& assetPath, GLuint& texture) {
         return false;
     }
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Loaded TGA %s (%u x %u)", assetPath.c_str(), image.width, image.height);
+            "Loaded image %s (%u x %u)", assetPath.c_str(), image.width, image.height);
     return true;
 }
 
@@ -1753,6 +1786,13 @@ void Renderer::loadSceneAssets() {
         }
     }
 
+    for (auto embedded = embeddedImageData_.begin(); embedded != embeddedImageData_.end();) {
+        if (requiredTextures.find(embedded->first) != requiredTextures.end()) {
+            ++embedded;
+        } else {
+            embedded = embeddedImageData_.erase(embedded);
+        }
+    }
     for (auto texture = textures_.begin(); texture != textures_.end();) {
         if (requiredTextures.find(texture->first) != requiredTextures.end()) {
             ++texture;

@@ -1,4 +1,5 @@
 #include "nuby/gltf_loader.hpp"
+#include "nuby/image_loader.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -118,6 +119,51 @@ std::string makeTriangleWithMaterialGlb(const std::string& materialJson) {
     json.replace(primitive, primitiveEnd.size(), "\"indices\":1,\"material\":0}]");
     const std::size_t updatedMeshes = json.find("\"meshes\":");
     json.insert(updatedMeshes, "\"materials\":[{" + materialJson + "}],");
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, std::move(json));
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
+std::string makeTexturedTriangleGlb(const std::string& materialJson,
+                                    const std::string& textureDefinitions =
+                                            R"JSON("images":[{"bufferView":2,"mimeType":"image/png"}],"textures":[{"source":0}],)JSON") {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeTriangleGlb(), json, binary, error)) return {};
+    const std::string pngHex = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c48900000010494441547801010500faff00ff2010ff0580022f7afc29410000000049454e44ae426082";
+    std::string image;
+    for (std::size_t index = 0; index < pngHex.size(); index += 2U) {
+        image.push_back(static_cast<char>(std::stoul(pngHex.substr(index, 2U), nullptr, 16)));
+    }
+    while ((binary.size() & 3U) != 0U) binary.push_back('\0');
+    const std::size_t imageOffset = binary.size();
+    binary += image;
+    const std::string oldLength = R"JSON("byteLength":42)JSON";
+    const std::size_t bufferLength = json.find(oldLength);
+    if (bufferLength == std::string::npos) return {};
+    json.replace(bufferLength, oldLength.size(), R"JSON("byteLength":)JSON"
+            + std::to_string(binary.size()));
+    const std::string oldViews = R"JSON({"buffer":0,"byteOffset":36,"byteLength":6}])JSON";
+    const std::size_t views = json.find(oldViews);
+    if (views == std::string::npos) return {};
+    json.replace(views, oldViews.size(), oldViews.substr(0, oldViews.size() - 1U)
+            + R"JSON(,{"buffer":0,"byteOffset":)JSON"
+            + std::to_string(imageOffset) + R"JSON(,"byteLength":)JSON"
+            + std::to_string(image.size()) + "}]");
+    const std::string primitive = R"JSON("indices":1}])JSON";
+    const std::size_t primitiveOffset = json.find(primitive);
+    const std::size_t meshOffset = json.find(R"JSON("meshes":)JSON");
+    if (primitiveOffset == std::string::npos || meshOffset == std::string::npos) return {};
+    json.replace(primitiveOffset, primitive.size(), R"JSON("indices":1,"material":0}])JSON");
+    const std::size_t updatedMeshes = json.find(R"JSON("meshes":)JSON");
+    json.insert(updatedMeshes, R"JSON("scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)JSON"
+            + textureDefinitions + R"JSON("materials":[{)JSON" + materialJson + "}],");
     std::string data;
     appendU32(data, 0x46546C67U);
     appendU32(data, 2U);
@@ -347,6 +393,54 @@ void testGltfPbrMaterialFactors() {
            "unsupported glTF material textures are not silently discarded");
 }
 
+void testGlbMaterialsBindEmbeddedPngTextures() {
+    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.8,0.7,0.6,0.5],"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0},"metallicFactor":0.3,"roughnessFactor":0.4},"normalTexture":{"index":0},"occlusionTexture":{"index":0,"strength":0.45},"emissiveTexture":{"index":0},"emissiveFactor":[0.1,0.2,0.3],"alphaMode":"BLEND")JSON";
+    const std::string glb = makeTexturedTriangleGlb(material);
+    std::vector<nuby::GltfPrimitive> primitives;
+    std::string error;
+    expect(nuby::parseGlbMeshes(glb, primitives, error),
+           "GLB material texture slots resolve to embedded PNG images");
+    expect(primitives.size() == 1 && primitives[0].hasMaterial
+                   && primitives[0].material.baseColorImage == 0
+                   && primitives[0].material.metallicRoughnessImage == 0
+                   && primitives[0].material.normalImage == 0
+                   && primitives[0].material.occlusionImage == 0
+                   && primitives[0].material.emissiveImage == 0
+                   && primitives[0].material.alphaBlend
+                   && std::fabs(primitives[0].material.occlusionStrength - 0.45f) < 1.0e-6f,
+           "all supported glTF PBR texture references and blend factors are retained");
+
+    nuby::GltfStaticAsset asset;
+    expect(nuby::parseGlbStaticAsset(glb, asset, error)
+                   && asset.images.size() == 1U && asset.images[0].mimeType == "image/png"
+                   && asset.images[0].bytes.size() == 73U,
+           "static GLB asset exposes its bounded embedded PNG bytes to the renderer");
+    if (asset.images.size() == 1U) {
+        nuby::ImageRgba8 decoded;
+        expect(nuby::decodePng(asset.images[0].bytes, decoded, error)
+                       && decoded.width == 1U && decoded.height == 1U
+                       && decoded.pixels == std::vector<std::uint8_t>({255U, 32U, 16U, 255U}),
+               "embedded GLB PNG bytes decode through the shared engine image subsystem");
+    }
+
+    const std::string external = R"JSON("images":[{"uri":"albedo.png"}],"textures":[{"source":0}],)JSON";
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(material, external), primitives, error),
+           "external glTF image URIs are rejected rather than silently dropped");
+    const std::string jpeg = R"JSON("images":[{"bufferView":2,"mimeType":"image/jpeg"}],"textures":[{"source":0}],)JSON";
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(material, jpeg), primitives, error),
+           "unsupported JPEG glTF images are explicitly rejected");
+    const std::string customSampler = R"JSON("images":[{"bufferView":2,"mimeType":"image/png"}],"textures":[{"source":0,"sampler":0}],"samplers":[{"wrapS":33071}],)JSON";
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(material, customSampler), primitives, error),
+           "non-default glTF sampler settings are explicitly rejected");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":1}})JSON"),
+                   primitives, error),
+           "glTF material UV sets other than TEXCOORD_0 are rejected");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+                   R"JSON("alphaMode":"MASK")JSON"), primitives, error),
+           "alpha-mask materials remain rejected until cutout rendering is implemented");
+}
+
 void testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms() {
     nuby::GltfStaticAsset asset;
     std::string error;
@@ -556,6 +650,7 @@ int main() {
     testGlbRejectsInvalidHeadersAndLengths();
     testGlbImportsTriangleAndSkinAttributes();
     testGltfPbrMaterialFactors();
+    testGlbMaterialsBindEmbeddedPngTextures();
     testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
     testPackagedWayfarerAsset();

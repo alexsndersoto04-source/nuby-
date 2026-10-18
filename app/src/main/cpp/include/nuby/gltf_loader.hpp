@@ -16,7 +16,18 @@ struct GltfMaterial {
     std::array<float, 3> emissiveFactor{0.0f, 0.0f, 0.0f};
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
+    float occlusionStrength = 1.0f;
+    std::int32_t baseColorImage = -1;
+    std::int32_t metallicRoughnessImage = -1;
+    std::int32_t normalImage = -1;
+    std::int32_t occlusionImage = -1;
+    std::int32_t emissiveImage = -1;
     bool alphaBlend = false;
+};
+
+struct GltfEmbeddedImage {
+    std::string mimeType;
+    std::string bytes;
 };
 
 struct GltfPrimitive {
@@ -38,10 +49,12 @@ struct GltfStaticAsset {
     // One transformed primitive per visible mesh-node/primitive instance in the
     // selected glTF scene. Node transforms are baked into positions and normals.
     std::vector<GltfPrimitive> primitives;
+    std::vector<GltfEmbeddedImage> images;
 };
 
 struct GltfSkeletalAsset {
     std::vector<GltfPrimitive> primitives;
+    std::vector<GltfEmbeddedImage> images;
     std::vector<SkeletalJoint> skeleton;
     std::vector<GltfAnimation> animations;
 };
@@ -57,9 +70,10 @@ bool validateGltf2Json(std::string_view json, std::string& error);
 
 // Imports triangle primitives from a self-contained GLB with one embedded
 // buffer. Supports float POSITION/NORMAL/TEXCOORD_0, unsigned scalar indices,
-// optional JOINTS_0/WEIGHTS_0 with four influences, and per-primitive glTF
-// metallic-roughness material factors. Image textures and MASK alpha are
-// rejected until their renderer paths are implemented.
+// optional JOINTS_0/WEIGHTS_0 with four influences, glTF PBR material factors,
+// and image-index references to embedded PNGs used by standard texture slots.
+// Higher-level asset APIs return encoded image bytes. External images, non-PNG
+// formats, non-default samplers/UV sets and MASK alpha are rejected.
 bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                     std::string& error);
 
@@ -72,9 +86,8 @@ bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
 
 // Imports a constrained single-mesh-node, single-skin GLB subset, including
 // multiple triangle primitives, parent-first joints, inverse-bind matrices,
-// per-vertex weights, PBR material factors and LINEAR TRS animation channels.
-// Unsupported hierarchy, image textures and interpolation forms are rejected
-// rather than silently discarded.
+// per-vertex weights, embedded PNG PBR textures and LINEAR TRS animation.
+// Unsupported hierarchy, image formats and interpolation forms are rejected.
 bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                            std::string& error);
 

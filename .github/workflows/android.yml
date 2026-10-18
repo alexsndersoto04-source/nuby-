@@ -120,7 +120,9 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic
           -Iapp/src/main/cpp/include
           app/src/main/cpp/src/gltf_loader.cpp
-          app/src/main/cpp/src/skeletal_animation.cpp tests/gltf_loader_tests.cpp
+          app/src/main/cpp/src/skeletal_animation.cpp
+          app/src/main/cpp/src/image_loader.cpp app/src/main/cpp/src/png_loader.cpp
+          tests/gltf_loader_tests.cpp
           -o /tmp/nuby-gltf-tests
           && /tmp/nuby-gltf-tests
 

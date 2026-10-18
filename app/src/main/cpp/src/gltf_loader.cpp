@@ -637,6 +637,16 @@ bool jsonFloat(const JsonValue* value, float& output) {
     return true;
 }
 
+bool optionalFloat(const JsonValue& object, const char* name,
+                   float defaultValue, float& output) {
+    const JsonValue* value = member(object, name);
+    if (value == nullptr) {
+        output = defaultValue;
+        return true;
+    }
+    return jsonFloat(value, output);
+}
+
 template <std::size_t N>
 bool jsonFloatArray(const JsonValue* value, std::array<float, N>& output) {
     if (value == nullptr || value->type != JsonValue::Type::Array
@@ -647,8 +657,123 @@ bool jsonFloatArray(const JsonValue* value, std::array<float, N>& output) {
     return true;
 }
 
-bool parseGltfMaterials(const JsonValue& root, std::vector<GltfMaterial>& output,
-                        std::string& error) {
+bool parseGlbImageMetadata(const JsonValue& root, const std::string& binary,
+                           const std::vector<BufferView>& views,
+                           std::vector<GltfEmbeddedImage>& images,
+                           std::vector<std::int32_t>& textureImageIndices,
+                           bool copyImageBytes, std::string& error) {
+    images.clear();
+    textureImageIndices.clear();
+    constexpr std::size_t kMaximumImages = 256U;
+    constexpr std::size_t kMaximumEmbeddedImageBytes = 64U * 1024U * 1024U;
+    const JsonValue* sourceImages = member(root, "images");
+    if (sourceImages != nullptr) {
+        if (sourceImages->type != JsonValue::Type::Array
+                || sourceImages->arrayValue.size() > kMaximumImages) {
+            return fail(error, "GLB images array is invalid or exceeds limits");
+        }
+        std::size_t totalBytes = 0;
+        images.reserve(sourceImages->arrayValue.size());
+        for (const JsonValue& source : sourceImages->arrayValue) {
+            if (source.type != JsonValue::Type::Object || member(source, "uri") != nullptr
+                    || member(source, "extensions") != nullptr) {
+                return fail(error, "GLB images must use embedded bufferViews, not external URIs");
+            }
+            const JsonValue* mimeType = member(source, "mimeType");
+            std::uint32_t viewIndex = 0;
+            if (mimeType == nullptr || mimeType->type != JsonValue::Type::String
+                    || mimeType->stringValue != "image/png"
+                    || !unsignedInteger(member(source, "bufferView"), viewIndex)
+                    || viewIndex >= views.size()) {
+                return fail(error, "GLB embedded images must be PNG bufferViews");
+            }
+            const BufferView& view = views[viewIndex];
+            if (view.stride != 0U || view.length < 8U
+                    || view.offset > binary.size() || view.length > binary.size() - view.offset
+                    || view.length > kMaximumEmbeddedImageBytes - totalBytes) {
+                return fail(error, "GLB embedded image bufferView is invalid or too large");
+            }
+            const std::string_view encoded(binary.data() + view.offset, view.length);
+            constexpr unsigned char pngSignature[] = {137U, 80U, 78U, 71U, 13U, 10U, 26U, 10U};
+            for (std::size_t index = 0; index < 8U; ++index) {
+                if (static_cast<unsigned char>(encoded[index]) != pngSignature[index]) {
+                    return fail(error, "GLB image/png bufferView has an invalid PNG signature");
+                }
+            }
+            GltfEmbeddedImage image;
+            image.mimeType = mimeType->stringValue;
+            if (copyImageBytes) image.bytes.assign(encoded.data(), encoded.size());
+            totalBytes += view.length;
+            images.push_back(std::move(image));
+        }
+    }
+
+    const JsonValue* textures = member(root, "textures");
+    if (textures == nullptr) return true;
+    if (textures->type != JsonValue::Type::Array || textures->arrayValue.size() > 4096U) {
+        return fail(error, "GLB textures array is invalid or exceeds limits");
+    }
+    const JsonValue* samplers = member(root, "samplers");
+    if (samplers != nullptr && (samplers->type != JsonValue::Type::Array
+            || samplers->arrayValue.size() > 4096U)) {
+        return fail(error, "GLB samplers array is invalid or exceeds limits");
+    }
+    textureImageIndices.reserve(textures->arrayValue.size());
+    for (const JsonValue& texture : textures->arrayValue) {
+        std::uint32_t sourceIndex = 0;
+        if (texture.type != JsonValue::Type::Object
+                || member(texture, "extensions") != nullptr
+                || !unsignedInteger(member(texture, "source"), sourceIndex)
+                || sourceIndex >= images.size()) {
+            return fail(error, "GLB texture references an unsupported or invalid image source");
+        }
+        if (const JsonValue* samplerValue = member(texture, "sampler"); samplerValue != nullptr) {
+            std::uint32_t samplerIndex = 0;
+            if (samplers == nullptr || samplers->type != JsonValue::Type::Array
+                    || !unsignedInteger(samplerValue, samplerIndex)
+                    || samplerIndex >= samplers->arrayValue.size()) {
+                return fail(error, "GLB texture references an invalid sampler");
+            }
+            const JsonValue& sampler = samplers->arrayValue[samplerIndex];
+            std::uint32_t wrapS = 10497U;
+            std::uint32_t wrapT = 10497U;
+            std::uint32_t minFilter = 9987U;
+            std::uint32_t magFilter = 9729U;
+            if (sampler.type != JsonValue::Type::Object
+                    || !optionalUnsigned(sampler, "wrapS", 10497U, wrapS)
+                    || !optionalUnsigned(sampler, "wrapT", 10497U, wrapT)
+                    || !optionalUnsigned(sampler, "minFilter", 9987U, minFilter)
+                    || !optionalUnsigned(sampler, "magFilter", 9729U, magFilter)
+                    || wrapS != 10497U || wrapT != 10497U
+                    || minFilter != 9987U || magFilter != 9729U) {
+                return fail(error, "GLB custom sampler settings are unsupported");
+            }
+        }
+        textureImageIndices.push_back(static_cast<std::int32_t>(sourceIndex));
+    }
+    return true;
+}
+
+bool parseTextureInfo(const JsonValue* info,
+                      const std::vector<std::int32_t>& textureImageIndices,
+                      std::int32_t& imageIndex, std::string& error) {
+    imageIndex = -1;
+    if (info == nullptr) return true;
+    std::uint32_t textureIndex = 0;
+    std::uint32_t texCoord = 0;
+    if (info->type != JsonValue::Type::Object || member(*info, "extensions") != nullptr
+            || !unsignedInteger(member(*info, "index"), textureIndex)
+            || !optionalUnsigned(*info, "texCoord", 0U, texCoord) || texCoord != 0U
+            || textureIndex >= textureImageIndices.size()) {
+        return fail(error, "GLB textureInfo must reference an embedded texture using TEXCOORD_0");
+    }
+    imageIndex = textureImageIndices[textureIndex];
+    return true;
+}
+
+bool parseGltfMaterials(const JsonValue& root,
+                        const std::vector<std::int32_t>& textureImageIndices,
+                        std::vector<GltfMaterial>& output, std::string& error) {
     output.clear();
     const JsonValue* materials = member(root, "materials");
     if (materials == nullptr) return true;
@@ -660,21 +785,17 @@ bool parseGltfMaterials(const JsonValue& root, std::vector<GltfMaterial>& output
         if (source.type != JsonValue::Type::Object) {
             return fail(error, "GLB material must be an object");
         }
-        for (const char* textureSlot : {"normalTexture", "occlusionTexture", "emissiveTexture"}) {
-            if (member(source, textureSlot) != nullptr) {
-                return fail(error, "Textured glTF materials are not supported by this renderer");
-            }
-        }
         GltfMaterial material;
         const JsonValue* pbr = member(source, "pbrMetallicRoughness");
         if (pbr != nullptr && pbr->type != JsonValue::Type::Object) {
             return fail(error, "GLB pbrMetallicRoughness must be an object");
         }
         if (pbr != nullptr) {
-            if (member(*pbr, "baseColorTexture") != nullptr
-                    || member(*pbr, "metallicRoughnessTexture") != nullptr) {
-                return fail(error, "Textured glTF materials are not supported by this renderer");
-            }
+            if (!parseTextureInfo(member(*pbr, "baseColorTexture"), textureImageIndices,
+                                  material.baseColorImage, error)
+                    || !parseTextureInfo(member(*pbr, "metallicRoughnessTexture"),
+                                         textureImageIndices,
+                                         material.metallicRoughnessImage, error)) return false;
             const JsonValue* baseColor = member(*pbr, "baseColorFactor");
             if (baseColor != nullptr && !jsonFloatArray(baseColor, material.baseColorFactor)) {
                 return fail(error, "GLB baseColorFactor must contain four finite values");
@@ -685,6 +806,24 @@ bool parseGltfMaterials(const JsonValue& root, std::vector<GltfMaterial>& output
                     || (roughness != nullptr
                         && !jsonFloat(roughness, material.roughnessFactor))) {
                 return fail(error, "GLB metallic or roughness factor is invalid");
+            }
+        }
+        if (!parseTextureInfo(member(source, "normalTexture"), textureImageIndices,
+                              material.normalImage, error)
+                || !parseTextureInfo(member(source, "occlusionTexture"), textureImageIndices,
+                                     material.occlusionImage, error)
+                || !parseTextureInfo(member(source, "emissiveTexture"), textureImageIndices,
+                                     material.emissiveImage, error)) return false;
+        if (const JsonValue* normal = member(source, "normalTexture"); normal != nullptr) {
+            float scale = 1.0f;
+            if (!optionalFloat(*normal, "scale", 1.0f, scale) || scale != 1.0f) {
+                return fail(error, "GLB normalTexture scale values other than one are unsupported");
+            }
+        }
+        if (const JsonValue* occlusion = member(source, "occlusionTexture"); occlusion != nullptr) {
+            if (!optionalFloat(*occlusion, "strength", 1.0f, material.occlusionStrength)
+                    || material.occlusionStrength < 0.0f || material.occlusionStrength > 1.0f) {
+                return fail(error, "GLB occlusionTexture strength is invalid");
             }
         }
         const JsonValue* emissive = member(source, "emissiveFactor");
@@ -920,8 +1059,12 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
     std::vector<BufferView> views;
     std::vector<Accessor> accessors;
     if (!parseViewsAndAccessors(root, binary.size(), views, accessors, error)) return false;
+    std::vector<GltfEmbeddedImage> embeddedImages;
+    std::vector<std::int32_t> textureImageIndices;
+    if (!parseGlbImageMetadata(root, binary, views, embeddedImages,
+                               textureImageIndices, false, error)) return false;
     std::vector<GltfMaterial> materials;
-    if (!parseGltfMaterials(root, materials, error)) return false;
+    if (!parseGltfMaterials(root, textureImageIndices, materials, error)) return false;
 
     const JsonValue* meshes = member(root, "meshes");
     if (meshes == nullptr || meshes->type != JsonValue::Type::Array
@@ -1260,6 +1403,12 @@ bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
     }
 
     GltfStaticAsset candidate;
+    std::vector<BufferView> imageViews;
+    std::vector<Accessor> imageAccessors;
+    std::vector<std::int32_t> textureImageIndices;
+    if (!parseViewsAndAccessors(root, binary.size(), imageViews, imageAccessors, error)
+            || !parseGlbImageMetadata(root, binary, imageViews, candidate.images,
+                                      textureImageIndices, true, error)) return false;
     std::size_t totalVertices = 0;
     std::size_t totalIndices = 0;
     const Matrix4 identity{1.0f, 0.0f, 0.0f, 0.0f,
@@ -1410,6 +1559,9 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
     }
 
     GltfSkeletalAsset candidate;
+    std::vector<std::int32_t> textureImageIndices;
+    if (!parseGlbImageMetadata(root, binary, views, candidate.images,
+                               textureImageIndices, true, error)) return false;
     candidate.skeleton.reserve(parentFirstNodes.size());
     std::vector<std::int32_t> jointIndexByNode(nodes.size(), -1);
     for (std::uint32_t nodeIndex : parentFirstNodes) {
