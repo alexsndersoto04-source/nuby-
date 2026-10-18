@@ -640,6 +640,38 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
     Mesh mesh{};
     if (vertices.empty()) return mesh;
 
+    bool finitePositions = true;
+    for (const Vertex& vertex : vertices) {
+        for (float component : vertex.position) {
+            if (!std::isfinite(component)) finitePositions = false;
+        }
+    }
+    if (finitePositions) {
+        Vec3 minimum{vertices.front().position[0], vertices.front().position[1],
+                vertices.front().position[2]};
+        Vec3 maximum = minimum;
+        for (const Vertex& vertex : vertices) {
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
+                maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
+            }
+        }
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            mesh.boundsCenter[axis] = (minimum[axis] + maximum[axis]) * 0.5f;
+        }
+        float radiusSquared = 0.0f;
+        for (const Vertex& vertex : vertices) {
+            const float dx = vertex.position[0] - mesh.boundsCenter[0];
+            const float dy = vertex.position[1] - mesh.boundsCenter[1];
+            const float dz = vertex.position[2] - mesh.boundsCenter[2];
+            radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
+        }
+        if (std::isfinite(radiusSquared)) {
+            mesh.boundsRadius = std::sqrt(radiusSquared);
+            mesh.boundsValid = std::isfinite(mesh.boundsRadius);
+        }
+    }
+
     glGenVertexArrays(1, &mesh.vao);
     glGenBuffers(1, &mesh.vbo);
     glBindVertexArray(mesh.vao);
@@ -1351,6 +1383,33 @@ void Renderer::initializeShadowMap() {
             kShadowMapSize, kShadowMapSize);
 }
 
+bool Renderer::meshIntersectsFrustum(const Mesh& mesh, const Mat4& model,
+                                     const ViewFrustum& frustum) const {
+    if (!mesh.boundsValid || !frustum.valid) return true;
+    Vec3 worldCenter{
+            model[0] * mesh.boundsCenter[0] + model[4] * mesh.boundsCenter[1]
+                    + model[8] * mesh.boundsCenter[2] + model[12],
+            model[1] * mesh.boundsCenter[0] + model[5] * mesh.boundsCenter[1]
+                    + model[9] * mesh.boundsCenter[2] + model[13],
+            model[2] * mesh.boundsCenter[0] + model[6] * mesh.boundsCenter[1]
+                    + model[10] * mesh.boundsCenter[2] + model[14]};
+    if (!std::isfinite(worldCenter[0]) || !std::isfinite(worldCenter[1])
+            || !std::isfinite(worldCenter[2])) return true;
+
+    const float rowNorm = std::max({
+            std::fabs(model[0]) + std::fabs(model[4]) + std::fabs(model[8]),
+            std::fabs(model[1]) + std::fabs(model[5]) + std::fabs(model[9]),
+            std::fabs(model[2]) + std::fabs(model[6]) + std::fabs(model[10])});
+    const float columnNorm = std::max({
+            std::fabs(model[0]) + std::fabs(model[1]) + std::fabs(model[2]),
+            std::fabs(model[4]) + std::fabs(model[5]) + std::fabs(model[6]),
+            std::fabs(model[8]) + std::fabs(model[9]) + std::fabs(model[10])});
+    const float scaleBound = std::sqrt(rowNorm * columnNorm);
+    const float worldRadius = mesh.boundsRadius * scaleBound;
+    if (!std::isfinite(worldRadius)) return true;
+    return sphereIntersectsFrustum(frustum, worldCenter, worldRadius);
+}
+
 void Renderer::renderShadowMaps() {
     if (!shadowsAvailable_ || !shadowCascadesValid_ || shadowProgram_ == 0) return;
 
@@ -1370,6 +1429,8 @@ void Renderer::renderShadowMaps() {
         glDisable(GL_SCISSOR_TEST);
         glUniformMatrix4fv(shadowProgramLightViewProjection_, 1, GL_FALSE,
                            shadowViewProjections_[cascade].data());
+        ViewFrustum cascadeFrustum;
+        extractViewFrustum(shadowViewProjections_[cascade], cascadeFrustum);
 
         for (const Entity& entity : activeScene().entities()) {
             if (!entity.visible || entity.primitive == Primitive::Ground) continue;
@@ -1383,7 +1444,8 @@ void Renderer::renderShadowMaps() {
                         const Material& material = part.hasMaterial
                                 && !entity.overrideMtlMaterials ? part.material : entity.material;
                         if (part.mesh.vao == 0 || material.opacity < 1.0f
-                                || !material.opacityTexture.empty()) continue;
+                                || !material.opacityTexture.empty()
+                                || !meshIntersectsFrustum(part.mesh, model, cascadeFrustum)) continue;
                         glBindVertexArray(part.mesh.vao);
                         glDrawArrays(GL_TRIANGLES, 0, part.mesh.vertexCount);
                     }
@@ -1393,7 +1455,8 @@ void Renderer::renderShadowMaps() {
             if (entity.material.opacity < 1.0f
                     || !entity.material.opacityTexture.empty()) continue;
             const Mesh* mesh = meshFor(entity);
-            if (mesh == nullptr || mesh->vao == 0) continue;
+            if (mesh == nullptr || mesh->vao == 0
+                    || !meshIntersectsFrustum(*mesh, model, cascadeFrustum)) continue;
             glBindVertexArray(mesh->vao);
             glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
         }
@@ -1919,6 +1982,8 @@ void Renderer::render(float deltaSeconds) {
     const Mat4 projection = perspective(verticalFov, aspectRatio, nearPlane, farPlane);
     view_ = view;
     viewProjection_ = multiply(projection, view);
+    ViewFrustum cameraFrustum;
+    extractViewFrustum(viewProjection_, cameraFrustum);
 
     if (shadowsAvailable_) {
         const ShadowCameraFrustum shadowCamera{
@@ -1953,9 +2018,10 @@ void Renderer::render(float deltaSeconds) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     opaqueDrawItems_.clear();
     transparentDrawItems_.clear();
-    const auto queueDraw = [this](const Mesh& mesh, const Mat4& model,
-                                  const Material& material) {
-        if (material.opacity <= 0.0f) return;
+    const auto queueDraw = [this, &cameraFrustum](const Mesh& mesh, const Mat4& model,
+                                                   const Material& material) {
+        if (material.opacity <= 0.0f
+                || !meshIntersectsFrustum(mesh, model, cameraFrustum)) return;
         const float dx = model[12] - cameraPosition_[0];
         const float dy = model[13] - cameraPosition_[1];
         const float dz = model[14] - cameraPosition_[2];

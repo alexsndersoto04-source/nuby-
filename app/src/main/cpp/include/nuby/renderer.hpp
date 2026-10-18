@@ -10,6 +10,7 @@
 #include <android/asset_manager.h>
 
 #include "nuby/adventure_game.hpp"
+#include "nuby/frustum.hpp"
 #include "nuby/game_project_runtime.hpp"
 #include "nuby/image_loader.hpp"
 #include "nuby/mtl_loader.hpp"
@@ -53,6 +54,9 @@ private:
         GLuint vao = 0;
         GLuint vbo = 0;
         GLsizei vertexCount = 0;
+        std::array<float, 3> boundsCenter{0.0f, 0.0f, 0.0f};
+        float boundsRadius = 0.0f;
+        bool boundsValid = false;
     };
 
     struct ImportedPart {
@@ -140,6 +144,8 @@ private:
     const Mesh* meshFor(const Entity& entity) const;
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
               const Material& material);
+    bool meshIntersectsFrustum(const Mesh& mesh, const std::array<float, 16>& model,
+                               const ViewFrustum& frustum) const;
     void buildScene();
     void loadSceneAssets();
     void releaseSceneAssets();
