@@ -133,6 +133,9 @@ struct CollisionContact {
     float penetration = 0.0f;
 };
 
+bool collideShapes(const CollisionShape& first, const CollisionShape& second,
+                   CollisionContact& contact);
+
 bool collisionShape(const Entity& entity, CollisionShape& shape) {
     if (entity.sphereCollider.enabled == entity.boxCollider.enabled || entity.parentId != 0) {
         return false;
@@ -540,6 +543,152 @@ bool sweepCapsuleAgainstShape(const Vec3& start, const Vec3& end,
         if (candidate > 1.0f) return false;
     }
     return false;
+}
+
+bool sweepBoxAgainstShape(const CollisionShape& startBox, const Vec3& displacement,
+                          const CollisionShape& target, float& timeOfImpact,
+                          Vec3& contactPoint, Vec3& normal) {
+    const auto supportPoint = [](const CollisionShape& shape, const Vec3& direction) {
+        Vec3 point = shape.center;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const float projection = dot(shape.axes[axis], direction);
+            const float side = projection > 1.0e-6f ? 1.0f
+                    : projection < -1.0e-6f ? -1.0f : 0.0f;
+            for (std::size_t component = 0; component < 3; ++component) {
+                point[component] += shape.axes[axis][component]
+                        * shape.halfExtents[axis] * side;
+            }
+        }
+        return point;
+    };
+
+    CollisionContact initialContact;
+    if (collideShapes(startBox, target, initialContact)) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            normal[axis] = -initialContact.normal[axis];
+        }
+        if (target.sphere) {
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                contactPoint[axis] = target.center[axis] + normal[axis] * target.radius;
+            }
+        } else {
+            contactPoint = supportPoint(target, normal);
+        }
+        timeOfImpact = 0.0f;
+        return true;
+    }
+
+    if (target.sphere) {
+        float candidate = 0.0f;
+        for (unsigned int iteration = 0; iteration < 32; ++iteration) {
+            CollisionShape movingBox = startBox;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                movingBox.center[axis] += displacement[axis] * candidate;
+            }
+            const Vec3 relative{target.center[0] - movingBox.center[0],
+                    target.center[1] - movingBox.center[1],
+                    target.center[2] - movingBox.center[2]};
+            Vec3 closest = movingBox.center;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                const float coordinate = std::clamp(dot(relative, movingBox.axes[axis]),
+                        -movingBox.halfExtents[axis], movingBox.halfExtents[axis]);
+                for (std::size_t component = 0; component < 3; ++component) {
+                    closest[component] += movingBox.axes[axis][component] * coordinate;
+                }
+            }
+            Vec3 fromTarget{closest[0] - target.center[0], closest[1] - target.center[1],
+                    closest[2] - target.center[2]};
+            const float distanceSquared = dot(fromTarget, fromTarget);
+            if (!std::isfinite(distanceSquared)) return false;
+            const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
+            if (distance > 1.0e-8f) {
+                for (float& component : fromTarget) component /= distance;
+                normal = fromTarget;
+            } else {
+                const float speed = std::sqrt(dot(displacement, displacement));
+                normal = speed > 1.0e-8f
+                        ? Vec3{-displacement[0] / speed, -displacement[1] / speed,
+                               -displacement[2] / speed}
+                        : Vec3{1.0f, 0.0f, 0.0f};
+            }
+            const float separation = distance - target.radius;
+            if (separation <= 1.0e-5f) {
+                timeOfImpact = candidate;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    contactPoint[axis] = target.center[axis] + normal[axis] * target.radius;
+                }
+                return true;
+            }
+            const Vec3 towardTarget{-normal[0], -normal[1], -normal[2]};
+            const float closingDistance = dot(displacement, towardTarget);
+            if (!std::isfinite(closingDistance) || closingDistance <= 1.0e-8f) return false;
+            const float advance = separation / closingDistance;
+            if (!std::isfinite(advance) || advance <= 0.0f) return false;
+            candidate += std::max(advance, 1.0e-7f);
+            if (candidate > 1.0f) return false;
+        }
+        return false;
+    }
+
+    const Vec3 centerDelta{target.center[0] - startBox.center[0],
+            target.center[1] - startBox.center[1], target.center[2] - startBox.center[2]};
+    float entryTime = 0.0f;
+    float exitTime = 1.0f;
+    Vec3 entryNormal{-displacement[0], -displacement[1], -displacement[2]};
+    const float displacementLength = std::sqrt(dot(displacement, displacement));
+    if (displacementLength > 1.0e-8f) {
+        for (float& component : entryNormal) component /= displacementLength;
+    } else {
+        entryNormal = {1.0f, 0.0f, 0.0f};
+    }
+    const auto testAxis = [&](Vec3 axis) {
+        const float axisLengthSquared = dot(axis, axis);
+        if (axisLengthSquared <= 1.0e-10f) return true;
+        const float inverseLength = 1.0f / std::sqrt(axisLengthSquared);
+        for (float& component : axis) component *= inverseLength;
+        float firstRadius = 0.0f;
+        float secondRadius = 0.0f;
+        for (std::size_t localAxis = 0; localAxis < 3; ++localAxis) {
+            firstRadius += startBox.halfExtents[localAxis]
+                    * std::fabs(dot(axis, startBox.axes[localAxis]));
+            secondRadius += target.halfExtents[localAxis]
+                    * std::fabs(dot(axis, target.axes[localAxis]));
+        }
+        const float radius = firstRadius + secondRadius;
+        const float signedDistance = dot(centerDelta, axis);
+        const float speed = dot(displacement, axis);
+        if (std::fabs(speed) <= 1.0e-8f) return std::fabs(signedDistance) <= radius;
+        const float firstTime = (signedDistance - radius) / speed;
+        const float secondTime = (signedDistance + radius) / speed;
+        const float axisEntry = std::min(firstTime, secondTime);
+        const float axisExit = std::max(firstTime, secondTime);
+        if (axisEntry > entryTime) {
+            entryTime = axisEntry;
+            const float impactDistance = signedDistance - speed * axisEntry;
+            for (std::size_t component = 0; component < 3; ++component) {
+                entryNormal[component] = impactDistance >= 0.0f ? -axis[component] : axis[component];
+            }
+        }
+        exitTime = std::min(exitTime, axisExit);
+        return entryTime <= exitTime;
+    };
+
+    for (const Vec3& axis : startBox.axes) {
+        if (!testAxis(axis)) return false;
+    }
+    for (const Vec3& axis : target.axes) {
+        if (!testAxis(axis)) return false;
+    }
+    for (const Vec3& firstAxis : startBox.axes) {
+        for (const Vec3& secondAxis : target.axes) {
+            if (!testAxis(cross(firstAxis, secondAxis))) return false;
+        }
+    }
+    if (exitTime < 0.0f || entryTime > 1.0f) return false;
+    timeOfImpact = std::clamp(entryTime, 0.0f, 1.0f);
+    normal = entryNormal;
+    contactPoint = supportPoint(target, normal);
+    return true;
 }
 
 bool collideShapes(const CollisionShape& first, const CollisionShape& second,
@@ -1072,6 +1221,60 @@ bool Scene::capsuleCast(const std::array<float, 3>& start,
         Vec3 normal{};
         if (!sweepCapsuleAgainstShape(start, end, displacement, radius, target,
                                       fraction, contactPoint, normal)) continue;
+        const float distance = fraction * maximumDistance;
+        if (found && distance >= closestDistance) continue;
+        found = true;
+        closestDistance = distance;
+        hit.entityId = entity.id;
+        hit.distance = distance;
+        hit.position = contactPoint;
+        hit.normal = normal;
+    }
+    return found;
+}
+
+bool Scene::boxCast(const std::array<float, 3>& center,
+                    const std::array<float, 3>& halfExtents,
+                    const std::array<float, 3>& rotation,
+                    const std::array<float, 3>& direction, float maximumDistance,
+                    BoxCastHit& hit, std::uint32_t queryLayer,
+                    std::uint32_t queryMask) const {
+    hit = BoxCastHit{};
+    if (!std::isfinite(maximumDistance) || maximumDistance < 0.0f
+            || queryLayer == 0U || queryMask == 0U) return false;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(center[axis]) || !std::isfinite(halfExtents[axis])
+                || halfExtents[axis] <= 0.0f || !std::isfinite(rotation[axis])
+                || !std::isfinite(direction[axis])) return false;
+    }
+    const float directionLength = std::sqrt(dot(direction, direction));
+    if (!std::isfinite(directionLength) || directionLength <= 1.0e-8f) return false;
+    const Vec3 unitDirection{direction[0] / directionLength,
+            direction[1] / directionLength, direction[2] / directionLength};
+    const Vec3 displacement{unitDirection[0] * maximumDistance,
+            unitDirection[1] * maximumDistance, unitDirection[2] * maximumDistance};
+    CollisionShape query;
+    query.center = center;
+    query.halfExtents = halfExtents;
+    const Quaternion orientation = quaternionFromEuler(rotation);
+    query.axes = {{rotateVector(orientation, {1.0f, 0.0f, 0.0f}),
+                   rotateVector(orientation, {0.0f, 1.0f, 0.0f}),
+                   rotateVector(orientation, {0.0f, 0.0f, 1.0f})}};
+    query.collisionLayer = queryLayer;
+    query.collisionMask = queryMask;
+
+    bool found = false;
+    float closestDistance = maximumDistance;
+    for (const Entity& entity : entities_) {
+        CollisionShape target;
+        if (!collisionShape(entity, target)
+                || (queryMask & target.collisionLayer) == 0U
+                || (target.collisionMask & queryLayer) == 0U) continue;
+        float fraction = 0.0f;
+        Vec3 contactPoint{};
+        Vec3 normal{};
+        if (!sweepBoxAgainstShape(query, displacement, target, fraction,
+                                  contactPoint, normal)) continue;
         const float distance = fraction * maximumDistance;
         if (found && distance >= closestDistance) continue;
         found = true;

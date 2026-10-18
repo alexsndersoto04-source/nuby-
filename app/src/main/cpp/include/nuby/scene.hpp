@@ -216,6 +216,13 @@ struct CapsuleCastHit {
     std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
 };
 
+struct BoxCastHit {
+    std::uint32_t entityId = 0;
+    float distance = 0.0f;
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
+};
+
 struct PointLightComponent {
     bool enabled = false;
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
@@ -316,6 +323,13 @@ public:
                      float maximumDistance, CapsuleCastHit& hit,
                      std::uint32_t queryLayer = 1U,
                      std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    // Sweeps a fixed-orientation OBB; no continuous rotation is applied during the cast.
+    bool boxCast(const std::array<float, 3>& center,
+                 const std::array<float, 3>& halfExtents,
+                 const std::array<float, 3>& rotation,
+                 const std::array<float, 3>& direction, float maximumDistance,
+                 BoxCastHit& hit, std::uint32_t queryLayer = 1U,
+                 std::uint32_t queryMask = 0xFFFFFFFFU) const;
     // Overlap queries include triggers; touching without penetration is excluded.
     std::size_t overlapSphere(const std::array<float, 3>& center, float radius,
                               std::vector<std::uint32_t>& entityIds,
