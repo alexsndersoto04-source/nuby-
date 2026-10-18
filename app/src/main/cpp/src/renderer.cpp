@@ -1,4 +1,5 @@
 #include "nuby/renderer.hpp"
+#include "nuby/scene_io.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1561,36 +1562,48 @@ void Renderer::synchronizeSkeletalClipDurations(Scene& frameScene) {
 }
 
 void Renderer::loadSceneAssets() {
-    std::unordered_set<std::string> attemptedMeshes;
-    std::unordered_set<std::string> attemptedTextures;
-    for (const Entity& entity : activeScene().entities()) {
-        const std::array<const std::string*, 8> materialTextures{{
-                &entity.material.albedoTexture,
-                &entity.material.normalTexture,
-                &entity.material.metallicRoughnessTexture,
-                &entity.material.occlusionTexture,
-                &entity.material.metallicTexture,
-                &entity.material.roughnessTexture,
-                &entity.material.opacityTexture,
-                &entity.material.emissiveTexture
+    std::unordered_set<std::string> requiredMeshes;
+    std::unordered_set<std::string> requiredTextures;
+    const auto addMaterialTextures = [this, &requiredTextures](const Material& material) {
+        const std::array<const std::string*, 8> paths{{
+                &material.albedoTexture,
+                &material.normalTexture,
+                &material.metallicRoughnessTexture,
+                &material.occlusionTexture,
+                &material.metallicTexture,
+                &material.roughnessTexture,
+                &material.opacityTexture,
+                &material.emissiveTexture
         }};
-        for (const std::string* path : materialTextures) {
+        for (const std::string* path : paths) {
             if (path->empty()) continue;
             const std::string assetPath = projectAssetPath(*path);
-            if (assetPath.empty() || textures_.find(assetPath) != textures_.end()
-                    || !attemptedTextures.insert(assetPath).second) {
-                continue;
-            }
-            GLuint texture = 0;
-            if (loadTgaAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
+            if (!assetPath.empty()) requiredTextures.insert(assetPath);
         }
+    };
 
+    for (const Entity& entity : activeScene().entities()) {
+        addMaterialTextures(entity.material);
         if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()) continue;
         const std::string meshPath = projectAssetPath(entity.meshAsset);
-        if (meshPath.empty() || importedMeshes_.find(meshPath) != importedMeshes_.end()
-                || !attemptedMeshes.insert(meshPath).second) {
+        if (!meshPath.empty()) requiredMeshes.insert(meshPath);
+    }
+
+    for (auto mesh = importedMeshes_.begin(); mesh != importedMeshes_.end();) {
+        if (requiredMeshes.find(mesh->first) != requiredMeshes.end()) {
+            ++mesh;
             continue;
         }
+        for (ImportedPart& part : mesh->second.parts) {
+            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+        }
+        mesh = importedMeshes_.erase(mesh);
+    }
+
+    for (const std::string& meshPath : requiredMeshes) {
+        if (importedMeshes_.find(meshPath) != importedMeshes_.end()) continue;
         ImportedModel model{};
         const bool isGlb = meshPath.size() >= 4U
                 && meshPath.compare(meshPath.size() - 4U, 4U, ".glb") == 0;
@@ -1613,28 +1626,26 @@ void Renderer::loadSceneAssets() {
                 entity.skeletalAnimation.timeSeconds, 0.0f, clip->clip.durationSeconds);
     }
 
-    for (const auto& entry : importedMeshes_) {
-        for (const ImportedPart& part : entry.second.parts) {
-            if (!part.hasMaterial) continue;
-            const std::array<const std::string*, 8> materialTextures{{
-                    &part.material.albedoTexture,
-                    &part.material.normalTexture,
-                    &part.material.metallicRoughnessTexture,
-                    &part.material.occlusionTexture,
-                    &part.material.metallicTexture,
-                    &part.material.roughnessTexture,
-                    &part.material.opacityTexture,
-                    &part.material.emissiveTexture
-            }};
-            for (const std::string* path : materialTextures) {
-                if (path->empty()) continue;
-                const std::string assetPath = projectAssetPath(*path);
-                if (assetPath.empty() || textures_.find(assetPath) != textures_.end()
-                        || !attemptedTextures.insert(assetPath).second) continue;
-                GLuint texture = 0;
-                if (loadTgaAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
-            }
+    for (const std::string& meshPath : requiredMeshes) {
+        const auto model = importedMeshes_.find(meshPath);
+        if (model == importedMeshes_.end()) continue;
+        for (const ImportedPart& part : model->second.parts) {
+            if (part.hasMaterial) addMaterialTextures(part.material);
         }
+    }
+
+    for (auto texture = textures_.begin(); texture != textures_.end();) {
+        if (requiredTextures.find(texture->first) != requiredTextures.end()) {
+            ++texture;
+            continue;
+        }
+        if (texture->second != 0) glDeleteTextures(1, &texture->second);
+        texture = textures_.erase(texture);
+    }
+    for (const std::string& assetPath : requiredTextures) {
+        if (textures_.find(assetPath) != textures_.end()) continue;
+        GLuint texture = 0;
+        if (loadTgaAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
     }
 }
 
@@ -2068,6 +2079,23 @@ void Renderer::renderBloom() {
 
 void Renderer::initialize(AAssetManager* assetManager) {
     assetManager_ = assetManager;
+    adventureGame_.setZoneSceneReader([this](const std::string& assetPath,
+                                             Scene& fragment, std::string& error) {
+        std::string contents;
+        if (!readTextAsset(assetManager_, assetPath, 4U * 1024U * 1024U, contents)) {
+            error = "could not read zone scene asset: " + assetPath;
+            __android_log_print(ANDROID_LOG_WARN, kLogTag, "%s", error.c_str());
+            return false;
+        }
+        std::istringstream input(contents);
+        if (!SceneSerializer::load(fragment, input, error)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "invalid zone scene %s: %s", assetPath.c_str(), error.c_str());
+            return false;
+        }
+        return true;
+    });
+    adventureGame_.setZoneAssetsChangedCallback([this]() { loadSceneAssets(); });
     demoMode_ = 0;
     gameMode_ = false;
     adventureMode_ = false;

@@ -5,7 +5,9 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nuby {
@@ -20,8 +22,15 @@ public:
     void update(Scene& scene, float deltaSeconds);
     bool setMoveInput(Scene& scene, float horizontal, float forward);
     bool jump(Scene& scene);
+    using ZoneSceneReader = std::function<bool(const std::string&, Scene&, std::string&)>;
+    using ZoneAssetsChangedCallback = std::function<void()>;
+    void setZoneSceneReader(ZoneSceneReader reader) { zoneSceneReader_ = std::move(reader); }
+    void setZoneAssetsChangedCallback(ZoneAssetsChangedCallback callback) {
+        zoneAssetsChangedCallback_ = std::move(callback);
+    }
 
     bool completed() const { return completed_; }
+    std::size_t zoneLoadFailureCount() const { return zoneLoadFailureCount_; }
     int relicsCollected() const { return relicsCollected_; }
     std::uint32_t playerId() const { return playerId_; }
     std::string statusText() const;
@@ -38,7 +47,12 @@ private:
     std::vector<std::uint32_t> relicIds_;
     std::array<float, 2> moveInput_{0.0f, 0.0f};
     std::array<std::vector<std::uint32_t>, 3> streamedZoneEntityIds_;
+    std::array<WorldZoneDefinition, 3> zoneDefinitions_{};
+    std::array<bool, 3> streamedZoneLoaded_{};
+    ZoneSceneReader zoneSceneReader_;
+    ZoneAssetsChangedCallback zoneAssetsChangedCallback_;
     std::vector<WorldZoneTransition> zoneTransitionsScratch_;
+    std::size_t zoneLoadFailureCount_ = 0;
     WorldZoneStreamer worldZoneStreamer_;
     int relicsCollected_ = 0;
     bool completed_ = false;

@@ -1,4 +1,5 @@
 #include "nuby/adventure_game.hpp"
+#include "nuby/scene_io.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -151,11 +152,19 @@ void AdventureGame::buildScene(Scene& scene) {
     scene.setParent(pack.id, playerId_);
 
     for (std::vector<std::uint32_t>& entityIds : streamedZoneEntityIds_) entityIds.clear();
+    streamedZoneLoaded_.fill(false);
+    zoneLoadFailureCount_ = 0;
     const std::vector<WorldZoneDefinition> zones{
-            {1U, {0.0f, 0.0f, -2.5f}, 5.5f, 8.5f},
-            {2U, {0.0f, 0.0f, -8.0f}, 5.5f, 8.5f},
-            {3U, {0.0f, 0.0f, -13.5f}, 5.5f, 8.5f}
+            {1U, {0.0f, 0.0f, -2.5f}, 5.5f, 8.5f,
+                    "scenes/zones/ruins_01.scene"},
+            {2U, {0.0f, 0.0f, -8.0f}, 5.5f, 8.5f,
+                    "scenes/zones/ruins_02.scene"},
+            {3U, {0.0f, 0.0f, -13.5f}, 5.5f, 8.5f,
+                    "scenes/zones/ruins_03.scene"}
     };
+    for (std::size_t index = 0; index < zoneDefinitions_.size(); ++index) {
+        zoneDefinitions_[index] = zones[index];
+    }
     std::string streamingError;
     if (worldZoneStreamer_.configure(zones, streamingError)) {
         const Entity* playerEntity = scene.find(playerId_);
@@ -174,10 +183,25 @@ void AdventureGame::buildScene(Scene& scene) {
 
 void AdventureGame::loadZone(Scene& scene, std::uint32_t zoneId) {
     if (zoneId == 0 || zoneId > streamedZoneEntityIds_.size()) return;
-    std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneId - 1U];
-    if (!entityIds.empty()) return;
+    const std::size_t zoneIndex = zoneId - 1U;
+    std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneIndex];
+    if (streamedZoneLoaded_[zoneIndex]) return;
 
-    const int firstPillar = static_cast<int>((zoneId - 1U) * 2U);
+    if (zoneSceneReader_ && !zoneDefinitions_[zoneIndex].sceneAssetPath.empty()) {
+        Scene fragment;
+        std::string error;
+        if (zoneSceneReader_(zoneDefinitions_[zoneIndex].sceneAssetPath, fragment, error)
+                && scene.appendEntities(fragment, entityIds)) {
+            streamedZoneLoaded_[zoneIndex] = true;
+            if (zoneAssetsChangedCallback_) zoneAssetsChangedCallback_();
+            return;
+        }
+        ++zoneLoadFailureCount_;
+    }
+
+    // A missing/corrupt scene asset falls back to deterministic scenery so the
+    // adventure remains playable; the failure count stays observable in tests.
+    const int firstPillar = static_cast<int>(zoneIndex * 2U);
     for (int localIndex = 0; localIndex < 2; ++localIndex) {
         const int pillarIndex = firstPillar + localIndex;
         const float z = -2.0f - static_cast<float>(pillarIndex) * 2.25f;
@@ -192,15 +216,19 @@ void AdventureGame::loadZone(Scene& scene, std::uint32_t zoneId) {
             entityIds.push_back(pillar.id);
         }
     }
+    streamedZoneLoaded_[zoneIndex] = true;
 }
 
 void AdventureGame::unloadZone(Scene& scene, std::uint32_t zoneId) {
     if (zoneId == 0 || zoneId > streamedZoneEntityIds_.size()) return;
-    std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneId - 1U];
+    const std::size_t zoneIndex = zoneId - 1U;
+    std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneIndex];
     for (auto entity = entityIds.rbegin(); entity != entityIds.rend(); ++entity) {
         scene.destroyEntity(*entity);
     }
     entityIds.clear();
+    streamedZoneLoaded_[zoneIndex] = false;
+    if (zoneAssetsChangedCallback_) zoneAssetsChangedCallback_();
 }
 
 void AdventureGame::applyZoneTransitions(Scene& scene) {

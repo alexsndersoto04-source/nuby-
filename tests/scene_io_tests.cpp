@@ -879,10 +879,49 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
                    invalidMapValueRange, invalidMapValueRangeOutput, error),
            "scene serialization rejects unbounded texture map base/gain values");
 }
+
+void testAppendingSceneFragmentsRemapsHierarchyTransactionally() {
+    nuby::Scene destination;
+    const std::uint32_t existingId = destination.create(
+            "existing", nuby::Primitive::Sphere).id;
+    nuby::Scene fragment;
+    const std::uint32_t sourceRootId = fragment.create(
+            "zone root", nuby::Primitive::None).id;
+    const std::uint32_t sourceChildId = fragment.create(
+            "zone child", nuby::Primitive::Sphere).id;
+    expect(fragment.setParent(sourceChildId, sourceRootId),
+           "test fragment forms a valid parent-child hierarchy");
+
+    std::vector<std::uint32_t> appendedIds;
+    expect(destination.appendEntities(fragment, appendedIds)
+                   && appendedIds.size() == 2,
+           "valid scene fragment appends all entities");
+    const nuby::Entity* appendedRoot = destination.find(appendedIds[0]);
+    const nuby::Entity* appendedChild = destination.find(appendedIds[1]);
+    expect(appendedIds[0] != sourceRootId && appendedIds[1] != sourceChildId
+                   && appendedIds[0] != existingId && appendedIds[1] != existingId,
+           "fragment IDs are remapped to avoid collisions with the host scene");
+    expect(appendedRoot != nullptr && appendedRoot->name == "zone root"
+                   && appendedChild != nullptr && appendedChild->name == "zone child"
+                   && appendedChild->parentId == appendedIds[0],
+           "fragment parent references are remapped with their entities");
+
+    nuby::Scene cameraFragment;
+    nuby::Entity& camera = cameraFragment.create("fragment camera", nuby::Primitive::None);
+    camera.camera.enabled = true;
+    expect(cameraFragment.setActiveCamera(camera.id),
+           "test camera fragment has its own active camera");
+    const std::size_t oldEntityCount = destination.entities().size();
+    expect(!destination.appendEntities(cameraFragment, appendedIds)
+                   && appendedIds.empty() && destination.entities().size() == oldEntityCount
+                   && destination.find(existingId) != nullptr,
+           "camera-bearing fragment is rejected without partially changing the host scene");
+}
 }  // namespace
 
 int main() {
     testRoundTripAllSceneData();
+    testAppendingSceneFragmentsRemapsHierarchyTransactionally();
     testMalformedFilesDoNotPartiallyReplaceScene();
     if (failures != 0) {
         std::cerr << failures << " scene IO test(s) failed\n";

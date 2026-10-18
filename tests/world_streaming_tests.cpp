@@ -22,8 +22,8 @@ void testZoneLoadingUsesHorizontalDistanceAndStableOrdering() {
     nuby::WorldZoneStreamer streamer;
     std::string error;
     const std::vector<nuby::WorldZoneDefinition> zones{
-            {10, {0.0f, 0.0f, 0.0f}, 5.0f, 7.0f},
-            {20, {0.0f, 0.0f, 10.0f}, 5.0f, 7.0f}
+            {10, {0.0f, 0.0f, 0.0f}, 5.0f, 7.0f, ""},
+            {20, {0.0f, 0.0f, 10.0f}, 5.0f, 7.0f, ""}
     };
     expect(streamer.configure(zones, error) && error.empty(),
            "valid world-zone definitions configure successfully");
@@ -57,7 +57,7 @@ void testInvalidInputDoesNotMutateResidency() {
     nuby::WorldZoneStreamer streamer;
     std::string error;
     const std::vector<nuby::WorldZoneDefinition> zones{
-            {1, {0.0f, 0.0f, 0.0f}, 3.0f, 5.0f}
+            {1, {0.0f, 0.0f, 0.0f}, 3.0f, 5.0f, ""}
     };
     expect(streamer.configure(zones, error), "baseline zone config is valid");
     std::vector<nuby::WorldZoneTransition> transitions;
@@ -70,15 +70,15 @@ void testInvalidInputDoesNotMutateResidency() {
            "non-finite player positions are rejected without changing loaded zones");
 
     const std::vector<nuby::WorldZoneDefinition> duplicateZones{
-            {2, {0.0f, 0.0f, 0.0f}, 3.0f, 5.0f},
-            {2, {10.0f, 0.0f, 0.0f}, 3.0f, 5.0f}
+            {2, {0.0f, 0.0f, 0.0f}, 3.0f, 5.0f, ""},
+            {2, {10.0f, 0.0f, 0.0f}, 3.0f, 5.0f, ""}
     };
     expect(!streamer.configure(duplicateZones, error) && streamer.zoneCount() == 1
                    && streamer.isLoaded(1),
            "invalid reconfiguration is transactional and preserves live state");
 
     const std::vector<nuby::WorldZoneDefinition> invalidRadius{
-            {3, {0.0f, 0.0f, 0.0f}, 5.0f, 4.0f}
+            {3, {0.0f, 0.0f, 0.0f}, 5.0f, 4.0f, ""}
     };
     expect(!streamer.configure(invalidRadius, error) && streamer.isLoaded(1),
            "unload radius must exceed load radius and failure preserves residency");

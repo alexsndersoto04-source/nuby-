@@ -15,6 +15,7 @@ struct WorldZoneDefinition {
     std::array<float, 3> center{0.0f, 0.0f, 0.0f};
     float loadRadius = 0.0f;
     float unloadRadius = 0.0f;
+    std::string sceneAssetPath;
 };
 
 struct WorldZoneTransition {

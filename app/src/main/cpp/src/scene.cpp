@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -1491,6 +1492,59 @@ Entity& Scene::create(std::string name, Primitive primitive) {
     entity.name = std::move(name);
     entity.primitive = primitive;
     return entity;
+}
+
+bool Scene::appendEntities(const Scene& fragment,
+                           std::vector<std::uint32_t>& appendedIds) {
+    appendedIds.clear();
+    const std::vector<Entity>& source = fragment.entities_;
+    if (source.size() > 4096U || entities_.size() > 4096U - source.size()) return false;
+    if (source.empty()) return true;
+
+    constexpr std::uint32_t kMaximumId = std::numeric_limits<std::uint32_t>::max() - 1U;
+    if (nextId_ == 0U || nextId_ >= kMaximumId
+            || source.size() > static_cast<std::uint64_t>(kMaximumId) - nextId_) {
+        return false;
+    }
+
+    std::unordered_map<std::uint32_t, std::uint32_t> remappedIds;
+    remappedIds.reserve(source.size());
+    for (std::size_t index = 0; index < source.size(); ++index) {
+        const Entity& entity = source[index];
+        const std::uint32_t newId = nextId_ + static_cast<std::uint32_t>(index);
+        if (entity.id == 0U || entity.camera.enabled || entity.orbitCamera.enabled
+                || !remappedIds.emplace(entity.id, newId).second) {
+            return false;
+        }
+    }
+    for (const Entity& entity : source) {
+        if (entity.parentId != 0U && remappedIds.find(entity.parentId) == remappedIds.end()) {
+            return false;
+        }
+        std::uint32_t parentId = entity.parentId;
+        for (std::size_t depth = 0; parentId != 0U; ++depth) {
+            if (depth >= source.size()) return false;
+            const auto parent = std::find_if(source.begin(), source.end(),
+                    [parentId](const Entity& candidate) { return candidate.id == parentId; });
+            if (parent == source.end()) return false;
+            parentId = parent->parentId;
+        }
+    }
+
+    std::vector<Entity> additions;
+    additions.reserve(source.size());
+    appendedIds.reserve(source.size());
+    for (const Entity& entity : source) {
+        Entity copy = entity;
+        copy.id = remappedIds.at(entity.id);
+        copy.parentId = entity.parentId == 0U ? 0U : remappedIds.at(entity.parentId);
+        appendedIds.push_back(copy.id);
+        additions.push_back(std::move(copy));
+    }
+    entities_.reserve(entities_.size() + additions.size());
+    for (Entity& entity : additions) entities_.push_back(std::move(entity));
+    nextId_ += static_cast<std::uint32_t>(source.size());
+    return true;
 }
 
 bool Scene::destroyEntity(std::uint32_t id) {

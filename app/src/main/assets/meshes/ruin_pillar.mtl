@@ -1,0 +1,7 @@
+# Material used by the zone-scene ruin mesh.
+newmtl AgedStone
+Kd 0.55 0.48 0.36
+Ke 0.0 0.0 0.0
+Ns 22
+Pm 0.0
+Pr 0.9

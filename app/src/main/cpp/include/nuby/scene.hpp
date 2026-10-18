@@ -331,6 +331,9 @@ struct Entity {
 class Scene final {
 public:
     Entity& create(std::string name, Primitive primitive);
+    // Appends a validated scene fragment, remapping IDs and parent references.
+    // Camera-bearing fragments are rejected so they cannot replace scene state.
+    bool appendEntities(const Scene& fragment, std::vector<std::uint32_t>& appendedIds);
     bool destroyEntity(std::uint32_t id);
     Entity* find(std::uint32_t id);
     const Entity* find(std::uint32_t id) const;

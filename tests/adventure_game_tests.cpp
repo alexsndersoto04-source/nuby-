@@ -1,6 +1,8 @@
 #include "nuby/adventure_game.hpp"
+#include "nuby/scene_io.hpp"
 
 #include <cmath>
+#include <fstream>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -180,6 +182,72 @@ void testAdventureStreamsSceneryByPlayerZone() {
            "returning to the starting area reloads scenery once without duplicates");
 }
 
+void testAdventureLoadsSerializedZoneScenesAndPreservesMissionState() {
+    nuby::AdventureGame game;
+    int sceneAssetsRead = 0;
+    int resourceChanges = 0;
+    game.setZoneAssetsChangedCallback([&resourceChanges]() { ++resourceChanges; });
+    game.setZoneSceneReader([&sceneAssetsRead](const std::string& assetPath,
+                                                nuby::Scene& fragment,
+                                                std::string& error) {
+        ++sceneAssetsRead;
+        std::ifstream input("app/src/main/assets/" + assetPath, std::ios::binary);
+        if (!input) {
+            error = "zone asset not found";
+            return false;
+        }
+        return nuby::SceneSerializer::load(fragment, input, error);
+    });
+    nuby::Scene scene;
+    game.start(scene);
+
+    expect(sceneAssetsRead == 1 && resourceChanges == 1
+                   && game.zoneLoadFailureCount() == 0,
+           "adventure reads the nearby scene and notifies the renderer to load its resources");
+    const nuby::Entity* loadedPillar = scene.find(
+            findEntityId(scene, "Ruin Zone 1 Pillar 1"));
+    expect(loadedPillar != nullptr && loadedPillar->primitive == nuby::Primitive::ImportedMesh
+                   && loadedPillar->meshAsset == "meshes/ruin_pillar.obj"
+                   && findEntityId(scene, "Ruin Zone 2 Pillar 5") == 0,
+           "resident serialized scenes reference file-backed mesh resources without preloading distant zones");
+    expect(scene.find(game.playerId()) != nullptr && scene.activeCamera() != nullptr,
+           "appending a zone fragment does not replace the game player or active camera");
+
+    const std::uint32_t firstRelic = findEntityId(scene, "Sun Relic 1");
+    movePlayerTo(scene, game.playerId(), -2.15f, -3.0f);
+    advance(game, scene, 1);
+    expect(game.relicsCollected() == 1 && scene.find(firstRelic) == nullptr,
+           "mission progress can advance while asset-backed zones are active");
+
+    movePlayerTo(scene, game.playerId(), 0.0f, -13.0f);
+    advance(game, scene, 1);
+    expect(findEntityId(scene, "Ruin Zone 1 Pillar 1") == 0
+                   && findEntityId(scene, "Ruin Zone 3 Pillar 9") != 0,
+           "streaming unloads distant asset entities and loads the new zone scene");
+    expect(scene.find(game.playerId()) != nullptr && scene.activeCamera() != nullptr
+                   && game.relicsCollected() == 1 && scene.find(firstRelic) == nullptr,
+           "zone transitions preserve player, camera, and collected mission progress");
+    expect(sceneAssetsRead >= 3 && resourceChanges >= 3
+                   && game.zoneLoadFailureCount() == 0,
+           "each new zone scene triggers resource loading without falling back");
+}
+
+void testMissingZoneSceneFallsBackWithoutBreakingAdventure() {
+    nuby::AdventureGame game;
+    game.setZoneSceneReader([](const std::string&, nuby::Scene&, std::string& error) {
+        error = "simulated missing or corrupt scene";
+        return false;
+    });
+    nuby::Scene scene;
+    game.start(scene);
+    expect(game.zoneLoadFailureCount() == 1
+                   && findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0,
+           "a missing zone scene records an error and keeps deterministic fallback scenery");
+    expect(scene.find(game.playerId()) != nullptr && scene.activeCamera() != nullptr
+                   && findEntityId(scene, "Sun Relic 1") != 0,
+           "scene asset failure leaves mission-critical adventure state playable");
+}
+
 void testMovementJumpAndCameraFollow() {
     nuby::AdventureGame game;
     nuby::Scene scene;
@@ -258,6 +326,8 @@ int main() {
     testCharacterFacesItsMovementDirection();
     testWayfarerSelectsIdleWalkRunAndJumpClips();
     testAdventureStreamsSceneryByPlayerZone();
+    testAdventureLoadsSerializedZoneScenesAndPreservesMissionState();
+    testMissingZoneSceneFallsBackWithoutBreakingAdventure();
     testMovementJumpAndCameraFollow();
     testRelicsUnlockTheGateAndRestartResetsProgress();
     if (failures != 0) {

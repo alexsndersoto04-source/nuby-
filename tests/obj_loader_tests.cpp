@@ -340,6 +340,22 @@ void testPackagedSampleAsset() {
            "packaged sample references its MTL and assigns its named material");
     std::ifstream library("app/src/main/assets/meshes/orbital_shard.mtl");
     expect(library.good(), "packaged orbital shard material library exists");
+
+    std::ifstream pillarFile("app/src/main/assets/meshes/ruin_pillar.obj");
+    expect(pillarFile.good(), "zone scene pillar resource is packaged as an OBJ asset");
+    if (pillarFile.good()) {
+        const std::string pillarSource((std::istreambuf_iterator<char>(pillarFile)),
+                                       std::istreambuf_iterator<char>());
+        nuby::ObjModel pillarModel;
+        expect(nuby::parseObjModel(pillarSource, pillarModel, error)
+                       && !pillarModel.submeshes.empty()
+                       && !pillarModel.submeshes[0].vertices.empty(),
+               "the zone pillar OBJ resource parses into renderable geometry");
+        expect(pillarModel.materialLibraries.size() == 1
+                       && pillarModel.materialLibraries[0] == "ruin_pillar.mtl"
+                       && pillarModel.submeshes[0].materialName == "AgedStone",
+               "the zone pillar resource references its standalone stone material");
+    }
 }
 }  // namespace
 

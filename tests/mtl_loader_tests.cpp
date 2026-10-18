@@ -61,6 +61,24 @@ void testPackagedSampleMaterialLibrary() {
     }
 }
 
+void testPackagedZonePillarMaterial() {
+    std::ifstream file("app/src/main/assets/meshes/ruin_pillar.mtl");
+    expect(file.good(), "zone pillar MTL resource is packaged");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    std::vector<nuby::WavefrontMaterial> materials;
+    std::string error;
+    expect(nuby::parseMtl(source, "meshes/ruin_pillar.mtl", materials, error)
+                   && materials.size() == 1 && materials[0].name == "AgedStone",
+           "zone pillar stone material parses from its asset file");
+    if (!materials.empty()) {
+        expect(near(materials[0].material.roughness, 0.9f)
+                       && near(materials[0].material.color[0], 0.55f),
+               "zone pillar material carries authored stone PBR values");
+    }
+}
+
 void testPbrFactorsAndRelativeMapsParse() {
     constexpr char source[] = R"MTL(
 # Simple hand-authored PBR material
@@ -234,6 +252,7 @@ void testMalformedAndMissingMaterialRecordsAreRejected() {
 
 int main() {
     testPackagedSampleMaterialLibrary();
+    testPackagedZonePillarMaterial();
     testPbrFactorsAndRelativeMapsParse();
     testEverySupportedOpacityChannelParses();
     testInvalidMaterialsAndTraversalAreRejectedTransactionally();
