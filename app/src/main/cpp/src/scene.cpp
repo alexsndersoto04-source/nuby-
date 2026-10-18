@@ -2527,7 +2527,29 @@ void Scene::update(float deltaSeconds) {
         // pulse own position and scale when enabled; an authored rotation track
         // takes precedence over procedural spin.
         updateAnimation(entity.animation, entity.transform, dt);
-        advanceSkeletalAnimation(entity.skeletalAnimation, dt);
+        SkeletalAnimationComponent& skeletal = entity.skeletalAnimation;
+        const float transitionDuration = entity.skeletalLocomotion.transitionDurationSeconds;
+        if (!skeletal.transitionFromClip.empty()) {
+            if (!std::isfinite(transitionDuration) || transitionDuration <= 0.0f) {
+                skeletal.transitionFromClip.clear();
+                skeletal.transitionFromTimeSeconds = 0.0f;
+                skeletal.transitionElapsedSeconds = 0.0f;
+                skeletal.transitionFromLooping = true;
+            } else {
+                skeletal.transitionElapsedSeconds += dt;
+                const float rate = std::isfinite(skeletal.playbackRate)
+                        ? skeletal.playbackRate : 0.0f;
+                skeletal.transitionFromTimeSeconds = std::max(0.0f,
+                        skeletal.transitionFromTimeSeconds + dt * rate);
+                if (skeletal.transitionElapsedSeconds >= transitionDuration) {
+                    skeletal.transitionFromClip.clear();
+                    skeletal.transitionFromTimeSeconds = 0.0f;
+                    skeletal.transitionElapsedSeconds = 0.0f;
+                    skeletal.transitionFromLooping = true;
+                }
+            }
+        }
+        advanceSkeletalAnimation(skeletal, dt);
 
         const bool animationOwnsRotation = entity.animation.enabled
                 && !entity.animation.rotation.keyframes.empty();
@@ -2589,6 +2611,19 @@ void Scene::update(float deltaSeconds) {
                 : planarSpeed >= walkThreshold ? locomotion.walkClip.c_str()
                 : locomotion.idleClip.c_str();
         if (animation.clipName != selectedClip) {
+            const float transitionDuration = locomotion.transitionDurationSeconds;
+            if (!animation.clipName.empty() && std::isfinite(transitionDuration)
+                    && transitionDuration > 0.0f) {
+                animation.transitionFromClip = animation.clipName;
+                animation.transitionFromTimeSeconds = animation.timeSeconds;
+                animation.transitionFromLooping = animation.looping;
+                animation.transitionElapsedSeconds = 0.0f;
+            } else {
+                animation.transitionFromClip.clear();
+                animation.transitionFromTimeSeconds = 0.0f;
+                animation.transitionFromLooping = true;
+                animation.transitionElapsedSeconds = 0.0f;
+            }
             animation.clipName = selectedClip;
             animation.timeSeconds = 0.0f;
             animation.playing = true;

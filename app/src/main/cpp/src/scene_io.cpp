@@ -148,6 +148,7 @@ bool validEntity(const Entity& entity) {
     if (entity.id == 0 || entity.name.size() > kMaximumTextLength
             || entity.meshAsset.size() > kMaximumTextLength
             || !validClipName(entity.skeletalAnimation.clipName)
+            || !validClipName(entity.skeletalAnimation.transitionFromClip)
             || !validClipName(entity.skeletalLocomotion.idleClip)
             || !validClipName(entity.skeletalLocomotion.walkClip)
             || !validClipName(entity.skeletalLocomotion.runClip)
@@ -204,8 +205,11 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.skeletalAnimation.playbackRate)
             || !finite(entity.skeletalAnimation.timeSeconds)
             || !finite(entity.skeletalAnimation.durationSeconds)
+            || !finite(entity.skeletalAnimation.transitionFromTimeSeconds)
+            || !finite(entity.skeletalAnimation.transitionElapsedSeconds)
             || !finite(entity.skeletalLocomotion.walkSpeedThreshold)
             || !finite(entity.skeletalLocomotion.runSpeedThreshold)
+            || !finite(entity.skeletalLocomotion.transitionDurationSeconds)
             || !finite(entity.rigidbody.mass) || !finite3(entity.rigidbody.velocity)
             || !finite3(entity.rigidbody.angularVelocity)
             || !finite(entity.rigidbody.linearDamping)
@@ -261,6 +265,20 @@ bool validEntity(const Entity& entity) {
             || entity.skeletalAnimation.durationSeconds < 0.0f
             || entity.skeletalAnimation.durationSeconds > 1000000.0f
             || entity.skeletalAnimation.timeSeconds > entity.skeletalAnimation.durationSeconds
+            || entity.skeletalAnimation.transitionFromTimeSeconds < 0.0f
+            || entity.skeletalAnimation.transitionFromTimeSeconds > 1000000.0f
+            || entity.skeletalAnimation.transitionElapsedSeconds < 0.0f
+            || entity.skeletalAnimation.transitionElapsedSeconds > 5.0f
+            || (entity.skeletalAnimation.transitionFromClip.empty()
+                && (entity.skeletalAnimation.transitionFromTimeSeconds != 0.0f
+                    || entity.skeletalAnimation.transitionElapsedSeconds != 0.0f))
+            || (!entity.skeletalAnimation.transitionFromClip.empty()
+                && (entity.skeletalAnimation.transitionFromClip
+                                == entity.skeletalAnimation.clipName
+                    || entity.skeletalAnimation.transitionElapsedSeconds
+                            >= entity.skeletalLocomotion.transitionDurationSeconds))
+            || entity.skeletalLocomotion.transitionDurationSeconds < 0.0f
+            || entity.skeletalLocomotion.transitionDurationSeconds > 5.0f
             || (entity.skeletalAnimation.enabled && entity.skeletalAnimation.clipName.empty())
             || (entity.skeletalLocomotion.enabled
                 && (entity.skeletalLocomotion.idleClip.empty()
@@ -458,7 +476,11 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << entity.skeletalAnimation.playbackRate << ' '
            << entity.skeletalAnimation.timeSeconds << ' '
            << entity.skeletalAnimation.durationSeconds << ' '
-           << std::quoted(entity.skeletalAnimation.clipName) << '\n';
+           << std::quoted(entity.skeletalAnimation.clipName) << ' '
+           << std::quoted(entity.skeletalAnimation.transitionFromClip) << ' '
+           << entity.skeletalAnimation.transitionFromTimeSeconds << ' '
+           << (entity.skeletalAnimation.transitionFromLooping ? 1 : 0) << ' '
+           << entity.skeletalAnimation.transitionElapsedSeconds << '\n';
 
     output << "SKELETAL_LOCOMOTION " << (entity.skeletalLocomotion.enabled ? 1 : 0) << ' '
            << std::quoted(entity.skeletalLocomotion.idleClip) << ' '
@@ -466,7 +488,8 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.skeletalLocomotion.runClip) << ' '
            << std::quoted(entity.skeletalLocomotion.jumpClip) << ' '
            << entity.skeletalLocomotion.walkSpeedThreshold << ' '
-           << entity.skeletalLocomotion.runSpeedThreshold << '\n';
+           << entity.skeletalLocomotion.runSpeedThreshold << ' '
+           << entity.skeletalLocomotion.transitionDurationSeconds << '\n';
 
     output << "POINT_LIGHT " << (entity.pointLight.enabled ? 1 : 0);
     writeFloatArray(output, entity.pointLight.color);
@@ -712,6 +735,15 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.skeletalAnimation.durationSeconds)) {
             return fail(error, "Entity skeletal-animation playback state is invalid");
         }
+        if (version >= 19
+                && (!(input >> std::quoted(entity.skeletalAnimation.transitionFromClip)
+                                  >> entity.skeletalAnimation.transitionFromTimeSeconds)
+                    || !readBool(input, entity.skeletalAnimation.transitionFromLooping)
+                    || !(input >> entity.skeletalAnimation.transitionElapsedSeconds)
+                    || !std::isfinite(entity.skeletalAnimation.transitionFromTimeSeconds)
+                    || !std::isfinite(entity.skeletalAnimation.transitionElapsedSeconds))) {
+            return fail(error, "Entity skeletal-animation transition state is invalid");
+        }
     }
     if (version >= 18) {
         if (!readTag(input, "SKELETAL_LOCOMOTION", error)
@@ -725,6 +757,11 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.skeletalLocomotion.walkSpeedThreshold)
                 || !std::isfinite(entity.skeletalLocomotion.runSpeedThreshold)) {
             return fail(error, "Entity skeletal-locomotion state is invalid");
+        }
+        if (version >= 19
+                && (!(input >> entity.skeletalLocomotion.transitionDurationSeconds)
+                    || !std::isfinite(entity.skeletalLocomotion.transitionDurationSeconds))) {
+            return fail(error, "Entity skeletal-locomotion transition duration is invalid");
         }
     }
 

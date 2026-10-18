@@ -2463,10 +2463,30 @@ void Renderer::render(float deltaSeconds) {
         if (clip == model->second.animations.end()) continue;
         SkeletalPose pose;
         std::string poseError;
-        if (evaluateSkeletalPose(model->second.skeleton, clip->clip,
-                                 entity.skeletalAnimation.timeSeconds, pose, poseError)) {
-            evaluatedSkeletalPoses_.emplace(entity.id, std::move(pose));
+        const SkeletalAnimationComponent& playback = entity.skeletalAnimation;
+        bool evaluated = false;
+        const float transitionDuration = entity.skeletalLocomotion.transitionDurationSeconds;
+        if (!playback.transitionFromClip.empty() && std::isfinite(transitionDuration)
+                && transitionDuration > 0.0f) {
+            const auto fromClip = std::find_if(model->second.animations.begin(),
+                    model->second.animations.end(), [&playback](const GltfAnimation& animation) {
+                        return animation.name == playback.transitionFromClip;
+                    });
+            if (fromClip != model->second.animations.end()) {
+                const float blendAmount = std::clamp(
+                        playback.transitionElapsedSeconds / transitionDuration, 0.0f, 1.0f);
+                evaluated = evaluateBlendedSkeletalPose(model->second.skeleton,
+                        fromClip->clip, playback.transitionFromTimeSeconds,
+                        playback.transitionFromLooping, clip->clip,
+                        playback.timeSeconds, playback.looping, blendAmount,
+                        pose, poseError);
+            }
         }
+        if (!evaluated) {
+            evaluated = evaluateSkeletalPose(model->second.skeleton, clip->clip,
+                    playback.timeSeconds, playback.looping, pose, poseError);
+        }
+        if (evaluated) evaluatedSkeletalPoses_.emplace(entity.id, std::move(pose));
     }
     const auto& ambientCoefficients = frameScene.ambientLighting().sphericalHarmonics;
     const auto& defaultAmbient = AmbientLighting{}.sphericalHarmonics;

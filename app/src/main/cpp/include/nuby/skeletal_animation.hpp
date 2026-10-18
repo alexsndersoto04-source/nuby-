@@ -103,5 +103,15 @@ bool validateSkeletalAnimation(const std::vector<SkeletalJoint>& skeleton,
 bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
                           const SkeletalAnimationClip& clip, float timeSeconds,
                           SkeletalPose& output, std::string& error);
+bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
+                          const SkeletalAnimationClip& clip, float timeSeconds,
+                          bool looping, SkeletalPose& output, std::string& error);
+bool evaluateBlendedSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
+                                 const SkeletalAnimationClip& fromClip,
+                                 float fromTimeSeconds, bool fromLooping,
+                                 const SkeletalAnimationClip& toClip,
+                                 float toTimeSeconds, bool toLooping,
+                                 float blendAmount, SkeletalPose& output,
+                                 std::string& error);
 
 }  // namespace nuby

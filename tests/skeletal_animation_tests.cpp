@@ -111,6 +111,54 @@ void testLoopingAndQuaternionShortestPath() {
            "looping clip wraps sample time before interpolating");
 }
 
+void testCrossfadeAndNonLoopingEvaluation() {
+    std::vector<nuby::SkeletalJoint> skeleton(1);
+    skeleton[0].name = "root";
+    nuby::SkeletalAnimationClip fromClip;
+    fromClip.durationSeconds = 1.0f;
+    fromClip.joints.resize(1);
+    fromClip.joints[0].translation.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    fromClip.joints[0].translation.addKeyframe(1.0f, {0.0f, 0.0f, 0.0f});
+    fromClip.joints[0].rotation.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f, 1.0f});
+    fromClip.joints[0].rotation.addKeyframe(1.0f, {0.0f, 0.0f, 0.0f, 1.0f});
+
+    nuby::SkeletalAnimationClip toClip;
+    toClip.durationSeconds = 1.0f;
+    toClip.looping = true;
+    toClip.joints.resize(1);
+    toClip.joints[0].translation.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    toClip.joints[0].translation.addKeyframe(1.0f, {2.0f, 0.0f, 0.0f});
+    toClip.joints[0].rotation.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f, 1.0f});
+    toClip.joints[0].rotation.addKeyframe(1.0f, {0.0f, 0.0f, 1.0f, 0.0f});
+
+    nuby::SkeletalPose pose;
+    std::string error;
+    expect(nuby::evaluateBlendedSkeletalPose(skeleton, fromClip, 0.0f, true,
+                   toClip, 1.0f, false, 0.5f, pose, error),
+           "two clips can be evaluated as one crossfaded pose");
+    expect(pose.jointMatrices.size() == 1
+                   && near(pose.jointMatrices[0][12], 1.0f)
+                   && near(pose.jointMatrices[0][0], 0.0f, 0.001f)
+                   && near(pose.jointMatrices[0][1], 1.0f, 0.001f),
+           "crossfade blends local translation and slerps rotation before composition");
+
+    expect(nuby::evaluateSkeletalPose(skeleton, toClip, 1.0f, false, pose, error)
+                   && pose.jointMatrices.size() == 1
+                   && near(pose.jointMatrices[0][12], 2.0f),
+           "non-looping playback holds the final jump pose at clip duration");
+    expect(nuby::evaluateSkeletalPose(skeleton, toClip, 1.0f, true, pose, error)
+                   && pose.jointMatrices.size() == 1
+                   && near(pose.jointMatrices[0][12], 0.0f),
+           "looping playback wraps the same clip at its duration");
+
+    const float preservedX = pose.jointMatrices.empty() ? 0.0f : pose.jointMatrices[0][12];
+    expect(!nuby::evaluateBlendedSkeletalPose(skeleton, fromClip, 0.0f, true,
+                   toClip, 1.0f, false, 1.1f, pose, error),
+           "blend amounts outside the normalized range are rejected");
+    expect(pose.jointMatrices.size() == 1 && near(pose.jointMatrices[0][12], preservedX),
+           "failed blend evaluation leaves the caller's previous pose intact");
+}
+
 void testLinearBlendSkinningReference() {
     nuby::SkeletalPose pose;
     pose.jointMatrices = {
@@ -200,6 +248,7 @@ void testTrackEditingAndInvalidData() {
 int main() {
     testParentedPoseAndInverseBind();
     testLoopingAndQuaternionShortestPath();
+    testCrossfadeAndNonLoopingEvaluation();
     testLinearBlendSkinningReference();
     testTrackEditingAndInvalidData();
     if (failures != 0) {

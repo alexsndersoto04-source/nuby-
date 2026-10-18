@@ -137,8 +137,10 @@ void testWayfarerSelectsIdleWalkRunAndJumpClips() {
     expect(game.setMoveInput(scene, 0.0f, 1.0f), "walking input is accepted");
     advance(game, scene, 1);
     body = scene.find(bodyId);
-    expect(body != nullptr && body->skeletalAnimation.clipName == "walk",
-           "low movement speed selects the walk clip");
+    expect(body != nullptr && body->skeletalAnimation.clipName == "walk"
+                   && body->skeletalAnimation.transitionFromClip == "idle"
+                   && body->skeletalAnimation.transitionElapsedSeconds == 0.0f,
+           "low movement speed begins a smooth idle-to-walk crossfade");
     advance(game, scene, 15);
     body = scene.find(bodyId);
     expect(body != nullptr && body->skeletalAnimation.clipName == "run",
@@ -147,14 +149,17 @@ void testWayfarerSelectsIdleWalkRunAndJumpClips() {
     expect(game.setMoveInput(scene, 0.0f, 0.0f), "idle input is accepted");
     advance(game, scene, 30);
     body = scene.find(bodyId);
-    expect(body != nullptr && body->skeletalAnimation.clipName == "idle",
-           "stopping movement returns the character to idle");
+    expect(body != nullptr && body->skeletalAnimation.clipName == "idle"
+                   && body->skeletalAnimation.transitionFromClip.empty(),
+           "stopping movement returns to idle and lets the previous blend finish");
     expect(game.jump(scene), "animation-state test can jump from rest");
     advance(game, scene, 1);
     body = scene.find(bodyId);
     expect(body != nullptr && body->skeletalAnimation.clipName == "jump"
-                   && !body->skeletalAnimation.looping,
-           "airborne movement selects a non-looping jump clip");
+                   && !body->skeletalAnimation.looping
+                   && body->skeletalAnimation.transitionFromClip == "idle"
+                   && body->skeletalAnimation.transitionFromLooping,
+           "jumping starts a smooth idle-to-non-looping-jump crossfade");
     advance(game, scene, 75);
     body = scene.find(bodyId);
     const nuby::Entity* player = scene.find(game.playerId());

@@ -389,20 +389,21 @@ bool skinVertexReference(const SkeletalPose& pose,
 bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
                           const SkeletalAnimationClip& clip, float timeSeconds,
                           SkeletalPose& output, std::string& error) {
+    return evaluateSkeletalPose(skeleton, clip, timeSeconds, clip.looping, output, error);
+}
+
+bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
+                          const SkeletalAnimationClip& clip, float timeSeconds,
+                          bool looping, SkeletalPose& output, std::string& error) {
     if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f
             || !validateSkeletalAnimation(skeleton, clip, error)) {
         if (error.empty()) error = "Skeletal animation time is invalid";
         return false;
     }
-    float sampleTime = timeSeconds;
+    float sampleTime = 0.0f;
     if (clip.durationSeconds > 0.0f) {
-        if (clip.looping) {
-            sampleTime = std::fmod(sampleTime, clip.durationSeconds);
-        } else {
-            sampleTime = std::min(sampleTime, clip.durationSeconds);
-        }
-    } else {
-        sampleTime = 0.0f;
+        sampleTime = looping ? std::fmod(timeSeconds, clip.durationSeconds)
+                             : std::min(timeSeconds, clip.durationSeconds);
     }
 
     SkeletalPose candidate;
@@ -424,6 +425,70 @@ bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
         for (float value : candidate.jointMatrices[index]) {
             if (!std::isfinite(value)) {
                 error = "Evaluated skeletal pose contains a non-finite matrix";
+                return false;
+            }
+        }
+    }
+    output = std::move(candidate);
+    error.clear();
+    return true;
+}
+
+bool evaluateBlendedSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
+                                 const SkeletalAnimationClip& fromClip,
+                                 float fromTimeSeconds, bool fromLooping,
+                                 const SkeletalAnimationClip& toClip,
+                                 float toTimeSeconds, bool toLooping,
+                                 float blendAmount, SkeletalPose& output,
+                                 std::string& error) {
+    if (!std::isfinite(fromTimeSeconds) || fromTimeSeconds < 0.0f
+            || !std::isfinite(toTimeSeconds) || toTimeSeconds < 0.0f
+            || !std::isfinite(blendAmount) || blendAmount < 0.0f || blendAmount > 1.0f
+            || !validateSkeletalAnimation(skeleton, fromClip, error)
+            || !validateSkeletalAnimation(skeleton, toClip, error)) {
+        if (error.empty()) error = "Skeletal blend inputs are invalid";
+        return false;
+    }
+    const auto sampleTime = [](const SkeletalAnimationClip& clip, float time, bool looping) {
+        if (clip.durationSeconds <= 0.0f) return 0.0f;
+        return looping ? std::fmod(time, clip.durationSeconds)
+                       : std::min(time, clip.durationSeconds);
+    };
+    const float fromSampleTime = sampleTime(fromClip, fromTimeSeconds, fromLooping);
+    const float toSampleTime = sampleTime(toClip, toTimeSeconds, toLooping);
+
+    SkeletalPose candidate;
+    candidate.jointMatrices.resize(skeleton.size());
+    std::vector<SkeletalMatrix4> worldMatrices(skeleton.size());
+    for (std::size_t index = 0; index < skeleton.size(); ++index) {
+        const SkeletalJoint& joint = skeleton[index];
+        const SkeletalAnimationTrack& fromTrack = fromClip.joints[index];
+        const SkeletalAnimationTrack& toTrack = toClip.joints[index];
+        const std::array<float, 3> fromTranslation = fromTrack.translation.sample(
+                fromSampleTime, joint.bindTranslation);
+        const std::array<float, 3> toTranslation = toTrack.translation.sample(
+                toSampleTime, joint.bindTranslation);
+        const std::array<float, 3> fromScale = fromTrack.scale.sample(
+                fromSampleTime, joint.bindScale);
+        const std::array<float, 3> toScale = toTrack.scale.sample(toSampleTime, joint.bindScale);
+        std::array<float, 3> translation{};
+        std::array<float, 3> scale{};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            translation[axis] = fromTranslation[axis]
+                    + (toTranslation[axis] - fromTranslation[axis]) * blendAmount;
+            scale[axis] = fromScale[axis] + (toScale[axis] - fromScale[axis]) * blendAmount;
+        }
+        const SkeletalQuaternion rotation = interpolateQuaternion(
+                fromTrack.rotation.sample(fromSampleTime, joint.bindRotation),
+                toTrack.rotation.sample(toSampleTime, joint.bindRotation), blendAmount);
+        const SkeletalMatrix4 local = composeTransform(translation, rotation, scale);
+        worldMatrices[index] = joint.parentIndex < 0 ? local
+                : multiplyMatrix(worldMatrices[static_cast<std::size_t>(joint.parentIndex)], local);
+        candidate.jointMatrices[index] = multiplyMatrix(worldMatrices[index],
+                                                        joint.inverseBindMatrix);
+        for (float value : candidate.jointMatrices[index]) {
+            if (!std::isfinite(value)) {
+                error = "Blended skeletal pose contains a non-finite matrix";
                 return false;
             }
         }

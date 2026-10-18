@@ -134,6 +134,10 @@ struct SkeletalAnimationComponent {
     float timeSeconds = 0.0f;
     float durationSeconds = 0.0f;
     std::string clipName;
+    std::string transitionFromClip;
+    float transitionFromTimeSeconds = 0.0f;
+    float transitionElapsedSeconds = 0.0f;
+    bool transitionFromLooping = true;
 };
 
 // Selects animation clips from a parent character controller's movement. The
@@ -146,6 +150,7 @@ struct SkeletalLocomotionComponent {
     std::string jumpClip = "jump";
     float walkSpeedThreshold = 0.18f;
     float runSpeedThreshold = 2.4f;
+    float transitionDurationSeconds = 0.18f;
 };
 
 struct RigidbodyComponent {
