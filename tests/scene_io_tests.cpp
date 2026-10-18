@@ -23,6 +23,41 @@ bool near(float actual, float expected, float epsilon = 0.00001f) {
     return std::fabs(actual - expected) <= epsilon;
 }
 
+std::string withoutTrailingFields(const std::string& line, std::size_t fieldCount) {
+    std::istringstream input(line);
+    std::vector<std::string> fields;
+    std::string field;
+    while (input >> field) fields.push_back(field);
+    std::ostringstream output;
+    const std::size_t retained = fields.size() > fieldCount ? fields.size() - fieldCount : 0;
+    for (std::size_t index = 0; index < retained; ++index) {
+        if (index != 0) output << ' ';
+        output << fields[index];
+    }
+    return output.str();
+}
+
+bool replaceRecordField(std::string& text, const std::string& tag,
+                        std::size_t fieldIndex, const std::string& replacement) {
+    const std::size_t start = text.find(tag + " ");
+    if (start == std::string::npos) return false;
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) return false;
+    std::istringstream input(text.substr(start, end - start));
+    std::vector<std::string> fields;
+    std::string field;
+    while (input >> field) fields.push_back(field);
+    if (fieldIndex >= fields.size()) return false;
+    fields[fieldIndex] = replacement;
+    std::ostringstream output;
+    for (std::size_t index = 0; index < fields.size(); ++index) {
+        if (index != 0) output << ' ';
+        output << fields[index];
+    }
+    text.replace(start, end - start, output.str());
+    return true;
+}
+
 std::string downgradeTextureSchema(const std::string& encoded,
                                    unsigned int targetVersion,
                                    unsigned int textureMapsToKeep) {
@@ -30,8 +65,16 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 14") {
+        if (line == "NUBY_SCENE 15") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("SPHERE_COLLIDER ", 0) == 0 && targetVersion < 15) {
+            legacy << withoutTrailingFields(line, 2) << '\n';
+        } else if (line.rfind("BOX_COLLIDER ", 0) == 0) {
+            if (targetVersion >= 14) {
+                legacy << (targetVersion < 15 ? withoutTrailingFields(line, 2) : line) << '\n';
+            }
+        } else if (line.rfind("PHYSICS ", 0) == 0 && targetVersion < 15) {
+            legacy << withoutTrailingFields(line, 2) << '\n';
         } else if (line.rfind("MATERIAL_MAP_UV ", 0) == 0) {
             if (targetVersion < 7) continue;
             std::istringstream mapRecord(line);
@@ -59,8 +102,6 @@ std::string downgradeTextureSchema(const std::string& encoded,
                 legacy << line.substr(tag.size());
             }
             legacy << '\n';
-        } else if (line.rfind("BOX_COLLIDER ", 0) == 0 && targetVersion < 14) {
-            continue;
         } else if (line.rfind("RIGIDBODY ", 0) == 0 && targetVersion < 13) {
             std::istringstream rigidbody(line);
             std::string tag;
@@ -127,6 +168,8 @@ std::string downgradeTextureSchema(const std::string& encoded,
 
 nuby::Scene makeScene() {
     nuby::Scene scene;
+    scene.physicsSettings().floorCollisionLayer = 4U;
+    scene.physicsSettings().floorCollisionMask = 0x0000000CU;
     nuby::Entity& root = scene.create("root \"quoted\" \\ node", nuby::Primitive::None);
     const std::uint32_t rootId = root.id;
     root.transform.position = {1.0f, 2.0f, 3.0f};
@@ -147,6 +190,8 @@ nuby::Scene makeScene() {
     root.sphereCollider.restitution = 0.6f;
     root.sphereCollider.friction = 0.25f;
     root.sphereCollider.trigger = true;
+    root.sphereCollider.collisionLayer = 2U;
+    root.sphereCollider.collisionMask = 0x00000008U;
 
     nuby::Entity& mesh = scene.create("mesh", nuby::Primitive::ImportedMesh);
     const std::uint32_t meshId = mesh.id;
@@ -171,6 +216,8 @@ nuby::Scene makeScene() {
     mesh.boxCollider.restitution = 0.65f;
     mesh.boxCollider.friction = 0.18f;
     mesh.boxCollider.trigger = true;
+    mesh.boxCollider.collisionLayer = 8U;
+    mesh.boxCollider.collisionMask = 0x00000006U;
     mesh.material.opacityMapTransform.uvScale = {0.7f, 0.8f};
     mesh.material.opacityMapTransform.uvOffset = {0.12f, -0.08f};
     mesh.material.opacityMapTransform.clampToEdge = true;
@@ -257,6 +304,8 @@ nuby::Scene makeScene() {
     physics.floorHeight = -1.5f;
     physics.floorRestitution = 0.45f;
     physics.floorFriction = 0.2f;
+    physics.floorCollisionLayer = 4U;
+    physics.floorCollisionMask = 0x0000000CU;
     scene.update(0.025f);
     return scene;
 }
@@ -280,7 +329,9 @@ void testRoundTripAllSceneData() {
                    && near(loaded.physicsSettings().fixedTimeStep, 1.0f / 120.0f)
                    && loaded.physicsSettings().maximumSubsteps == 8
                    && loaded.physicsSettings().floorEnabled
-                   && near(loaded.physicsSettings().floorHeight, -1.5f),
+                   && near(loaded.physicsSettings().floorHeight, -1.5f)
+                   && loaded.physicsSettings().floorCollisionLayer == 4U
+                   && loaded.physicsSettings().floorCollisionMask == 0x0000000CU,
            "round-trip preserves world physics settings");
 
     const nuby::Entity* root = loaded.find(1);
@@ -293,7 +344,9 @@ void testRoundTripAllSceneData() {
                    && near(root->rigidbody.angularVelocity[2], 0.35f, 0.005f)
                    && near(root->rigidbody.angularDamping, 0.12f)
                    && root->sphereCollider.enabled && root->sphereCollider.trigger
-                   && near(root->sphereCollider.radius, 0.65f),
+                   && near(root->sphereCollider.radius, 0.65f)
+                   && root->sphereCollider.collisionLayer == 2U
+                   && root->sphereCollider.collisionMask == 0x00000008U,
            "rigidbody and sphere collider components are restored");
     expect(mesh != nullptr && mesh->parentId == 1
                    && mesh->meshAsset == "meshes/shard \"A\".obj",
@@ -322,7 +375,9 @@ void testRoundTripAllSceneData() {
                        && near(mesh->boxCollider.halfExtents[1], 1.25f)
                        && near(mesh->boxCollider.halfExtents[2], 0.5f)
                        && near(mesh->boxCollider.restitution, 0.65f)
-                       && near(mesh->boxCollider.friction, 0.18f),
+                       && near(mesh->boxCollider.friction, 0.18f)
+                       && mesh->boxCollider.collisionLayer == 8U
+                       && mesh->boxCollider.collisionMask == 0x00000006U,
                "box collider dimensions, response and trigger state are restored");
         expect(near(mesh->material.albedoMapTransform.uvScale[0], 0.5f)
                        && near(mesh->material.albedoMapTransform.uvScale[1], 0.75f)
@@ -457,7 +512,7 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::string invalidBoxCollider = valid.str();
     const std::string boxDimensions = "BOX_COLLIDER 1 0.75";
     const std::size_t boxPosition = invalidBoxCollider.find(boxDimensions);
-    expect(boxPosition != std::string::npos, "v14 scene stores box collider dimensions");
+    expect(boxPosition != std::string::npos, "v15 scene stores box collider dimensions");
     if (boxPosition != std::string::npos) {
         invalidBoxCollider.replace(boxPosition + std::string("BOX_COLLIDER 1 ").size(),
                                    std::string("0.75").size(), "0");
@@ -467,6 +522,24 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "box colliders with zero half-extents are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid box collider data cannot partially replace the target scene");
+
+    std::string invalidCollisionLayer = valid.str();
+    expect(replaceRecordField(invalidCollisionLayer, "SPHERE_COLLIDER", 6, "0"),
+           "v15 scene stores a sphere-collider category layer");
+    std::stringstream malformedCollisionLayer(invalidCollisionLayer);
+    expect(!nuby::SceneSerializer::load(target, malformedCollisionLayer, error),
+           "zero collider layers are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid collider filters cannot partially replace the target scene");
+
+    std::string invalidFloorLayer = valid.str();
+    expect(replaceRecordField(invalidFloorLayer, "PHYSICS", 10, "0"),
+           "v15 scene stores a world-floor collision layer");
+    std::stringstream malformedFloorLayer(invalidFloorLayer);
+    expect(!nuby::SceneSerializer::load(target, malformedFloorLayer, error),
+           "zero world-floor layers are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid floor filter cannot partially replace the target scene");
 
     std::string truncated = valid.str();
     truncated.resize(truncated.size() - 8);
@@ -542,6 +615,22 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     }
     expect(legacyV13Mesh != nullptr && !legacyV13Mesh->boxCollider.enabled,
            "version-thirteen scenes receive disabled default box colliders");
+
+    const std::string versionFourteenText = downgradeTextureSchema(valid.str(), 14, 6);
+    std::stringstream legacyV14(versionFourteenText);
+    expect(nuby::SceneSerializer::load(target, legacyV14, error),
+           "version-fourteen OBB scenes remain readable after adding collision filters");
+    const nuby::Entity* legacyV14Root = target.find(1);
+    const nuby::Entity* legacyV14Mesh = target.find(2);
+    expect(legacyV14Root != nullptr
+                   && legacyV14Root->sphereCollider.collisionLayer == 1U
+                   && legacyV14Root->sphereCollider.collisionMask == 0xFFFFFFFFU
+                   && legacyV14Mesh != nullptr
+                   && legacyV14Mesh->boxCollider.collisionLayer == 1U
+                   && legacyV14Mesh->boxCollider.collisionMask == 0xFFFFFFFFU
+                   && target.physicsSettings().floorCollisionLayer == 1U
+                   && target.physicsSettings().floorCollisionMask == 0xFFFFFFFFU,
+           "version-fourteen colliders and floor receive permissive filter defaults");
 
     const std::string versionTwelveText = downgradeTextureSchema(valid.str(), 12, 6);
     std::stringstream legacyV12(versionTwelveText);

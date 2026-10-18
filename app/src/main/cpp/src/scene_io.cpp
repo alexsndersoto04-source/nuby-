@@ -60,6 +60,13 @@ bool readBool(std::istream& input, bool& value) {
     return true;
 }
 
+bool readUint32(std::istream& input, std::uint32_t& value) {
+    std::uint64_t encoded = 0;
+    if (!(input >> encoded) || encoded > std::numeric_limits<std::uint32_t>::max()) return false;
+    value = static_cast<std::uint32_t>(encoded);
+    return true;
+}
+
 template <std::size_t N>
 bool readFloatArray(std::istream& input, std::array<float, N>& values) {
     for (float& value : values) {
@@ -208,7 +215,8 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.orbitCamera.pitchPerPixel)) {
         return false;
     }
-    if ((entity.rigidbody.enabled && entity.rigidbody.mass < 1.0e-6f)
+    if (entity.sphereCollider.collisionLayer == 0U || entity.boxCollider.collisionLayer == 0U
+            || (entity.rigidbody.enabled && entity.rigidbody.mass < 1.0e-6f)
             || entity.rigidbody.linearDamping < 0.0f || entity.rigidbody.angularDamping < 0.0f
             || (entity.sphereCollider.enabled && entity.sphereCollider.radius <= 0.0f)
             || entity.sphereCollider.restitution < 0.0f || entity.sphereCollider.restitution > 1.0f
@@ -262,7 +270,7 @@ bool validateScene(const Scene& scene, std::uint32_t activeCameraId,
             || !std::isfinite(physics.floorRestitution)
             || physics.floorRestitution < 0.0f || physics.floorRestitution > 1.0f
             || !std::isfinite(physics.floorFriction) || physics.floorFriction < 0.0f
-            || physics.floorFriction > 1.0f) {
+            || physics.floorFriction > 1.0f || physics.floorCollisionLayer == 0U) {
         return fail(error, "Scene physics settings are invalid");
     }
     if (nextEntityId <= maximumId) {
@@ -433,12 +441,16 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     output << "SPHERE_COLLIDER " << (entity.sphereCollider.enabled ? 1 : 0) << ' '
            << entity.sphereCollider.radius << ' ' << entity.sphereCollider.restitution << ' '
            << entity.sphereCollider.friction << ' '
-           << (entity.sphereCollider.trigger ? 1 : 0) << '\n';
+           << (entity.sphereCollider.trigger ? 1 : 0) << ' '
+           << entity.sphereCollider.collisionLayer << ' '
+           << entity.sphereCollider.collisionMask << '\n';
 
     output << "BOX_COLLIDER " << (entity.boxCollider.enabled ? 1 : 0);
     writeFloatArray(output, entity.boxCollider.halfExtents);
     output << ' ' << entity.boxCollider.restitution << ' ' << entity.boxCollider.friction
-           << ' ' << (entity.boxCollider.trigger ? 1 : 0) << '\n';
+           << ' ' << (entity.boxCollider.trigger ? 1 : 0) << ' '
+           << entity.boxCollider.collisionLayer << ' '
+           << entity.boxCollider.collisionMask << '\n';
 
     output << "CHARACTER_CONTROLLER " << (entity.characterController.enabled ? 1 : 0)
            << ' ' << entity.characterController.moveInput[0]
@@ -698,7 +710,11 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !readBool(input, entity.sphereCollider.trigger)
                 || !std::isfinite(entity.sphereCollider.radius)
                 || !std::isfinite(entity.sphereCollider.restitution)
-                || !std::isfinite(entity.sphereCollider.friction)) {
+                || !std::isfinite(entity.sphereCollider.friction)
+                || (version >= 15
+                    && (!readUint32(input, entity.sphereCollider.collisionLayer)
+                        || !readUint32(input, entity.sphereCollider.collisionMask)
+                        || entity.sphereCollider.collisionLayer == 0U))) {
             return fail(error, "Entity sphere collider component is invalid");
         }
         if (version >= 14
@@ -708,7 +724,11 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                     || !(input >> entity.boxCollider.restitution >> entity.boxCollider.friction)
                     || !readBool(input, entity.boxCollider.trigger)
                     || !std::isfinite(entity.boxCollider.restitution)
-                    || !std::isfinite(entity.boxCollider.friction))) {
+                    || !std::isfinite(entity.boxCollider.friction)
+                    || (version >= 15
+                        && (!readUint32(input, entity.boxCollider.collisionLayer)
+                            || !readUint32(input, entity.boxCollider.collisionMask)
+                            || entity.boxCollider.collisionLayer == 0U)))) {
             return fail(error, "Entity box collider component is invalid");
         }
     }
@@ -746,7 +766,8 @@ bool SceneSerializer::save(const Scene& scene, std::ostream& output, std::string
     writeFloatArray(output, physics.gravity);
     output << ' ' << physics.fixedTimeStep << ' ' << physics.maximumSubsteps << ' '
            << (physics.floorEnabled ? 1 : 0) << ' ' << physics.floorHeight << ' '
-           << physics.floorRestitution << ' ' << physics.floorFriction << '\n';
+           << physics.floorRestitution << ' ' << physics.floorFriction << ' '
+           << physics.floorCollisionLayer << ' ' << physics.floorCollisionMask << '\n';
     for (const Entity& entity : scene.entities_) writeEntity(output, entity);
     output << "END_SCENE\n";
     if (!output) return fail(error, "Could not write complete scene data");
@@ -788,7 +809,11 @@ bool SceneSerializer::load(Scene& scene, std::istream& input, std::string& error
                 || !std::isfinite(physics.floorRestitution)
                 || physics.floorRestitution < 0.0f || physics.floorRestitution > 1.0f
                 || !std::isfinite(physics.floorFriction) || physics.floorFriction < 0.0f
-                || physics.floorFriction > 1.0f) {
+                || physics.floorFriction > 1.0f
+                || (version >= 15
+                    && (!readUint32(input, physics.floorCollisionLayer)
+                        || !readUint32(input, physics.floorCollisionMask)
+                        || physics.floorCollisionLayer == 0U))) {
             return fail(error, "Scene physics settings are invalid");
         }
     }

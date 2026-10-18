@@ -135,12 +135,16 @@ struct RigidbodyComponent {
     float gravityScale = 1.0f;
 };
 
+// Collider pairs require reciprocal mask matches: each mask must include the
+// other collider's nonzero category layer. A zero mask disables pair contacts.
 struct SphereColliderComponent {
     bool enabled = false;
     float radius = 0.5f;
     float restitution = 0.2f;
     float friction = 0.35f;
     bool trigger = false;
+    std::uint32_t collisionLayer = 1U;
+    std::uint32_t collisionMask = 0xFFFFFFFFU;
 };
 
 // Oriented box collider. Half-extents are scaled by the entity's absolute
@@ -151,6 +155,8 @@ struct BoxColliderComponent {
     float restitution = 0.2f;
     float friction = 0.35f;
     bool trigger = false;
+    std::uint32_t collisionLayer = 1U;
+    std::uint32_t collisionMask = 0xFFFFFFFFU;
 };
 
 struct CharacterControllerComponent {
@@ -163,6 +169,7 @@ struct CharacterControllerComponent {
 };
 
 struct PhysicsSettings {
+    // The implicit world floor participates in the same reciprocal layer/mask filter.
     std::array<float, 3> gravity{0.0f, -9.81f, 0.0f};
     float fixedTimeStep = 1.0f / 60.0f;
     unsigned int maximumSubsteps = 4;
@@ -170,6 +177,8 @@ struct PhysicsSettings {
     float floorHeight = 0.0f;
     float floorRestitution = 0.2f;
     float floorFriction = 0.35f;
+    std::uint32_t floorCollisionLayer = 1U;
+    std::uint32_t floorCollisionMask = 0xFFFFFFFFU;
 };
 
 // Trigger transitions are emitted at fixed simulation steps; consume them after
@@ -183,6 +192,13 @@ struct PhysicsEvent {
     PhysicsEventType type = PhysicsEventType::TriggerEnter;
     std::uint32_t firstEntityId = 0;
     std::uint32_t secondEntityId = 0;
+};
+
+struct RaycastHit {
+    std::uint32_t entityId = 0;
+    float distance = 0.0f;
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
 };
 
 struct PointLightComponent {
@@ -260,6 +276,13 @@ public:
     bool orbitActiveCamera(float deltaX, float deltaY);
     bool zoomActiveCamera(float distanceFactor);
     void collectPointLights(std::size_t maximum, std::vector<PointLightData>& output) const;
+    // Direction is normalized internally; the distance is measured in world units.
+    // Enabled triggers are queryable; query and collider filters must reciprocally match.
+    // Like the current physics solver, raycasts consider root-level colliders only.
+    bool raycast(const std::array<float, 3>& origin,
+                 const std::array<float, 3>& direction, float maximumDistance,
+                 RaycastHit& hit, std::uint32_t queryLayer = 1U,
+                 std::uint32_t queryMask = 0xFFFFFFFFU) const;
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();

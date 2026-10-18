@@ -799,6 +799,172 @@ void testContinuousSphereCollisionWithFloor() {
            "continuous sphere-floor collision prevents tunneling below the floor");
 }
 
+void testCollisionLayersFilterContactsTriggersAndFloor() {
+    nuby::Scene sphereScene;
+    sphereScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t firstId = sphereScene.create(
+            "layer one", nuby::Primitive::Sphere).id;
+    const std::uint32_t secondId = sphereScene.create(
+            "layer two", nuby::Primitive::Sphere).id;
+    nuby::Entity* first = sphereScene.find(firstId);
+    nuby::Entity* second = sphereScene.find(secondId);
+    first->rigidbody.enabled = true;
+    first->rigidbody.linearDamping = 0.0f;
+    first->sphereCollider.enabled = true;
+    first->sphereCollider.collisionLayer = 1U;
+    first->sphereCollider.collisionMask = 2U;
+    first->sphereCollider.radius = 0.5f;
+    second->transform.position[0] = 0.5f;
+    second->sphereCollider.enabled = true;
+    second->sphereCollider.collisionLayer = 2U;
+    second->sphereCollider.collisionMask = 4U;
+    second->sphereCollider.radius = 0.5f;
+    sphereScene.update(1.0f / 60.0f);
+    expect(near(first->transform.position[0], 0.0f),
+           "asymmetric collider masks suppress sphere contacts in both simulation passes");
+    second->sphereCollider.collisionMask = 1U;
+    sphereScene.update(1.0f / 60.0f);
+    expect(first->transform.position[0] < -0.1f,
+           "reciprocal layer and mask bits allow sphere contact resolution");
+
+    nuby::Scene mixedScene;
+    mixedScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t boxId = mixedScene.create("box layer", nuby::Primitive::None).id;
+    const std::uint32_t sphereId = mixedScene.create("sphere layer", nuby::Primitive::Sphere).id;
+    nuby::Entity* box = mixedScene.find(boxId);
+    nuby::Entity* sphere = mixedScene.find(sphereId);
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    box->boxCollider.collisionLayer = 2U;
+    sphere->transform.position[0] = 0.3f;
+    sphere->rigidbody.enabled = true;
+    sphere->rigidbody.linearDamping = 0.0f;
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.25f;
+    sphere->sphereCollider.collisionLayer = 1U;
+    sphere->sphereCollider.collisionMask = 1U;
+    mixedScene.update(1.0f / 60.0f);
+    expect(near(sphere->transform.position[0], 0.3f),
+           "collision masks suppress mixed sphere-OBB contacts");
+    sphere->sphereCollider.collisionMask = 2U;
+    mixedScene.update(1.0f / 60.0f);
+    expect(sphere->transform.position[0] > 0.3f,
+           "matching sphere and box filters enable mixed-shape contact response");
+
+    nuby::Scene triggerScene;
+    triggerScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t sensorId = triggerScene.create(
+            "filtered sensor", nuby::Primitive::Sphere).id;
+    const std::uint32_t moverId = triggerScene.create(
+            "filtered mover", nuby::Primitive::Sphere).id;
+    nuby::Entity* sensor = triggerScene.find(sensorId);
+    nuby::Entity* mover = triggerScene.find(moverId);
+    sensor->sphereCollider.enabled = true;
+    sensor->sphereCollider.trigger = true;
+    sensor->sphereCollider.collisionLayer = 2U;
+    sensor->sphereCollider.collisionMask = 4U;
+    mover->rigidbody.enabled = true;
+    mover->rigidbody.linearDamping = 0.0f;
+    mover->sphereCollider.enabled = true;
+    mover->sphereCollider.collisionLayer = 1U;
+    mover->sphereCollider.collisionMask = 2U;
+    triggerScene.update(1.0f / 60.0f);
+    std::vector<nuby::PhysicsEvent> events;
+    triggerScene.consumePhysicsEvents(events);
+    expect(events.empty(), "asymmetric collision filters suppress trigger notifications");
+    sensor->sphereCollider.collisionMask = 1U;
+    triggerScene.update(1.0f / 60.0f);
+    triggerScene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::TriggerEnter,
+           "reciprocal collision filters enable trigger enter events");
+
+    nuby::Scene ccdScene;
+    ccdScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t wallId = ccdScene.create("filtered wall", nuby::Primitive::None).id;
+    const std::uint32_t projectileId = ccdScene.create(
+            "filtered projectile", nuby::Primitive::Sphere).id;
+    nuby::Entity* wall = ccdScene.find(wallId);
+    nuby::Entity* projectile = ccdScene.find(projectileId);
+    wall->boxCollider.enabled = true;
+    wall->boxCollider.halfExtents = {0.05f, 1.0f, 1.0f};
+    wall->boxCollider.collisionLayer = 2U;
+    projectile->transform.position[0] = -2.0f;
+    projectile->rigidbody.enabled = true;
+    projectile->rigidbody.velocity[0] = 300.0f;
+    projectile->rigidbody.linearDamping = 0.0f;
+    projectile->sphereCollider.enabled = true;
+    projectile->sphereCollider.radius = 0.25f;
+    projectile->sphereCollider.collisionLayer = 1U;
+    projectile->sphereCollider.collisionMask = 1U;
+    ccdScene.update(1.0f / 60.0f);
+    expect(projectile->transform.position[0] > 2.9f,
+           "collision filters are applied to continuous sphere-OBB sweeps");
+
+    nuby::Scene floorScene;
+    floorScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    floorScene.physicsSettings().floorEnabled = true;
+    floorScene.physicsSettings().floorRestitution = 0.0f;
+    nuby::Entity& falling = floorScene.create("filtered floor body", nuby::Primitive::Sphere);
+    falling.transform.position[1] = 2.0f;
+    falling.rigidbody.enabled = true;
+    falling.rigidbody.velocity[1] = -300.0f;
+    falling.rigidbody.linearDamping = 0.0f;
+    falling.sphereCollider.enabled = true;
+    falling.sphereCollider.radius = 0.5f;
+    falling.sphereCollider.collisionMask = 2U;
+    floorScene.update(1.0f / 60.0f);
+    expect(falling.transform.position[1] < 0.0f,
+           "collider masks exclude a fast body from both discrete and continuous floor contact");
+    floorScene.physicsSettings().floorCollisionLayer = 2U;
+    floorScene.update(1.0f / 60.0f);
+    expect(near(falling.transform.position[1], 0.5f, 0.002f)
+                   && near(falling.rigidbody.velocity[1], 0.0f, 0.01f),
+           "the configurable floor layer re-enables sphere-floor contact");
+}
+
+void testRaycastQueriesNearestSphereAndFilteredOrientedBox() {
+    nuby::Scene scene;
+    const std::uint32_t sphereId = scene.create("ray target sphere", nuby::Primitive::Sphere).id;
+    const std::uint32_t boxId = scene.create("ray target OBB", nuby::Primitive::None).id;
+    nuby::Entity* sphere = scene.find(sphereId);
+    nuby::Entity* box = scene.find(boxId);
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.5f;
+    sphere->sphereCollider.collisionLayer = 2U;
+    sphere->sphereCollider.collisionMask = 4U;
+    box->transform.position[0] = 3.0f;
+    box->transform.rotation[1] = 0.4f;
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.5f, 0.5f, 0.1f};
+    box->boxCollider.collisionLayer = 4U;
+    box->boxCollider.collisionMask = 2U;
+
+    nuby::RaycastHit hit;
+    expect(scene.raycast({-3.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 0.0f}, 10.0f,
+                   hit, 4U, 2U)
+                   && hit.entityId == sphereId && near(hit.distance, 2.5f)
+                   && near(hit.position[0], -0.5f) && near(hit.normal[0], -1.0f),
+           "raycast normalizes its ray and reports the closest filtered sphere hit");
+
+    expect(scene.raycast({-3.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, 10.0f,
+                   hit, 2U, 4U)
+                   && hit.entityId == boxId && hit.distance > 5.0f
+                   && near(std::sqrt(hit.normal[0] * hit.normal[0]
+                               + hit.normal[1] * hit.normal[1]
+                               + hit.normal[2] * hit.normal[2]), 1.0f, 0.002f),
+           "raycast intersects rotated OBBs and returns a unit world-space normal");
+    expect(!scene.raycast({-3.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, 4.0f,
+                   hit, 2U, 4U) && hit.entityId == 0,
+           "raycast respects maximum distance and clears misses");
+    expect(scene.raycast({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}, 1.0f,
+                   hit, 4U, 2U)
+                   && hit.entityId == sphereId && near(hit.distance, 0.0f),
+           "ray starting inside a collider reports a zero-distance hit");
+    expect(!scene.raycast({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, hit)
+                   && hit.entityId == 0,
+           "raycast rejects a zero direction and clears the output hit");
+}
+
 void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     nuby::Scene scene;
     scene.physicsSettings().floorEnabled = true;
@@ -908,6 +1074,8 @@ int main() {
     testContinuousCollisionBetweenDynamicSpheres();
     testContinuousSphereCollisionWithMovingBox();
     testContinuousSphereCollisionWithFloor();
+    testCollisionLayersFilterContactsTriggersAndFloor();
+    testRaycastQueriesNearestSphereAndFilteredOrientedBox();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();

@@ -123,6 +123,8 @@ struct CollisionShape {
     float restitution = 0.0f;
     float friction = 0.0f;
     bool trigger = false;
+    std::uint32_t collisionLayer = 1U;
+    std::uint32_t collisionMask = 0xFFFFFFFFU;
 };
 
 struct CollisionContact {
@@ -158,6 +160,8 @@ bool collisionShape(const Entity& entity, CollisionShape& shape) {
         shape.restitution = collider.restitution;
         shape.friction = collider.friction;
         shape.trigger = collider.trigger;
+        shape.collisionLayer = collider.collisionLayer;
+        shape.collisionMask = collider.collisionMask;
         shape.halfExtents = {shape.radius, shape.radius, shape.radius};
         shape.worldHalfExtents = shape.halfExtents;
         return true;
@@ -187,7 +191,20 @@ bool collisionShape(const Entity& entity, CollisionShape& shape) {
     shape.restitution = collider.restitution;
     shape.friction = collider.friction;
     shape.trigger = collider.trigger;
+    shape.collisionLayer = collider.collisionLayer;
+    shape.collisionMask = collider.collisionMask;
     return true;
+}
+
+bool colliderPairAllowed(const CollisionShape& first, const CollisionShape& second) {
+    return (first.collisionMask & second.collisionLayer) != 0U
+            && (second.collisionMask & first.collisionLayer) != 0U;
+}
+
+bool colliderCanHitFloor(std::uint32_t layer, std::uint32_t mask,
+                         const PhysicsSettings& settings) {
+    return (mask & settings.floorCollisionLayer) != 0U
+            && (settings.floorCollisionMask & layer) != 0U;
 }
 
 bool sweepSphereAgainstShape(const Vec3& start, const Vec3& displacement, float radius,
@@ -523,6 +540,110 @@ void updateAnimation(AnimationComponent& animation, Transform& transform, float 
     transform.scale = animation.scale.sample(animation.timeSeconds, transform.scale);
 }
 }  // namespace
+
+bool Scene::raycast(const std::array<float, 3>& origin,
+                    const std::array<float, 3>& direction, float maximumDistance,
+                    RaycastHit& hit, std::uint32_t queryLayer,
+                    std::uint32_t queryMask) const {
+    hit = RaycastHit{};
+    if (!std::isfinite(maximumDistance) || maximumDistance < 0.0f
+            || queryLayer == 0U || queryMask == 0U) return false;
+    for (float component : origin) {
+        if (!std::isfinite(component)) return false;
+    }
+    for (float component : direction) {
+        if (!std::isfinite(component)) return false;
+    }
+    const float directionLength = std::sqrt(dot(direction, direction));
+    if (!std::isfinite(directionLength) || directionLength <= 1.0e-8f) return false;
+    const Vec3 rayDirection{direction[0] / directionLength,
+            direction[1] / directionLength, direction[2] / directionLength};
+
+    bool found = false;
+    float closestDistance = maximumDistance;
+    for (const Entity& entity : entities_) {
+        CollisionShape shape;
+        if (!collisionShape(entity, shape)
+                || (queryMask & shape.collisionLayer) == 0U
+                || (shape.collisionMask & queryLayer) == 0U) continue;
+
+        float distance = 0.0f;
+        Vec3 normal{-rayDirection[0], -rayDirection[1], -rayDirection[2]};
+        if (shape.sphere) {
+            const Vec3 offset{origin[0] - shape.center[0], origin[1] - shape.center[1],
+                              origin[2] - shape.center[2]};
+            const float b = dot(offset, rayDirection);
+            const float c = dot(offset, offset) - shape.radius * shape.radius;
+            const float discriminant = b * b - c;
+            if (!std::isfinite(discriminant) || discriminant < 0.0f
+                    || (c > 0.0f && b > 0.0f)) continue;
+            const float candidate = -b - std::sqrt(discriminant);
+            distance = candidate >= 0.0f ? candidate : 0.0f;
+            if (distance > maximumDistance) continue;
+            if (distance > 0.0f) {
+                const Vec3 hitPosition{origin[0] + rayDirection[0] * distance,
+                        origin[1] + rayDirection[1] * distance,
+                        origin[2] + rayDirection[2] * distance};
+                normal = {hitPosition[0] - shape.center[0],
+                        hitPosition[1] - shape.center[1],
+                        hitPosition[2] - shape.center[2]};
+                const float normalLength = std::sqrt(dot(normal, normal));
+                if (!std::isfinite(normalLength) || normalLength <= 1.0e-8f) continue;
+                for (float& component : normal) component /= normalLength;
+            }
+        } else {
+            const Vec3 relative{origin[0] - shape.center[0],
+                    origin[1] - shape.center[1], origin[2] - shape.center[2]};
+            float nearDistance = 0.0f;
+            float farDistance = maximumDistance;
+            bool intersects = true;
+            Vec3 faceNormal{-rayDirection[0], -rayDirection[1], -rayDirection[2]};
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                const float localOrigin = dot(relative, shape.axes[axis]);
+                const float localDirection = dot(rayDirection, shape.axes[axis]);
+                if (std::fabs(localDirection) <= 1.0e-8f) {
+                    if (localOrigin < -shape.halfExtents[axis]
+                            || localOrigin > shape.halfExtents[axis]) {
+                        intersects = false;
+                        break;
+                    }
+                    continue;
+                }
+                const float first = (-shape.halfExtents[axis] - localOrigin)
+                        / localDirection;
+                const float second = (shape.halfExtents[axis] - localOrigin)
+                        / localDirection;
+                const float axisNear = std::min(first, second);
+                const float axisFar = std::max(first, second);
+                if (axisNear > nearDistance) {
+                    nearDistance = axisNear;
+                    const float side = localDirection > 0.0f ? -1.0f : 1.0f;
+                    for (std::size_t component = 0; component < 3; ++component) {
+                        faceNormal[component] = shape.axes[axis][component] * side;
+                    }
+                }
+                farDistance = std::min(farDistance, axisFar);
+                if (nearDistance > farDistance) {
+                    intersects = false;
+                    break;
+                }
+            }
+            if (!intersects || farDistance < 0.0f || nearDistance > maximumDistance) continue;
+            distance = nearDistance;
+            normal = faceNormal;
+        }
+        if (found && distance >= closestDistance) continue;
+        found = true;
+        closestDistance = distance;
+        hit.entityId = entity.id;
+        hit.distance = distance;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            hit.position[axis] = origin[axis] + rayDirection[axis] * distance;
+            hit.normal[axis] = normal[axis];
+        }
+    }
+    return found;
+}
 
 bool Vector3Track::addKeyframe(float timeSeconds, const std::array<float, 3>& value) {
     if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f
@@ -888,7 +1009,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 Entity& secondEntity = entities_[secondIndex];
                 CollisionShape secondShape;
                 if (!collisionShape(secondEntity, secondShape)
-                        || (!firstShape.sphere && !secondShape.sphere)) continue;
+                        || (!firstShape.sphere && !secondShape.sphere)
+                        || !colliderPairAllowed(firstShape, secondShape)) continue;
                 const RigidbodyComponent& secondBody = secondEntity.rigidbody;
                 const bool targetDynamic = secondBody.enabled && std::isfinite(secondBody.mass)
                         && secondBody.mass >= 1.0e-6f;
@@ -1026,6 +1148,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 Entity& entity = entities_[index];
                 if (!entity.sphereCollider.enabled || entity.boxCollider.enabled
                         || entity.parentId != 0 || !entity.rigidbody.enabled
+                        || !colliderCanHitFloor(entity.sphereCollider.collisionLayer,
+                                entity.sphereCollider.collisionMask, physicsSettings_)
                         || !std::isfinite(entity.rigidbody.mass)
                         || entity.rigidbody.mass < 1.0e-6f) continue;
                 const float scale = std::max({std::fabs(entity.transform.scale[0]),
@@ -1069,7 +1193,10 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 const SphereColliderComponent& collider = entity.sphereCollider;
                 if (!body.enabled || !std::isfinite(body.mass) || body.mass < 1.0e-6f
                         || entity.parentId != 0 || entity.boxCollider.enabled
-                        || !collider.enabled || !std::isfinite(collider.radius)
+                        || !collider.enabled
+                        || !colliderCanHitFloor(collider.collisionLayer,
+                                collider.collisionMask, physicsSettings_)
+                        || !std::isfinite(collider.radius)
                         || collider.radius <= 0.0f || !std::isfinite(collider.restitution)
                         || !std::isfinite(collider.friction)
                         || !std::isfinite(entity.transform.scale[0])
@@ -1123,6 +1250,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
             for (Entity& entity : entities_) {
                 CollisionShape shape;
                 if (!entity.boxCollider.enabled || !collisionShape(entity, shape)
+                        || !colliderCanHitFloor(shape.collisionLayer, shape.collisionMask,
+                                physicsSettings_)
                         || !entity.rigidbody.enabled || !std::isfinite(entity.rigidbody.mass)
                         || entity.rigidbody.mass < 1.0e-6f) continue;
                 const float halfHeight = shape.worldHalfExtents[1];
@@ -1232,6 +1361,10 @@ void Scene::simulatePhysics(float deltaSeconds) {
                 const float secondRadius = secondCollider.radius * secondScale;
                 if (second.transform.position[0] - secondRadius
                         > first.transform.position[0] + firstRadius) break;
+                if ((firstCollider.collisionMask & secondCollider.collisionLayer) == 0U
+                        || (secondCollider.collisionMask & firstCollider.collisionLayer) == 0U) {
+                    continue;
+                }
                 float dx = second.transform.position[0] - first.transform.position[0];
                 float dy = second.transform.position[1] - first.transform.position[1];
                 float dz = second.transform.position[2] - first.transform.position[2];
@@ -1370,6 +1503,7 @@ void Scene::simulatePhysics(float deltaSeconds) {
                     if (secondShape.center[0] - secondShape.worldHalfExtents[0]
                             > firstMaximumX) break;
                     if (firstShape.sphere && secondShape.sphere) continue;
+                    if (!colliderPairAllowed(firstShape, secondShape)) continue;
 
                     CollisionContact contact;
                     if (!collideShapes(firstShape, secondShape, contact)) continue;
