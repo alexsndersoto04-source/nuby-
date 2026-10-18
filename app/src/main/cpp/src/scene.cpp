@@ -1488,6 +1488,16 @@ bool Scene::destroyEntity(std::uint32_t id) {
             ++pair;
         }
     }
+    for (auto pair = activeCollisionPairs_.begin(); pair != activeCollisionPairs_.end();) {
+        const std::uint32_t first = static_cast<std::uint32_t>(*pair >> 32U);
+        const std::uint32_t second = static_cast<std::uint32_t>(*pair);
+        if (removedIds.count(first) != 0 || removedIds.count(second) != 0) {
+            queuePhysicsEvent(physicsEvents_, PhysicsEventType::CollisionExit, first, second);
+            pair = activeCollisionPairs_.erase(pair);
+        } else {
+            ++pair;
+        }
+    }
 
     entities_.erase(std::remove_if(entities_.begin(), entities_.end(),
             [&removedIds](const Entity& entity) {
@@ -1658,6 +1668,8 @@ void Scene::clear() {
     physicsAccumulator_ = 0.0f;
     activeTriggerPairs_.clear();
     triggerPairsScratch_.clear();
+    activeCollisionPairs_.clear();
+    collisionPairsScratch_.clear();
     colliderIndicesScratch_.clear();
     dynamicColliderIndicesScratch_.clear();
     physicsEvents_.clear();
@@ -1690,6 +1702,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
     dynamicColliderIndices.reserve(entities_.size());
     std::vector<std::uint64_t>& currentTriggerPairs = triggerPairsScratch_;
     currentTriggerPairs.clear();
+    std::vector<std::uint64_t>& currentCollisionPairs = collisionPairsScratch_;
+    currentCollisionPairs.clear();
     std::vector<Vec3> previousPositions(entities_.size());
 
     for (unsigned int substep = 0; substep < maximumSubsteps
@@ -1852,6 +1866,8 @@ void Scene::simulatePhysics(float deltaSeconds) {
                             sphereEntity->id, targetEntity->id));
                     continue;
                 }
+                currentCollisionPairs.push_back(triggerPairKey(
+                        sphereEntity->id, targetEntity->id));
 
                 const Vec3 sphereVelocity = sphereInverseMass > 0.0f
                         ? sphereEntity->rigidbody.velocity : Vec3{0.0f, 0.0f, 0.0f};
@@ -2141,6 +2157,7 @@ void Scene::simulatePhysics(float deltaSeconds) {
                     currentTriggerPairs.push_back(triggerPairKey(first.id, second.id));
                     continue;
                 }
+                currentCollisionPairs.push_back(triggerPairKey(first.id, second.id));
                 const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
                 if (distance > 1.0e-6f) {
                     dx /= distance;
@@ -2277,6 +2294,7 @@ void Scene::simulatePhysics(float deltaSeconds) {
                         currentTriggerPairs.push_back(triggerPairKey(first.id, second.id));
                         continue;
                     }
+                    currentCollisionPairs.push_back(triggerPairKey(first.id, second.id));
                     RigidbodyComponent& firstBody = first.rigidbody;
                     RigidbodyComponent& secondBody = second.rigidbody;
                     const float firstInverseMass = firstBody.enabled && std::isfinite(firstBody.mass)
@@ -2389,6 +2407,26 @@ void Scene::simulatePhysics(float deltaSeconds) {
         }
         activeTriggerPairs_.swap(currentTriggerPairs);
         currentTriggerPairs.clear();
+
+        std::sort(currentCollisionPairs.begin(), currentCollisionPairs.end());
+        currentCollisionPairs.erase(std::unique(currentCollisionPairs.begin(),
+                currentCollisionPairs.end()), currentCollisionPairs.end());
+        for (const std::uint64_t key : currentCollisionPairs) {
+            if (!std::binary_search(activeCollisionPairs_.begin(), activeCollisionPairs_.end(), key)) {
+                queuePhysicsEvent(physicsEvents_, PhysicsEventType::CollisionEnter,
+                        static_cast<std::uint32_t>(key >> 32U),
+                        static_cast<std::uint32_t>(key));
+            }
+        }
+        for (const std::uint64_t key : activeCollisionPairs_) {
+            if (!std::binary_search(currentCollisionPairs.begin(), currentCollisionPairs.end(), key)) {
+                queuePhysicsEvent(physicsEvents_, PhysicsEventType::CollisionExit,
+                        static_cast<std::uint32_t>(key >> 32U),
+                        static_cast<std::uint32_t>(key));
+            }
+        }
+        activeCollisionPairs_.swap(currentCollisionPairs);
+        currentCollisionPairs.clear();
         physicsAccumulator_ -= step;
     }
     if (physicsAccumulator_ >= step) physicsAccumulator_ = std::fmod(physicsAccumulator_, step);

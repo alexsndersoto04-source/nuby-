@@ -181,11 +181,13 @@ struct PhysicsSettings {
     std::uint32_t floorCollisionMask = 0xFFFFFFFFU;
 };
 
-// Trigger transitions are emitted at fixed simulation steps; consume them after
-// Scene::update. The queue is bounded to protect long-running scenes.
+// Trigger and solid-collision transitions are emitted at fixed simulation steps;
+// consume them after Scene::update. The queue is bounded to protect long-running scenes.
 enum class PhysicsEventType : std::uint8_t {
     TriggerEnter,
-    TriggerExit
+    TriggerExit,
+    CollisionEnter,
+    CollisionExit
 };
 
 struct PhysicsEvent {
@@ -370,6 +372,8 @@ private:
     float physicsAccumulator_ = 0.0f;
     std::vector<std::uint64_t> activeTriggerPairs_;
     std::vector<std::uint64_t> triggerPairsScratch_;
+    std::vector<std::uint64_t> activeCollisionPairs_;
+    std::vector<std::uint64_t> collisionPairsScratch_;
     std::vector<std::size_t> colliderIndicesScratch_;
     std::vector<std::size_t> dynamicColliderIndicesScratch_;
     std::vector<PhysicsEvent> physicsEvents_;

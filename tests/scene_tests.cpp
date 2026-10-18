@@ -409,6 +409,81 @@ void testTriggerEventsReportEnterExitWithoutApplyingImpulse() {
            "destroying an overlapping trigger emits an exit event for cleanup");
 }
 
+void testSolidCollisionEventsReportTransitionsAndDestruction() {
+    nuby::Scene scene;
+    scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    const std::uint32_t staticId = scene.create("static collider", nuby::Primitive::None).id;
+    const std::uint32_t bodyId = scene.create("dynamic collider", nuby::Primitive::None).id;
+    nuby::Entity* fixed = scene.find(staticId);
+    fixed->sphereCollider.enabled = true;
+    fixed->sphereCollider.radius = 0.5f;
+    fixed->sphereCollider.restitution = 0.0f;
+    fixed->sphereCollider.friction = 0.0f;
+    nuby::Entity* body = scene.find(bodyId);
+    body->transform.position[0] = 0.8f;
+    body->rigidbody.enabled = true;
+    body->rigidbody.linearDamping = 0.0f;
+    body->rigidbody.gravityScale = 0.0f;
+    body->sphereCollider.enabled = true;
+    body->sphereCollider.radius = 0.5f;
+    body->sphereCollider.restitution = 0.0f;
+    body->sphereCollider.friction = 0.0f;
+
+    std::vector<nuby::PhysicsEvent> events;
+    scene.update(1.0f / 60.0f);
+    scene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::CollisionEnter
+                   && events[0].firstEntityId == staticId && events[0].secondEntityId == bodyId,
+           "solid sphere contact emits one canonical collision-enter event");
+
+    scene.update(1.0f / 60.0f);
+    scene.consumePhysicsEvents(events);
+    expect(events.empty(), "persistent solid contact does not repeat collision-enter");
+    body = scene.find(bodyId);
+    body->transform.position[0] = 3.0f;
+    scene.update(1.0f / 60.0f);
+    scene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::CollisionExit,
+           "separating from solid colliders emits collision-exit");
+
+    body = scene.find(bodyId);
+    body->transform.position[0] = 0.8f;
+    scene.update(1.0f / 60.0f);
+    scene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::CollisionEnter,
+           "a later solid contact can enter again");
+    expect(scene.destroyEntity(bodyId), "active solid collider can be removed");
+    scene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::CollisionExit
+                   && events[0].secondEntityId == bodyId,
+           "destroying a colliding entity emits collision-exit for cleanup");
+
+    nuby::Scene sweptScene;
+    sweptScene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+    sweptScene.physicsSettings().maximumSubsteps = 1;
+    const std::uint32_t wallId = sweptScene.create("swept wall", nuby::Primitive::None).id;
+    sweptScene.find(wallId)->sphereCollider.enabled = true;
+    sweptScene.find(wallId)->sphereCollider.radius = 0.5f;
+    const std::uint32_t fastId = sweptScene.create("fast sphere", nuby::Primitive::None).id;
+    nuby::Entity* fast = sweptScene.find(fastId);
+    fast->transform.position[0] = -5.0f;
+    fast->rigidbody.enabled = true;
+    fast->rigidbody.linearDamping = 0.0f;
+    fast->rigidbody.gravityScale = 0.0f;
+    fast->rigidbody.velocity[0] = 600.0f;
+    fast->sphereCollider.enabled = true;
+    fast->sphereCollider.radius = 0.5f;
+    sweptScene.update(1.0f / 60.0f);
+    sweptScene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::CollisionEnter
+                   && events[0].firstEntityId == wallId && events[0].secondEntityId == fastId,
+           "continuous solid collision emits enter even when the pair does not end overlapped");
+    sweptScene.update(1.0f / 60.0f);
+    sweptScene.consumePhysicsEvents(events);
+    expect(events.size() == 1 && events[0].type == nuby::PhysicsEventType::CollisionExit,
+           "transient continuous collision emits its exit on the following fixed step");
+}
+
 void testBoxCollidersHandleFloorAndMixedShapeContacts() {
     nuby::Scene floorScene;
     floorScene.physicsSettings().floorEnabled = true;
@@ -1305,6 +1380,7 @@ int main() {
     testRigidBodyRotationAndRollingFriction();
     testPhysicsSphereImpulseAndHierarchySafety();
     testTriggerEventsReportEnterExitWithoutApplyingImpulse();
+    testSolidCollisionEventsReportTransitionsAndDestruction();
     testBoxCollidersHandleFloorAndMixedShapeContacts();
     testRotatedBoxCollidersUseOrientedGeometry();
     testMixedShapeTriggersReportTransitionsWithoutImpulses();
