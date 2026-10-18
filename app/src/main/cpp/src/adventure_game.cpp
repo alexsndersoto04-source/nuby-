@@ -128,6 +128,23 @@ void AdventureGame::buildScene(Scene& scene) {
     player.material.emission = {0.025f, 0.08f, 0.12f};
     player.material.metallic = 0.18f;
     player.material.roughness = 0.43f;
+    const std::array<float, 3> playerScale = player.transform.scale;
+    const Material playerMaterial = player.material;
+    player.visible = false;  // Keep the physics body, render its skinned child instead.
+
+    Entity& animatedBody = scene.create("Wayfarer Animated Body", Primitive::ImportedMesh);
+    animatedBody.meshAsset = "characters/wayfarer_skeletal.glb";
+    animatedBody.transform.position = {
+        0.0f, (kFloorHeight - kPlayerCenterHeight) / playerScale[1], 0.0f};
+    animatedBody.transform.scale = {
+        1.0f / playerScale[0],
+        1.0f / playerScale[1],
+        1.0f / playerScale[2]};
+    animatedBody.skeletalAnimation.enabled = true;
+    animatedBody.skeletalAnimation.clipName = "walk";
+    animatedBody.skeletalAnimation.looping = true;
+    animatedBody.material = playerMaterial;
+    scene.setParent(animatedBody.id, playerId_);
 
     Entity& head = scene.create("Wayfarer Head", Primitive::Sphere);
     head.transform.position = {0.0f, 1.1f, 0.0f};

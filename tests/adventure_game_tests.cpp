@@ -47,8 +47,16 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
     expect(player != nullptr && player->name == "Wayfarer",
            "adventure creates its own player instead of reusing the runner");
     expect(player != nullptr && player->characterController.enabled
-                   && player->rigidbody.enabled && player->sphereCollider.enabled,
-           "adventure player uses the character controller and scene physics");
+                   && player->rigidbody.enabled && player->sphereCollider.enabled
+                   && !player->visible,
+           "adventure keeps its physics/controller body while hiding its render proxy");
+    const nuby::Entity* animatedBody = scene.find(findEntityId(scene, "Wayfarer Animated Body"));
+    expect(animatedBody != nullptr && animatedBody->parentId == game.playerId()
+                   && animatedBody->primitive == nuby::Primitive::ImportedMesh
+                   && animatedBody->meshAsset == "characters/wayfarer_skeletal.glb"
+                   && animatedBody->skeletalAnimation.enabled
+                   && animatedBody->skeletalAnimation.clipName == "walk",
+           "wayfarer renders a skinned GLB child driven by its named walk clip");
     expect(camera != nullptr && camera->orbitCamera.enabled,
            "adventure has an orbit-follow camera");
     const nuby::Entity* head = scene.find(findEntityId(scene, "Wayfarer Head"));

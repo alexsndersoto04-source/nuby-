@@ -952,6 +952,36 @@ void updateAnimation(AnimationComponent& animation, Transform& transform, float 
     transform.rotation = animation.rotation.sample(animation.timeSeconds, transform.rotation);
     transform.scale = animation.scale.sample(animation.timeSeconds, transform.scale);
 }
+
+void advanceSkeletalAnimation(SkeletalAnimationComponent& animation, float deltaSeconds) {
+    if (!animation.enabled || !animation.playing) return;
+    const float duration = std::isfinite(animation.durationSeconds)
+            ? std::max(animation.durationSeconds, 0.0f) : 0.0f;
+    const float current = std::isfinite(animation.timeSeconds)
+            ? std::clamp(animation.timeSeconds, 0.0f, duration) : 0.0f;
+    const float rate = std::isfinite(animation.playbackRate) ? animation.playbackRate : 0.0f;
+    if (duration <= 0.0f) {
+        animation.timeSeconds = 0.0f;
+        animation.playing = false;
+        return;
+    }
+    const float next = current + deltaSeconds * rate;
+    if (!std::isfinite(next)) {
+        animation.timeSeconds = 0.0f;
+        animation.playing = false;
+    } else if (animation.looping) {
+        animation.timeSeconds = std::fmod(next, duration);
+        if (animation.timeSeconds < 0.0f) animation.timeSeconds += duration;
+    } else if (next >= duration) {
+        animation.timeSeconds = duration;
+        animation.playing = false;
+    } else if (next <= 0.0f && rate < 0.0f) {
+        animation.timeSeconds = 0.0f;
+        animation.playing = false;
+    } else {
+        animation.timeSeconds = std::clamp(next, 0.0f, duration);
+    }
+}
 }  // namespace
 
 bool Scene::raycast(const std::array<float, 3>& origin,
@@ -2443,6 +2473,7 @@ void Scene::update(float deltaSeconds) {
         // pulse own position and scale when enabled; an authored rotation track
         // takes precedence over procedural spin.
         updateAnimation(entity.animation, entity.transform, dt);
+        advanceSkeletalAnimation(entity.skeletalAnimation, dt);
 
         const bool animationOwnsRotation = entity.animation.enabled
                 && !entity.animation.rotation.keyframes.empty();

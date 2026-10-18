@@ -140,6 +140,7 @@ bool validTrack(const Vector3Track& track) {
 bool validEntity(const Entity& entity) {
     if (entity.id == 0 || entity.name.size() > kMaximumTextLength
             || entity.meshAsset.size() > kMaximumTextLength
+            || entity.skeletalAnimation.clipName.size() > 256
             || !validTexturePath(entity.material.albedoTexture)
             || !validTexturePath(entity.material.normalTexture)
             || !validTexturePath(entity.material.metallicRoughnessTexture)
@@ -189,6 +190,9 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.pulse.amplitude) || !finite(entity.pulse.frequency)
             || !finite(entity.pulse.phase) || !finite(entity.animation.playbackRate)
             || !finite(entity.animation.timeSeconds) || !finite(entity.animation.durationSeconds)
+            || !finite(entity.skeletalAnimation.playbackRate)
+            || !finite(entity.skeletalAnimation.timeSeconds)
+            || !finite(entity.skeletalAnimation.durationSeconds)
             || !finite(entity.rigidbody.mass) || !finite3(entity.rigidbody.velocity)
             || !finite3(entity.rigidbody.angularVelocity)
             || !finite(entity.rigidbody.linearDamping)
@@ -238,7 +242,13 @@ bool validEntity(const Entity& entity) {
             || entity.characterController.moveInput[1] > 1.0f
             || entity.characterController.maximumSpeed < 0.0f
             || entity.characterController.acceleration < 0.0f
-            || entity.characterController.jumpSpeed < 0.0f) {
+            || entity.characterController.jumpSpeed < 0.0f
+            || std::fabs(entity.skeletalAnimation.playbackRate) > 1000.0f
+            || entity.skeletalAnimation.timeSeconds < 0.0f
+            || entity.skeletalAnimation.durationSeconds < 0.0f
+            || entity.skeletalAnimation.durationSeconds > 1000000.0f
+            || entity.skeletalAnimation.timeSeconds > entity.skeletalAnimation.durationSeconds
+            || (entity.skeletalAnimation.enabled && entity.skeletalAnimation.clipName.empty())) {
         return false;
     }
     return validTrack(entity.animation.position) && validTrack(entity.animation.rotation)
@@ -420,6 +430,14 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTrack(output, "POSITION_KEYS", entity.animation.position);
     writeTrack(output, "ROTATION_KEYS", entity.animation.rotation);
     writeTrack(output, "SCALE_KEYS", entity.animation.scale);
+
+    output << "SKELETAL_PLAYER " << (entity.skeletalAnimation.enabled ? 1 : 0) << ' '
+           << (entity.skeletalAnimation.playing ? 1 : 0) << ' '
+           << (entity.skeletalAnimation.looping ? 1 : 0) << ' '
+           << entity.skeletalAnimation.playbackRate << ' '
+           << entity.skeletalAnimation.timeSeconds << ' '
+           << entity.skeletalAnimation.durationSeconds << ' '
+           << std::quoted(entity.skeletalAnimation.clipName) << '\n';
 
     output << "POINT_LIGHT " << (entity.pointLight.enabled ? 1 : 0);
     writeFloatArray(output, entity.pointLight.color);
@@ -650,6 +668,21 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
             || !readTrack(input, "ROTATION_KEYS", entity.animation.rotation, totalKeyframes, error)
             || !readTrack(input, "SCALE_KEYS", entity.animation.scale, totalKeyframes, error)) {
         return false;
+    }
+    if (version >= 17) {
+        if (!readTag(input, "SKELETAL_PLAYER", error)
+                || !readBool(input, entity.skeletalAnimation.enabled)
+                || !readBool(input, entity.skeletalAnimation.playing)
+                || !readBool(input, entity.skeletalAnimation.looping)
+                || !(input >> entity.skeletalAnimation.playbackRate
+                             >> entity.skeletalAnimation.timeSeconds
+                             >> entity.skeletalAnimation.durationSeconds
+                             >> std::quoted(entity.skeletalAnimation.clipName))
+                || !std::isfinite(entity.skeletalAnimation.playbackRate)
+                || !std::isfinite(entity.skeletalAnimation.timeSeconds)
+                || !std::isfinite(entity.skeletalAnimation.durationSeconds)) {
+            return fail(error, "Entity skeletal-animation playback state is invalid");
+        }
     }
 
     if (!readTag(input, "POINT_LIGHT", error)

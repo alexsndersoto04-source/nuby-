@@ -124,6 +124,18 @@ struct AnimationComponent {
     Vector3Track scale;
 };
 
+// Playback state for a clip stored with an external skeletal mesh asset.
+// The renderer/importer resolves clipName and computes the joint palette.
+struct SkeletalAnimationComponent {
+    bool enabled = false;
+    bool playing = true;
+    bool looping = true;
+    float playbackRate = 1.0f;
+    float timeSeconds = 0.0f;
+    float durationSeconds = 0.0f;
+    std::string clipName;
+};
+
 struct RigidbodyComponent {
     bool enabled = false;
     float mass = 1.0f;
@@ -289,6 +301,7 @@ struct Entity {
     OrbitComponent orbit;
     PulseComponent pulse;
     AnimationComponent animation;
+    SkeletalAnimationComponent skeletalAnimation;
     RigidbodyComponent rigidbody;
     SphereColliderComponent sphereCollider;
     BoxColliderComponent boxCollider;

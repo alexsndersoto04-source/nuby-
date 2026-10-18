@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -285,19 +286,34 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
 layout(location = 3) in mat4 aInstanceModel;
+layout(location = 7) in uvec4 aJointIndices;
+layout(location = 8) in vec4 aJointWeights;
+layout(std140) uniform SkinPalette { mat4 uJointMatrices[64]; };
 uniform mat4 uViewProjection;
 uniform mat4 uView;
 uniform mat4 uModel;
 uniform int uUseInstancing;
+uniform int uSkinningEnabled;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
 out vec2 vUv;
 out float vViewDepth;
 void main() {
     mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
-    vec4 world = model * vec4(aPosition, 1.0);
+    vec4 localPosition = vec4(aPosition, 1.0);
+    vec3 localNormal = aNormal;
+    if (uSkinningEnabled != 0) {
+        mat4 skin = mat4(0.0);
+        skin += uJointMatrices[int(aJointIndices.x)] * aJointWeights.x;
+        skin += uJointMatrices[int(aJointIndices.y)] * aJointWeights.y;
+        skin += uJointMatrices[int(aJointIndices.z)] * aJointWeights.z;
+        skin += uJointMatrices[int(aJointIndices.w)] * aJointWeights.w;
+        localPosition = skin * localPosition;
+        localNormal = mat3(skin) * localNormal;
+    }
+    vec4 world = model * localPosition;
     vWorldPosition = world.xyz;
-    vWorldNormal = mat3(model) * aNormal;
+    vWorldNormal = mat3(model) * localNormal;
     vUv = aUv;
     vViewDepth = -(uView * world).z;
     gl_Position = uViewProjection * world;
@@ -618,12 +634,27 @@ constexpr const char* kFallbackVertexShader = R"(
 precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
+layout(location = 7) in uvec4 aJointIndices;
+layout(location = 8) in vec4 aJointWeights;
+layout(std140) uniform SkinPalette { mat4 uJointMatrices[64]; };
 uniform mat4 uViewProjection;
 uniform mat4 uModel;
+uniform int uSkinningEnabled;
 out vec3 vFallbackNormal;
 void main() {
-    vec4 worldPosition = uModel * vec4(aPosition, 1.0);
-    vFallbackNormal = normalize(mat3(uModel) * aNormal);
+    vec4 localPosition = vec4(aPosition, 1.0);
+    vec3 localNormal = aNormal;
+    if (uSkinningEnabled != 0) {
+        mat4 skin = mat4(0.0);
+        skin += uJointMatrices[int(aJointIndices.x)] * aJointWeights.x;
+        skin += uJointMatrices[int(aJointIndices.y)] * aJointWeights.y;
+        skin += uJointMatrices[int(aJointIndices.z)] * aJointWeights.z;
+        skin += uJointMatrices[int(aJointIndices.w)] * aJointWeights.w;
+        localPosition = skin * localPosition;
+        localNormal = mat3(skin) * localNormal;
+    }
+    vec4 worldPosition = uModel * localPosition;
+    vFallbackNormal = normalize(mat3(uModel) * localNormal);
     gl_Position = uViewProjection * worldPosition;
 }
 )";
@@ -649,12 +680,25 @@ constexpr const char* kShadowVertexShader = R"(
 precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 3) in mat4 aInstanceModel;
+layout(location = 7) in uvec4 aJointIndices;
+layout(location = 8) in vec4 aJointWeights;
+layout(std140) uniform SkinPalette { mat4 uJointMatrices[64]; };
 uniform mat4 uLightViewProjection;
 uniform mat4 uModel;
 uniform int uUseInstancing;
+uniform int uSkinningEnabled;
 void main() {
     mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
-    gl_Position = uLightViewProjection * model * vec4(aPosition, 1.0);
+    vec4 localPosition = vec4(aPosition, 1.0);
+    if (uSkinningEnabled != 0) {
+        mat4 skin = mat4(0.0);
+        skin += uJointMatrices[int(aJointIndices.x)] * aJointWeights.x;
+        skin += uJointMatrices[int(aJointIndices.y)] * aJointWeights.y;
+        skin += uJointMatrices[int(aJointIndices.z)] * aJointWeights.z;
+        skin += uJointMatrices[int(aJointIndices.w)] * aJointWeights.w;
+        localPosition = skin * localPosition;
+    }
+    gl_Position = uLightViewProjection * model * localPosition;
 }
 )";
 
@@ -828,6 +872,145 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
     glBindVertexArray(0);
     mesh.vertexCount = static_cast<GLsizei>(vertices.size());
     return mesh;
+}
+
+Renderer::Mesh Renderer::uploadSkinnedMesh(const GltfPrimitive& primitive) {
+    Mesh mesh{};
+    if (!primitive.hasSkinAttributes || primitive.vertices.empty() || primitive.indices.empty()
+            || primitive.vertices.size() > static_cast<std::size_t>(
+                    std::numeric_limits<GLsizei>::max())
+            || primitive.indices.size() > static_cast<std::size_t>(
+                    std::numeric_limits<GLsizei>::max())
+            || primitive.influences.size() != primitive.vertices.size()) return mesh;
+    struct GpuVertex {
+        float position[3];
+        float normal[3];
+        float uv[2];
+        std::uint16_t jointIndices[4];
+        float weights[4];
+    };
+    std::vector<GpuVertex> vertices(primitive.vertices.size());
+    for (std::size_t index = 0; index < primitive.vertices.size(); ++index) {
+        const MeshVertex& source = primitive.vertices[index];
+        const SkeletalVertexInfluence& influence = primitive.influences[index];
+        GpuVertex& vertex = vertices[index];
+        std::copy(std::begin(source.position), std::end(source.position), vertex.position);
+        std::copy(std::begin(source.normal), std::end(source.normal), vertex.normal);
+        std::copy(std::begin(source.uv), std::end(source.uv), vertex.uv);
+        for (std::size_t slot = 0; slot < 4U; ++slot) {
+            vertex.jointIndices[slot] = influence.jointIndices[slot];
+            vertex.weights[slot] = influence.weights[slot];
+        }
+    }
+
+    Vec3 minimum{vertices.front().position[0], vertices.front().position[1],
+            vertices.front().position[2]};
+    Vec3 maximum = minimum;
+    for (const GpuVertex& vertex : vertices) {
+        for (std::size_t axis = 0; axis < 3U; ++axis) {
+            if (!std::isfinite(vertex.position[axis]) || !std::isfinite(vertex.normal[axis])) {
+                return {};
+            }
+            minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
+            maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
+        }
+        for (std::size_t slot = 0; slot < 4U; ++slot) {
+            if (!std::isfinite(vertex.weights[slot]) || vertex.weights[slot] < 0.0f
+                    || vertex.jointIndices[slot] >= kMaximumGpuJoints) return {};
+        }
+    }
+    for (std::uint32_t index : primitive.indices) {
+        if (index >= vertices.size()) return {};
+    }
+    for (std::size_t axis = 0; axis < 3U; ++axis) {
+        mesh.boundsCenter[axis] = (minimum[axis] + maximum[axis]) * 0.5f;
+    }
+    float radiusSquared = 0.0f;
+    for (const GpuVertex& vertex : vertices) {
+        const float dx = vertex.position[0] - mesh.boundsCenter[0];
+        const float dy = vertex.position[1] - mesh.boundsCenter[1];
+        const float dz = vertex.position[2] - mesh.boundsCenter[2];
+        radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
+    }
+    if (!std::isfinite(radiusSquared)) return {};
+    mesh.boundsRadius = std::sqrt(radiusSquared);
+    mesh.boundsValid = std::isfinite(mesh.boundsRadius);
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glGenBuffers(1, &mesh.ebo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(GpuVertex)),
+                 vertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(primitive.indices.size() * sizeof(std::uint32_t)),
+                 primitive.indices.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, position)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, normal)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, uv)));
+    glEnableVertexAttribArray(7);
+    glVertexAttribIPointer(7, 4, GL_UNSIGNED_SHORT, sizeof(GpuVertex),
+                           reinterpret_cast<const void*>(offsetof(GpuVertex, jointIndices)));
+    glEnableVertexAttribArray(8);
+    glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, weights)));
+    glBindVertexArray(0);
+    mesh.vertexCount = static_cast<GLsizei>(vertices.size());
+    mesh.indexCount = static_cast<GLsizei>(primitive.indices.size());
+    return mesh;
+}
+
+bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) {
+    std::string bytes;
+    constexpr std::size_t kMaximumGlbAssetBytes = 64U * 1024U * 1024U;
+    if (!readTextAsset(assetManager_, assetPath, kMaximumGlbAssetBytes, bytes)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "GLB asset is unavailable or exceeds limits: %s", assetPath.c_str());
+        return false;
+    }
+    GltfSkeletalAsset parsed;
+    std::string error;
+    if (!parseGlbSkeletalAsset(bytes, parsed, error)) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "GLB skeletal import failed for %s: %s", assetPath.c_str(), error.c_str());
+        return false;
+    }
+    ImportedModel candidate{};
+    candidate.skeleton = std::move(parsed.skeleton);
+    candidate.animations = std::move(parsed.animations);
+    candidate.parts.reserve(parsed.primitives.size());
+    for (GltfPrimitive& primitive : parsed.primitives) {
+        ImportedPart part{};
+        part.skinned = true;
+        part.mesh = uploadSkinnedMesh(primitive);
+        if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
+            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+            for (ImportedPart& uploaded : candidate.parts) {
+                if (uploaded.mesh.vao != 0) glDeleteVertexArrays(1, &uploaded.mesh.vao);
+                if (uploaded.mesh.vbo != 0) glDeleteBuffers(1, &uploaded.mesh.vbo);
+                if (uploaded.mesh.ebo != 0) glDeleteBuffers(1, &uploaded.mesh.ebo);
+            }
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "Could not upload skinned GLB primitive from %s", assetPath.c_str());
+            return false;
+        }
+        candidate.parts.push_back(std::move(part));
+    }
+    model = std::move(candidate);
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+            "Loaded skeletal GLB %s (%zu joints, %zu clips, %zu primitives)",
+            assetPath.c_str(), model.skeleton.size(), model.animations.size(), model.parts.size());
+    return true;
 }
 
 bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) {
@@ -1340,9 +1523,11 @@ void Renderer::releaseSceneAssets() {
         for (ImportedPart& part : entry.second.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
             if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
         }
     }
     importedMeshes_.clear();
+    evaluatedSkeletalPoses_.clear();
     for (const auto& entry : textures_) {
         if (entry.second != 0) glDeleteTextures(1, &entry.second);
     }
@@ -1383,9 +1568,25 @@ void Renderer::loadSceneAssets() {
             continue;
         }
         ImportedModel model{};
-        if (loadObjAsset(meshPath, model)) {
-            importedMeshes_.emplace(meshPath, std::move(model));
-        }
+        const bool isGlb = meshPath.size() >= 4U
+                && meshPath.compare(meshPath.size() - 4U, 4U, ".glb") == 0;
+        const bool loaded = isGlb ? loadGlbAsset(meshPath, model)
+                                  : loadObjAsset(meshPath, model);
+        if (loaded) importedMeshes_.emplace(meshPath, std::move(model));
+    }
+
+    for (Entity& entity : activeScene().entities()) {
+        if (entity.primitive != Primitive::ImportedMesh || !entity.skeletalAnimation.enabled) continue;
+        const auto model = importedMeshes_.find(projectAssetPath(entity.meshAsset));
+        if (model == importedMeshes_.end()) continue;
+        const auto clip = std::find_if(model->second.animations.begin(), model->second.animations.end(),
+                [&entity](const GltfAnimation& animation) {
+                    return animation.name == entity.skeletalAnimation.clipName;
+                });
+        if (clip == model->second.animations.end()) continue;
+        entity.skeletalAnimation.durationSeconds = clip->clip.durationSeconds;
+        entity.skeletalAnimation.timeSeconds = std::clamp(
+                entity.skeletalAnimation.timeSeconds, 0.0f, clip->clip.durationSeconds);
     }
 
     for (const auto& entry : importedMeshes_) {
@@ -1478,6 +1679,11 @@ void Renderer::initializeShadowMap() {
     shadowProgramLightViewProjection_ = glGetUniformLocation(shadowProgram_, "uLightViewProjection");
     shadowProgramModel_ = glGetUniformLocation(shadowProgram_, "uModel");
     shadowProgramUseInstancing_ = glGetUniformLocation(shadowProgram_, "uUseInstancing");
+    shadowProgramSkinningEnabled_ = glGetUniformLocation(shadowProgram_, "uSkinningEnabled");
+    const GLuint paletteBlock = glGetUniformBlockIndex(shadowProgram_, "SkinPalette");
+    if (paletteBlock != GL_INVALID_INDEX) {
+        glUniformBlockBinding(shadowProgram_, paletteBlock, kSkinPaletteBindingPoint);
+    }
 
     constexpr GLsizei atlasWidth = kShadowMapSize
             * static_cast<GLsizei>(kDirectionalShadowCascadeCount);
@@ -1579,13 +1785,18 @@ void Renderer::renderShadowMaps() {
                 const std::string meshPath = projectAssetPath(entity.meshAsset);
                 const auto imported = importedMeshes_.find(meshPath);
                 if (imported != importedMeshes_.end()) {
+                    const auto pose = evaluatedSkeletalPoses_.find(entity.id);
+                    const SkeletalPose* poseData = pose == evaluatedSkeletalPoses_.end()
+                            ? nullptr : &pose->second;
                     for (const ImportedPart& part : imported->second.parts) {
                         const Material& material = part.hasMaterial
                                 && !entity.overrideMtlMaterials ? part.material : entity.material;
+                        const SkeletalPose* partPose = part.skinned ? poseData : nullptr;
                         if (part.mesh.vao == 0 || material.opacity < 1.0f
                                 || !material.opacityTexture.empty()
-                                || !meshIntersectsFrustum(part.mesh, model, cascadeFrustum)) continue;
-                        shadowDrawItems_.push_back({&part.mesh, model});
+                                || (partPose == nullptr
+                                    && !meshIntersectsFrustum(part.mesh, model, cascadeFrustum))) continue;
+                        shadowDrawItems_.push_back({&part.mesh, model, partPose});
                     }
                     continue;
                 }
@@ -1599,20 +1810,27 @@ void Renderer::renderShadowMaps() {
         }
         std::sort(shadowDrawItems_.begin(), shadowDrawItems_.end(),
                 [](const ShadowDrawItem& left, const ShadowDrawItem& right) {
-                    return std::less<const Mesh*>{}(left.mesh, right.mesh);
+                    if (left.mesh != right.mesh) {
+                        return std::less<const Mesh*>{}(left.mesh, right.mesh);
+                    }
+                    return std::less<const SkeletalPose*>{}(left.pose, right.pose);
                 });
         for (std::size_t begin = 0; begin < shadowDrawItems_.size();) {
             const ShadowDrawItem& first = shadowDrawItems_[begin];
             std::size_t end = begin + 1;
             while (end < shadowDrawItems_.size()
-                    && shadowDrawItems_[end].mesh == first.mesh) ++end;
-            const bool useInstances = end - begin > 1 && instanceBuffer_ != 0
+                    && shadowDrawItems_[end].mesh == first.mesh
+                    && shadowDrawItems_[end].pose == first.pose) ++end;
+            const bool useInstances = first.pose == nullptr && end - begin > 1 && instanceBuffer_ != 0
                     && shadowProgramUseInstancing_ >= 0
                     && end - begin <= static_cast<std::size_t>(
                             std::numeric_limits<GLsizei>::max());
             glBindVertexArray(first.mesh->vao);
             glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, first.model.data());
             glUniform1i(shadowProgramUseInstancing_, useInstances ? 1 : 0);
+            const bool useSkinning = skinPaletteBuffer_ != 0 && first.pose != nullptr;
+            glUniform1i(shadowProgramSkinningEnabled_, useSkinning ? 1 : 0);
+            if (useSkinning) uploadSkinPalette(first.pose);
             if (useInstances) {
                 instanceModelsScratch_.clear();
                 instanceModelsScratch_.reserve(end - begin);
@@ -1620,14 +1838,27 @@ void Renderer::renderShadowMaps() {
                     instanceModelsScratch_.push_back(shadowDrawItems_[index].model);
                 }
                 bindInstanceAttributes(instanceBuffer_, instanceModelsScratch_);
-                glDrawArraysInstanced(GL_TRIANGLES, 0, first.mesh->vertexCount,
-                        static_cast<GLsizei>(instanceModelsScratch_.size()));
+                if (first.mesh->ebo != 0) {
+                    glDrawElementsInstanced(GL_TRIANGLES, first.mesh->indexCount, GL_UNSIGNED_INT,
+                            nullptr, static_cast<GLsizei>(instanceModelsScratch_.size()));
+                } else {
+                    glDrawArraysInstanced(GL_TRIANGLES, 0, first.mesh->vertexCount,
+                            static_cast<GLsizei>(instanceModelsScratch_.size()));
+                }
                 unbindInstanceAttributes();
             } else {
                 for (std::size_t index = begin; index < end; ++index) {
                     const ShadowDrawItem& item = shadowDrawItems_[index];
                     glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, item.model.data());
-                    glDrawArrays(GL_TRIANGLES, 0, item.mesh->vertexCount);
+                    if (item.pose != nullptr && skinPaletteBuffer_ != 0) {
+                        glUniform1i(shadowProgramSkinningEnabled_, 1);
+                        uploadSkinPalette(item.pose);
+                    }
+                    if (item.mesh->ebo != 0) {
+                        glDrawElements(GL_TRIANGLES, item.mesh->indexCount, GL_UNSIGNED_INT, nullptr);
+                    } else {
+                        glDrawArrays(GL_TRIANGLES, 0, item.mesh->vertexCount);
+                    }
                 }
             }
             begin = end;
@@ -1875,6 +2106,18 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.viewProjection = glGetUniformLocation(program_, "uViewProjection");
     uniforms_.model = glGetUniformLocation(program_, "uModel");
     uniforms_.useInstancing = glGetUniformLocation(program_, "uUseInstancing");
+    uniforms_.skinningEnabled = glGetUniformLocation(program_, "uSkinningEnabled");
+    const GLuint skinPaletteBlock = glGetUniformBlockIndex(program_, "SkinPalette");
+    if (skinPaletteBlock != GL_INVALID_INDEX) {
+        glUniformBlockBinding(program_, skinPaletteBlock, kSkinPaletteBindingPoint);
+        glGenBuffers(1, &skinPaletteBuffer_);
+        glBindBuffer(GL_UNIFORM_BUFFER, skinPaletteBuffer_);
+        glBufferData(GL_UNIFORM_BUFFER,
+                static_cast<GLsizeiptr>(kMaximumGpuJoints * sizeof(SkeletalMatrix4)),
+                nullptr, GL_DYNAMIC_DRAW);
+        glBindBufferBase(GL_UNIFORM_BUFFER, kSkinPaletteBindingPoint, skinPaletteBuffer_);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    }
     glGenBuffers(1, &instanceBuffer_);
     uniforms_.color = glGetUniformLocation(program_, "uColor");
     uniforms_.emission = glGetUniformLocation(program_, "uEmission");
@@ -1959,8 +2202,19 @@ void Renderer::resize(int width, int height) {
     resizePostProcessing();
 }
 
+void Renderer::uploadSkinPalette(const SkeletalPose* pose) {
+    if (skinPaletteBuffer_ == 0 || pose == nullptr || pose->jointMatrices.empty()
+            || pose->jointMatrices.size() > static_cast<std::size_t>(kMaximumGpuJoints)) return;
+    glBindBuffer(GL_UNIFORM_BUFFER, skinPaletteBuffer_);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0,
+            static_cast<GLsizeiptr>(pose->jointMatrices.size() * sizeof(SkeletalMatrix4)),
+            pose->jointMatrices.data());
+    glBindBufferBase(GL_UNIFORM_BUFFER, kSkinPaletteBindingPoint, skinPaletteBuffer_);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
 void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& material,
-                    const std::vector<Mat4>* instanceModels) {
+                    const std::vector<Mat4>* instanceModels, const SkeletalPose* pose) {
     if (program_ == 0 || mesh.vao == 0) return;
 
     glUseProgram(program_);
@@ -1972,7 +2226,14 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     }
     glUniform3fv(uniforms_.cascadeFarSplits, 1, shadowCascadeFarSplits_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
-    const bool useInstances = uniforms_.useInstancing >= 0 && instanceBuffer_ != 0
+    const bool useSkinning = skinPaletteBuffer_ != 0 && pose != nullptr
+            && !pose->jointMatrices.empty()
+            && pose->jointMatrices.size() <= static_cast<std::size_t>(kMaximumGpuJoints);
+    if (uniforms_.skinningEnabled >= 0) {
+        glUniform1i(uniforms_.skinningEnabled, useSkinning ? 1 : 0);
+    }
+    if (useSkinning) uploadSkinPalette(pose);
+    const bool useInstances = !useSkinning && uniforms_.useInstancing >= 0 && instanceBuffer_ != 0
             && instanceModels != nullptr && instanceModels->size() > 1
             && instanceModels->size()
                     <= static_cast<std::size_t>(std::numeric_limits<GLsizei>::max());
@@ -2099,9 +2360,16 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindVertexArray(mesh.vao);
     if (useInstances) {
         bindInstanceAttributes(instanceBuffer_, *instanceModels);
-        glDrawArraysInstanced(GL_TRIANGLES, 0, mesh.vertexCount,
-                static_cast<GLsizei>(instanceModels->size()));
+        if (mesh.ebo != 0) {
+            glDrawElementsInstanced(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr,
+                    static_cast<GLsizei>(instanceModels->size()));
+        } else {
+            glDrawArraysInstanced(GL_TRIANGLES, 0, mesh.vertexCount,
+                    static_cast<GLsizei>(instanceModels->size()));
+        }
         unbindInstanceAttributes();
+    } else if (mesh.ebo != 0) {
+        glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
     } else {
         glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
     }
@@ -2120,6 +2388,27 @@ void Renderer::render(float deltaSeconds) {
     else if (adventureMode_) adventureGame_.update(scene_, dt);
     else scene_.update(dt);
     Scene& frameScene = activeScene();
+    evaluatedSkeletalPoses_.clear();
+    evaluatedSkeletalPoses_.reserve(frameScene.entities().size());
+    for (const Entity& entity : frameScene.entities()) {
+        if (!entity.visible || entity.primitive != Primitive::ImportedMesh
+                || !entity.skeletalAnimation.enabled || entity.skeletalAnimation.clipName.empty()) {
+            continue;
+        }
+        const auto model = importedMeshes_.find(projectAssetPath(entity.meshAsset));
+        if (model == importedMeshes_.end() || model->second.skeleton.empty()) continue;
+        const auto clip = std::find_if(model->second.animations.begin(), model->second.animations.end(),
+                [&entity](const GltfAnimation& animation) {
+                    return animation.name == entity.skeletalAnimation.clipName;
+                });
+        if (clip == model->second.animations.end()) continue;
+        SkeletalPose pose;
+        std::string poseError;
+        if (evaluateSkeletalPose(model->second.skeleton, clip->clip,
+                                 entity.skeletalAnimation.timeSeconds, pose, poseError)) {
+            evaluatedSkeletalPoses_.emplace(entity.id, std::move(pose));
+        }
+    }
     const auto& ambientCoefficients = frameScene.ambientLighting().sphericalHarmonics;
     const auto& defaultAmbient = AmbientLighting{}.sphericalHarmonics;
     for (std::size_t index = 0; index < ambientSphericalHarmonics_.size(); ++index) {
@@ -2218,14 +2507,15 @@ void Renderer::render(float deltaSeconds) {
     opaqueDrawItems_.clear();
     transparentDrawItems_.clear();
     const auto queueDraw = [this, &cameraFrustum](const Mesh& mesh, const Mat4& model,
-                                                   const Material& material) {
+                                                   const Material& material,
+                                                   const SkeletalPose* pose) {
         if (material.opacity <= 0.0f
-                || !meshIntersectsFrustum(mesh, model, cameraFrustum)) return;
+                || (pose == nullptr && !meshIntersectsFrustum(mesh, model, cameraFrustum))) return;
         const float dx = model[12] - cameraPosition_[0];
         const float dy = model[13] - cameraPosition_[1];
         const float dz = model[14] - cameraPosition_[2];
         DrawItem item{&mesh, model, &material, materialBatchHash(material),
-                      dx * dx + dy * dy + dz * dz};
+                      dx * dx + dy * dy + dz * dz, pose};
         if (material.opacity < 1.0f || !material.opacityTexture.empty()) {
             transparentDrawItems_.push_back(item);
         } else {
@@ -2239,18 +2529,21 @@ void Renderer::render(float deltaSeconds) {
             const std::string meshPath = projectAssetPath(entity.meshAsset);
             const auto imported = importedMeshes_.find(meshPath);
             if (imported != importedMeshes_.end()) {
+                const auto pose = evaluatedSkeletalPoses_.find(entity.id);
+                const SkeletalPose* poseData = pose == evaluatedSkeletalPoses_.end()
+                        ? nullptr : &pose->second;
                 for (const ImportedPart& part : imported->second.parts) {
                     if (part.mesh.vao == 0) continue;
                     const Material& material = part.hasMaterial && !entity.overrideMtlMaterials
                             ? part.material : entity.material;
-                    queueDraw(part.mesh, model, material);
+                    queueDraw(part.mesh, model, material, part.skinned ? poseData : nullptr);
                 }
                 continue;
             }
         }
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr) continue;
-        queueDraw(*mesh, model, entity.material);
+        queueDraw(*mesh, model, entity.material, nullptr);
     }
     std::sort(opaqueDrawItems_.begin(), opaqueDrawItems_.end(),
             [](const DrawItem& left, const DrawItem& right) {
@@ -2265,10 +2558,11 @@ void Renderer::render(float deltaSeconds) {
         while (end < opaqueDrawItems_.size()
                 && opaqueDrawItems_[end].mesh == first.mesh
                 && opaqueDrawItems_[end].materialSortKey == first.materialSortKey
+                && opaqueDrawItems_[end].pose == first.pose
                 && sameMaterial(*opaqueDrawItems_[end].material, *first.material)) {
             ++end;
         }
-        if (end - begin > 1 && uniforms_.useInstancing >= 0
+        if (first.pose == nullptr && end - begin > 1 && uniforms_.useInstancing >= 0
                 && instanceBuffer_ != 0
                 && end - begin <= static_cast<std::size_t>(
                         std::numeric_limits<GLsizei>::max())) {
@@ -2281,7 +2575,7 @@ void Renderer::render(float deltaSeconds) {
         } else {
             for (std::size_t index = begin; index < end; ++index) {
                 const DrawItem& item = opaqueDrawItems_[index];
-                draw(*item.mesh, item.model, *item.material);
+                draw(*item.mesh, item.model, *item.material, nullptr, item.pose);
             }
         }
         begin = end;
@@ -2295,7 +2589,7 @@ void Renderer::render(float deltaSeconds) {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_FALSE);
         for (const DrawItem& item : transparentDrawItems_) {
-            draw(*item.mesh, item.model, *item.material);
+            draw(*item.mesh, item.model, *item.material, nullptr, item.pose);
         }
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);

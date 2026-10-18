@@ -12,6 +12,7 @@
 #include "nuby/adventure_game.hpp"
 #include "nuby/frustum.hpp"
 #include "nuby/game_project_runtime.hpp"
+#include "nuby/gltf_loader.hpp"
 #include "nuby/image_loader.hpp"
 #include "nuby/mtl_loader.hpp"
 #include "nuby/obj_loader.hpp"
@@ -53,7 +54,9 @@ private:
     struct Mesh {
         GLuint vao = 0;
         GLuint vbo = 0;
+        GLuint ebo = 0;
         GLsizei vertexCount = 0;
+        GLsizei indexCount = 0;
         std::array<float, 3> boundsCenter{0.0f, 0.0f, 0.0f};
         float boundsRadius = 0.0f;
         bool boundsValid = false;
@@ -65,10 +68,13 @@ private:
         std::string groupName;
         Material material;
         bool hasMaterial = false;
+        bool skinned = false;
     };
 
     struct ImportedModel {
         std::vector<ImportedPart> parts;
+        std::vector<SkeletalJoint> skeleton;
+        std::vector<GltfAnimation> animations;
     };
 
     struct DrawItem {
@@ -77,11 +83,13 @@ private:
         const Material* material = nullptr;
         std::size_t materialSortKey = 0;
         float cameraDistanceSquared = 0.0f;
+        const SkeletalPose* pose = nullptr;
     };
 
     struct ShadowDrawItem {
         const Mesh* mesh = nullptr;
         std::array<float, 16> model{};
+        const SkeletalPose* pose = nullptr;
     };
 
     struct PostUniforms {
@@ -97,6 +105,7 @@ private:
         GLint viewProjection = -1;
         GLint model = -1;
         GLint useInstancing = -1;
+        GLint skinningEnabled = -1;
         GLint color = -1;
         GLint emission = -1;
         GLint metallic = -1;
@@ -144,7 +153,10 @@ private:
     GLuint compileShader(GLenum type, const char* source);
     GLuint createProgram(const char* vertexSource, const char* fragmentSource);
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
+    Mesh uploadSkinnedMesh(const GltfPrimitive& primitive);
     bool loadObjAsset(const std::string& assetPath, ImportedModel& model);
+    bool loadGlbAsset(const std::string& assetPath, ImportedModel& model);
+    void uploadSkinPalette(const SkeletalPose* pose);
     bool loadTgaAsset(const std::string& assetPath, GLuint& texture);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
@@ -152,7 +164,8 @@ private:
     const Mesh* meshFor(const Entity& entity) const;
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
               const Material& material,
-              const std::vector<std::array<float, 16>>* instanceModels = nullptr);
+              const std::vector<std::array<float, 16>>* instanceModels = nullptr,
+              const SkeletalPose* pose = nullptr);
     bool meshIntersectsFrustum(const Mesh& mesh, const std::array<float, 16>& model,
                                const ViewFrustum& frustum) const;
     void buildScene();
@@ -171,6 +184,7 @@ private:
 
     AAssetManager* assetManager_ = nullptr;
     std::unordered_map<std::string, ImportedModel> importedMeshes_;
+    std::unordered_map<std::uint32_t, SkeletalPose> evaluatedSkeletalPoses_;
     std::unordered_map<std::string, GLuint> textures_;
     std::vector<DrawItem> opaqueDrawItems_;
     std::vector<DrawItem> transparentDrawItems_;
@@ -181,6 +195,7 @@ private:
     GLuint clampSampler_ = 0;
     GLuint shadowProgram_ = 0;
     GLuint instanceBuffer_ = 0;
+    GLuint skinPaletteBuffer_ = 0;
     GLuint shadowFramebuffer_ = 0;
     GLuint shadowDepthTexture_ = 0;
     GLuint bloomExtractProgram_ = 0;
@@ -206,6 +221,9 @@ private:
     GLint shadowProgramLightViewProjection_ = -1;
     GLint shadowProgramModel_ = -1;
     GLint shadowProgramUseInstancing_ = -1;
+    GLint shadowProgramSkinningEnabled_ = -1;
+    static constexpr int kMaximumGpuJoints = 64;
+    static constexpr GLuint kSkinPaletteBindingPoint = 0;
     static constexpr int kShadowMapSize = 512;
     static constexpr int kMaxPointLights = 4;
     Uniforms uniforms_{};

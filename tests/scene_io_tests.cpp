@@ -38,9 +38,14 @@ std::string withoutTrailingFields(const std::string& line, std::size_t fieldCoun
 }
 
 bool replaceRecordField(std::string& text, const std::string& tag,
-                        std::size_t fieldIndex, const std::string& replacement) {
-    const std::size_t start = text.find(tag + " ");
-    if (start == std::string::npos) return false;
+                        std::size_t fieldIndex, const std::string& replacement,
+                        std::size_t occurrence = 0) {
+    std::size_t start = 0;
+    for (std::size_t index = 0; index <= occurrence; ++index) {
+        start = text.find(tag + " ", start);
+        if (start == std::string::npos) return false;
+        if (index < occurrence) start += tag.size() + 1;
+    }
     const std::size_t end = text.find('\n', start);
     if (end == std::string::npos) return false;
     std::istringstream input(text.substr(start, end - start));
@@ -65,8 +70,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 16") {
+        if (line == "NUBY_SCENE 17") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("SKELETAL_PLAYER ", 0) == 0 && targetVersion < 17) {
+            continue;
         } else if (line.rfind("AMBIENT_SH ", 0) == 0 && targetVersion < 16) {
             continue;
         } else if (line.rfind("SPHERE_COLLIDER ", 0) == 0 && targetVersion < 15) {
@@ -207,6 +214,13 @@ nuby::Scene makeScene() {
     mesh.transform.scale = {0.5f, 0.6f, 0.7f};
     mesh.material.roughness = 0.3f;
     mesh.material.opacity = 0.42f;
+    mesh.skeletalAnimation.enabled = true;
+    mesh.skeletalAnimation.playing = false;
+    mesh.skeletalAnimation.looping = true;
+    mesh.skeletalAnimation.playbackRate = 0.75f;
+    mesh.skeletalAnimation.timeSeconds = 0.5f;
+    mesh.skeletalAnimation.durationSeconds = 1.5f;
+    mesh.skeletalAnimation.clipName = "walk";
     mesh.material.albedoTexture = "textures/hero diffuse.tga";
     mesh.material.normalTexture = "textures/hero normal.tga";
     mesh.material.metallicRoughnessTexture = "textures/hero metal-rough.tga";
@@ -426,6 +440,13 @@ void testRoundTripAllSceneData() {
         expect(mesh->animation.position.keyframes.size() == 2
                        && near(mesh->animation.position.keyframes[1].value[2], 6.0f),
                "animation tracks and keyframes are restored");
+        expect(mesh->skeletalAnimation.enabled && !mesh->skeletalAnimation.playing
+                       && mesh->skeletalAnimation.looping
+                       && near(mesh->skeletalAnimation.playbackRate, 0.75f)
+                       && near(mesh->skeletalAnimation.timeSeconds, 0.5f)
+                       && near(mesh->skeletalAnimation.durationSeconds, 1.5f)
+                       && mesh->skeletalAnimation.clipName == "walk",
+               "skeletal animation playback state and quoted clip name are restored");
         expect(mesh->pointLight.enabled && near(mesh->pointLight.intensity, 3.5f),
                "point-light component is restored");
     }
@@ -558,6 +579,22 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "excessive ambient-light coefficients are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid ambient lighting cannot partially replace the target scene");
+
+    std::string invalidSkeletalPlayback = valid.str();
+    expect(replaceRecordField(invalidSkeletalPlayback, "SKELETAL_PLAYER", 6, "0", 1),
+           "v17 scene stores skeletal playback duration");
+    std::stringstream malformedSkeletalPlayback(invalidSkeletalPlayback);
+    expect(!nuby::SceneSerializer::load(target, malformedSkeletalPlayback, error),
+           "skeletal playback time beyond clip duration is rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid skeletal playback state cannot partially replace the target scene");
+
+    std::stringstream legacyV16(downgradeTextureSchema(valid.str(), 16, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV16, error),
+           "version-sixteen scenes remain readable after skeletal playback state");
+    expect(target.find(2) != nullptr && !target.find(2)->skeletalAnimation.enabled
+                   && target.find(2)->skeletalAnimation.clipName.empty(),
+           "version-sixteen scenes receive default skeletal playback state");
 
     std::stringstream legacyV15(downgradeTextureSchema(valid.str(), 15, 8));
     expect(nuby::SceneSerializer::load(target, legacyV15, error),

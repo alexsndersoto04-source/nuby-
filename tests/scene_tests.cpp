@@ -237,6 +237,52 @@ void testKeyframedAnimationInterpolationAndLooping() {
            "one-shot animation holds its final pose");
 }
 
+void testSkeletalAnimationPlaybackState() {
+    nuby::Scene scene;
+    nuby::Entity& looping = scene.create("skeletal loop", nuby::Primitive::None);
+    looping.skeletalAnimation.enabled = true;
+    looping.skeletalAnimation.clipName = "walk";
+    looping.skeletalAnimation.durationSeconds = 1.0f;
+    for (int frame = 0; frame < 10; ++frame) scene.update(0.05f);
+    expect(near(looping.skeletalAnimation.timeSeconds, 0.5f),
+           "skeletal clip playback advances at the configured rate");
+    for (int frame = 0; frame < 11; ++frame) scene.update(0.05f);
+    expect(looping.skeletalAnimation.playing
+                   && near(looping.skeletalAnimation.timeSeconds, 0.05f),
+           "looping skeletal clip wraps playback time");
+
+    nuby::Entity& oneShot = scene.create("skeletal one shot", nuby::Primitive::None);
+    oneShot.skeletalAnimation.enabled = true;
+    oneShot.skeletalAnimation.looping = false;
+    oneShot.skeletalAnimation.clipName = "jump";
+    oneShot.skeletalAnimation.durationSeconds = 0.1f;
+    scene.update(0.05f);
+    expect(near(oneShot.skeletalAnimation.timeSeconds, 0.05f)
+                   && oneShot.skeletalAnimation.playing,
+           "non-looping skeletal clip advances before its endpoint");
+    scene.update(0.05f);
+    expect(near(oneShot.skeletalAnimation.timeSeconds, 0.1f)
+                   && !oneShot.skeletalAnimation.playing,
+           "non-looping skeletal clip clamps and stops at its endpoint");
+
+    nuby::Entity& reverse = scene.create("reverse skeletal loop", nuby::Primitive::None);
+    reverse.skeletalAnimation.enabled = true;
+    reverse.skeletalAnimation.clipName = "walk";
+    reverse.skeletalAnimation.durationSeconds = 1.0f;
+    reverse.skeletalAnimation.playbackRate = -1.0f;
+    scene.update(0.05f);
+    expect(near(reverse.skeletalAnimation.timeSeconds, 0.95f),
+           "negative-rate looping wraps backwards without negative sample time");
+
+    nuby::Entity& emptyClip = scene.create("empty skeletal clip", nuby::Primitive::None);
+    emptyClip.skeletalAnimation.enabled = true;
+    emptyClip.skeletalAnimation.clipName = "empty";
+    scene.update(0.05f);
+    expect(emptyClip.skeletalAnimation.timeSeconds == 0.0f
+                   && !emptyClip.skeletalAnimation.playing,
+           "zero-duration skeletal clips stop safely at time zero");
+}
+
 void testPhysicsFixedStepGravityAndFloorContact() {
     nuby::Scene scene;
     nuby::PhysicsSettings& settings = scene.physicsSettings();
@@ -1376,6 +1422,7 @@ int main() {
     testActiveCameraAndOrbitInput();
     testPointLightCollectionUsesWorldTransformsAndFiltersInvalidLights();
     testKeyframedAnimationInterpolationAndLooping();
+    testSkeletalAnimationPlaybackState();
     testPhysicsFixedStepGravityAndFloorContact();
     testRigidBodyRotationAndRollingFriction();
     testPhysicsSphereImpulseAndHierarchySafety();
