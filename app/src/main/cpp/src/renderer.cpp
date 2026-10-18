@@ -1080,14 +1080,27 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
             }
             return relative;
         };
-        part.material.albedoTexture = texturePath(primitive.material.baseColorImage);
-        part.material.metallicRoughnessTexture = texturePath(
-                primitive.material.metallicRoughnessImage);
-        part.material.normalTexture = texturePath(primitive.material.normalImage);
-        part.material.occlusionTexture = texturePath(primitive.material.occlusionImage);
-        part.material.emissiveTexture = texturePath(primitive.material.emissiveImage);
+        const auto applyTextureBinding = [&](const GltfTextureBinding& binding,
+                                             TextureMapTransform& transform) {
+            transform.uvScale = binding.uvScale;
+            transform.uvOffset = binding.uvOffset;
+            transform.clampToEdge = binding.clampToEdge;
+            return texturePath(binding.imageIndex);
+        };
+        part.material.albedoTexture = applyTextureBinding(
+                primitive.material.baseColorTexture, part.material.albedoMapTransform);
+        part.material.metallicRoughnessTexture = applyTextureBinding(
+                primitive.material.metallicRoughnessTexture,
+                part.material.metallicRoughnessMapTransform);
+        part.material.normalTexture = applyTextureBinding(
+                primitive.material.normalTexture, part.material.normalMapTransform);
+        part.material.occlusionTexture = applyTextureBinding(
+                primitive.material.occlusionTexture, part.material.occlusionMapTransform);
+        part.material.emissiveTexture = applyTextureBinding(
+                primitive.material.emissiveTexture, part.material.emissiveMapTransform);
         if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
             part.material.opacityTexture = part.material.albedoTexture;
+            part.material.opacityMapTransform = part.material.albedoMapTransform;
             part.material.opacityMapChannel = ScalarTextureChannel::Matte;
         }
     };
