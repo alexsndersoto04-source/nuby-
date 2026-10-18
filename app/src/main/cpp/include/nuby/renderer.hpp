@@ -75,7 +75,13 @@ private:
         const Mesh* mesh = nullptr;
         std::array<float, 16> model{};
         const Material* material = nullptr;
+        std::size_t materialSortKey = 0;
         float cameraDistanceSquared = 0.0f;
+    };
+
+    struct ShadowDrawItem {
+        const Mesh* mesh = nullptr;
+        std::array<float, 16> model{};
     };
 
     struct PostUniforms {
@@ -90,6 +96,7 @@ private:
     struct Uniforms {
         GLint viewProjection = -1;
         GLint model = -1;
+        GLint useInstancing = -1;
         GLint color = -1;
         GLint emission = -1;
         GLint metallic = -1;
@@ -144,7 +151,8 @@ private:
     Mesh makeGround();
     const Mesh* meshFor(const Entity& entity) const;
     void draw(const Mesh& mesh, const std::array<float, 16>& model,
-              const Material& material);
+              const Material& material,
+              const std::vector<std::array<float, 16>>* instanceModels = nullptr);
     bool meshIntersectsFrustum(const Mesh& mesh, const std::array<float, 16>& model,
                                const ViewFrustum& frustum) const;
     void buildScene();
@@ -166,10 +174,13 @@ private:
     std::unordered_map<std::string, GLuint> textures_;
     std::vector<DrawItem> opaqueDrawItems_;
     std::vector<DrawItem> transparentDrawItems_;
+    std::vector<ShadowDrawItem> shadowDrawItems_;
+    std::vector<std::array<float, 16>> instanceModelsScratch_;
     GLuint program_ = 0;
     GLuint repeatSampler_ = 0;
     GLuint clampSampler_ = 0;
     GLuint shadowProgram_ = 0;
+    GLuint instanceBuffer_ = 0;
     GLuint shadowFramebuffer_ = 0;
     GLuint shadowDepthTexture_ = 0;
     GLuint bloomExtractProgram_ = 0;
@@ -194,6 +205,7 @@ private:
     PostUniforms postUniforms_{};
     GLint shadowProgramLightViewProjection_ = -1;
     GLint shadowProgramModel_ = -1;
+    GLint shadowProgramUseInstancing_ = -1;
     static constexpr int kShadowMapSize = 512;
     static constexpr int kMaxPointLights = 4;
     Uniforms uniforms_{};

@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -131,6 +134,123 @@ bool resolveAssetReference(const std::string& baseAssetPath,
     return safeRelativeAssetPath(resolvedPath);
 }
 
+void combineHash(std::size_t& seed, std::size_t value) {
+    seed ^= value + static_cast<std::size_t>(0x9e3779b9U) + (seed << 6U) + (seed >> 2U);
+}
+
+template <typename T>
+void hashValue(std::size_t& seed, const T& value) {
+    combineHash(seed, std::hash<T>{}(value));
+}
+
+std::size_t materialBatchHash(const Material& material) {
+    std::size_t hash = 0;
+    for (float value : material.color) hashValue(hash, value);
+    for (float value : material.emission) hashValue(hash, value);
+    hashValue(hash, material.metallic);
+    hashValue(hash, material.roughness);
+    hashValue(hash, material.opacity);
+    hashValue(hash, material.ambientOcclusion);
+    hashValue(hash, material.proceduralGrid);
+    const std::array<const std::string*, 8> texturePaths{{
+            &material.albedoTexture, &material.normalTexture,
+            &material.metallicRoughnessTexture, &material.metallicTexture,
+            &material.roughnessTexture, &material.occlusionTexture,
+            &material.opacityTexture, &material.emissiveTexture}};
+    for (const std::string* path : texturePaths) hashValue(hash, *path);
+    const std::array<const TextureMapTransform*, 8> transforms{{
+            &material.albedoMapTransform, &material.normalMapTransform,
+            &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
+            &material.roughnessMapTransform, &material.occlusionMapTransform,
+            &material.opacityMapTransform, &material.emissiveMapTransform}};
+    for (const TextureMapTransform* transform : transforms) {
+        for (float value : transform->uvScale) hashValue(hash, value);
+        for (float value : transform->uvOffset) hashValue(hash, value);
+        hashValue(hash, transform->clampToEdge);
+    }
+    const std::array<const TextureMapValueRange*, 8> ranges{{
+            &material.albedoMapValueRange, &material.normalMapValueRange,
+            &material.metallicRoughnessMapValueRange, &material.metallicMapValueRange,
+            &material.roughnessMapValueRange, &material.occlusionMapValueRange,
+            &material.opacityMapValueRange, &material.emissiveMapValueRange}};
+    for (const TextureMapValueRange* range : ranges) {
+        hashValue(hash, range->base);
+        hashValue(hash, range->gain);
+    }
+    hashValue(hash, static_cast<unsigned int>(material.opacityMapChannel));
+    return hash;
+}
+
+bool sameMaterial(const Material& left, const Material& right) {
+    const auto sameTransform = [](const TextureMapTransform& a,
+                                  const TextureMapTransform& b) {
+        return a.uvScale == b.uvScale && a.uvOffset == b.uvOffset
+                && a.clampToEdge == b.clampToEdge;
+    };
+    const auto sameRange = [](const TextureMapValueRange& a,
+                              const TextureMapValueRange& b) {
+        return a.base == b.base && a.gain == b.gain;
+    };
+    return left.color == right.color && left.emission == right.emission
+            && left.metallic == right.metallic && left.roughness == right.roughness
+            && left.opacity == right.opacity
+            && left.ambientOcclusion == right.ambientOcclusion
+            && left.proceduralGrid == right.proceduralGrid
+            && left.albedoTexture == right.albedoTexture
+            && left.normalTexture == right.normalTexture
+            && left.metallicRoughnessTexture == right.metallicRoughnessTexture
+            && left.metallicTexture == right.metallicTexture
+            && left.roughnessTexture == right.roughnessTexture
+            && left.occlusionTexture == right.occlusionTexture
+            && left.opacityTexture == right.opacityTexture
+            && left.emissiveTexture == right.emissiveTexture
+            && sameTransform(left.albedoMapTransform, right.albedoMapTransform)
+            && sameTransform(left.normalMapTransform, right.normalMapTransform)
+            && sameTransform(left.metallicRoughnessMapTransform,
+                             right.metallicRoughnessMapTransform)
+            && sameTransform(left.metallicMapTransform, right.metallicMapTransform)
+            && sameTransform(left.roughnessMapTransform, right.roughnessMapTransform)
+            && sameTransform(left.occlusionMapTransform, right.occlusionMapTransform)
+            && sameTransform(left.opacityMapTransform, right.opacityMapTransform)
+            && sameTransform(left.emissiveMapTransform, right.emissiveMapTransform)
+            && sameRange(left.albedoMapValueRange, right.albedoMapValueRange)
+            && sameRange(left.normalMapValueRange, right.normalMapValueRange)
+            && sameRange(left.metallicRoughnessMapValueRange,
+                         right.metallicRoughnessMapValueRange)
+            && sameRange(left.metallicMapValueRange, right.metallicMapValueRange)
+            && sameRange(left.roughnessMapValueRange, right.roughnessMapValueRange)
+            && sameRange(left.occlusionMapValueRange, right.occlusionMapValueRange)
+            && sameRange(left.opacityMapValueRange, right.opacityMapValueRange)
+            && sameRange(left.emissiveMapValueRange, right.emissiveMapValueRange)
+            && left.opacityMapChannel == right.opacityMapChannel;
+}
+
+void bindInstanceAttributes(GLuint buffer,
+                            const std::vector<std::array<float, 16>>& models) {
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glBufferData(GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(models.size() * sizeof(models.front())),
+            models.data(), GL_STREAM_DRAW);
+    constexpr GLsizei stride = static_cast<GLsizei>(sizeof(std::array<float, 16>));
+    for (GLuint column = 0; column < 4; ++column) {
+        const GLuint location = 3U + column;
+        const std::uintptr_t offset = static_cast<std::uintptr_t>(column)
+                * 4U * sizeof(float);
+        glEnableVertexAttribArray(location);
+        glVertexAttribPointer(location, 4, GL_FLOAT, GL_FALSE, stride,
+                reinterpret_cast<const void*>(offset));
+        glVertexAttribDivisor(location, 1);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void unbindInstanceAttributes() {
+    for (GLuint location = 3; location < 7; ++location) {
+        glVertexAttribDivisor(location, 0);
+        glDisableVertexAttribArray(location);
+    }
+}
+
 bool readTextAsset(AAssetManager* manager, const std::string& assetPath,
                    std::size_t maximumBytes, std::string& output) {
     output.clear();
@@ -164,17 +284,20 @@ precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
+layout(location = 3) in mat4 aInstanceModel;
 uniform mat4 uViewProjection;
 uniform mat4 uView;
 uniform mat4 uModel;
+uniform int uUseInstancing;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
 out vec2 vUv;
 out float vViewDepth;
 void main() {
-    vec4 world = uModel * vec4(aPosition, 1.0);
+    mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
+    vec4 world = model * vec4(aPosition, 1.0);
     vWorldPosition = world.xyz;
-    vWorldNormal = mat3(uModel) * aNormal;
+    vWorldNormal = mat3(model) * aNormal;
     vUv = aUv;
     vViewDepth = -(uView * world).z;
     gl_Position = uViewProjection * world;
@@ -525,10 +648,13 @@ constexpr const char* kShadowVertexShader = R"(
 #version 300 es
 precision highp float;
 layout(location = 0) in vec3 aPosition;
+layout(location = 3) in mat4 aInstanceModel;
 uniform mat4 uLightViewProjection;
 uniform mat4 uModel;
+uniform int uUseInstancing;
 void main() {
-    gl_Position = uLightViewProjection * uModel * vec4(aPosition, 1.0);
+    mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
+    gl_Position = uLightViewProjection * model * vec4(aPosition, 1.0);
 }
 )";
 
@@ -1351,6 +1477,7 @@ void Renderer::initializeShadowMap() {
     }
     shadowProgramLightViewProjection_ = glGetUniformLocation(shadowProgram_, "uLightViewProjection");
     shadowProgramModel_ = glGetUniformLocation(shadowProgram_, "uModel");
+    shadowProgramUseInstancing_ = glGetUniformLocation(shadowProgram_, "uUseInstancing");
 
     constexpr GLsizei atlasWidth = kShadowMapSize
             * static_cast<GLsizei>(kDirectionalShadowCascadeCount);
@@ -1443,10 +1570,11 @@ void Renderer::renderShadowMaps() {
         ViewFrustum cascadeFrustum;
         extractViewFrustum(shadowViewProjections_[cascade], cascadeFrustum);
 
-        for (const Entity& entity : activeScene().entities()) {
+        const Scene& shadowScene = activeScene();
+        shadowDrawItems_.clear();
+        for (const Entity& entity : shadowScene.entities()) {
             if (!entity.visible || entity.primitive == Primitive::Ground) continue;
-            const Mat4 model = activeScene().worldMatrix(entity.id);
-            glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, model.data());
+            const Mat4 model = shadowScene.worldMatrix(entity.id);
             if (entity.primitive == Primitive::ImportedMesh) {
                 const std::string meshPath = projectAssetPath(entity.meshAsset);
                 const auto imported = importedMeshes_.find(meshPath);
@@ -1457,8 +1585,7 @@ void Renderer::renderShadowMaps() {
                         if (part.mesh.vao == 0 || material.opacity < 1.0f
                                 || !material.opacityTexture.empty()
                                 || !meshIntersectsFrustum(part.mesh, model, cascadeFrustum)) continue;
-                        glBindVertexArray(part.mesh.vao);
-                        glDrawArrays(GL_TRIANGLES, 0, part.mesh.vertexCount);
+                        shadowDrawItems_.push_back({&part.mesh, model});
                     }
                     continue;
                 }
@@ -1468,8 +1595,42 @@ void Renderer::renderShadowMaps() {
             const Mesh* mesh = meshFor(entity);
             if (mesh == nullptr || mesh->vao == 0
                     || !meshIntersectsFrustum(*mesh, model, cascadeFrustum)) continue;
-            glBindVertexArray(mesh->vao);
-            glDrawArrays(GL_TRIANGLES, 0, mesh->vertexCount);
+            shadowDrawItems_.push_back({mesh, model});
+        }
+        std::sort(shadowDrawItems_.begin(), shadowDrawItems_.end(),
+                [](const ShadowDrawItem& left, const ShadowDrawItem& right) {
+                    return std::less<const Mesh*>{}(left.mesh, right.mesh);
+                });
+        for (std::size_t begin = 0; begin < shadowDrawItems_.size();) {
+            const ShadowDrawItem& first = shadowDrawItems_[begin];
+            std::size_t end = begin + 1;
+            while (end < shadowDrawItems_.size()
+                    && shadowDrawItems_[end].mesh == first.mesh) ++end;
+            const bool useInstances = end - begin > 1 && instanceBuffer_ != 0
+                    && shadowProgramUseInstancing_ >= 0
+                    && end - begin <= static_cast<std::size_t>(
+                            std::numeric_limits<GLsizei>::max());
+            glBindVertexArray(first.mesh->vao);
+            glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, first.model.data());
+            glUniform1i(shadowProgramUseInstancing_, useInstances ? 1 : 0);
+            if (useInstances) {
+                instanceModelsScratch_.clear();
+                instanceModelsScratch_.reserve(end - begin);
+                for (std::size_t index = begin; index < end; ++index) {
+                    instanceModelsScratch_.push_back(shadowDrawItems_[index].model);
+                }
+                bindInstanceAttributes(instanceBuffer_, instanceModelsScratch_);
+                glDrawArraysInstanced(GL_TRIANGLES, 0, first.mesh->vertexCount,
+                        static_cast<GLsizei>(instanceModelsScratch_.size()));
+                unbindInstanceAttributes();
+            } else {
+                for (std::size_t index = begin; index < end; ++index) {
+                    const ShadowDrawItem& item = shadowDrawItems_[index];
+                    glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, item.model.data());
+                    glDrawArrays(GL_TRIANGLES, 0, item.mesh->vertexCount);
+                }
+            }
+            begin = end;
         }
     }
 
@@ -1713,6 +1874,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
 
     uniforms_.viewProjection = glGetUniformLocation(program_, "uViewProjection");
     uniforms_.model = glGetUniformLocation(program_, "uModel");
+    uniforms_.useInstancing = glGetUniformLocation(program_, "uUseInstancing");
+    glGenBuffers(1, &instanceBuffer_);
     uniforms_.color = glGetUniformLocation(program_, "uColor");
     uniforms_.emission = glGetUniformLocation(program_, "uEmission");
     uniforms_.metallic = glGetUniformLocation(program_, "uMetallic");
@@ -1796,7 +1959,8 @@ void Renderer::resize(int width, int height) {
     resizePostProcessing();
 }
 
-void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& material) {
+void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& material,
+                    const std::vector<Mat4>* instanceModels) {
     if (program_ == 0 || mesh.vao == 0) return;
 
     glUseProgram(program_);
@@ -1808,6 +1972,13 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     }
     glUniform3fv(uniforms_.cascadeFarSplits, 1, shadowCascadeFarSplits_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
+    const bool useInstances = uniforms_.useInstancing >= 0 && instanceBuffer_ != 0
+            && instanceModels != nullptr && instanceModels->size() > 1
+            && instanceModels->size()
+                    <= static_cast<std::size_t>(std::numeric_limits<GLsizei>::max());
+    if (uniforms_.useInstancing >= 0) {
+        glUniform1i(uniforms_.useInstancing, useInstances ? 1 : 0);
+    }
     glUniform3fv(uniforms_.color, 1, material.color.data());
     glUniform3fv(uniforms_.emission, 1, material.emission.data());
     glUniform1f(uniforms_.metallic, material.metallic);
@@ -1926,7 +2097,14 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(mesh.vao);
-    glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+    if (useInstances) {
+        bindInstanceAttributes(instanceBuffer_, *instanceModels);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, mesh.vertexCount,
+                static_cast<GLsizei>(instanceModels->size()));
+        unbindInstanceAttributes();
+    } else {
+        glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+    }
     glBindVertexArray(0);
 }
 
@@ -2046,7 +2224,8 @@ void Renderer::render(float deltaSeconds) {
         const float dx = model[12] - cameraPosition_[0];
         const float dy = model[13] - cameraPosition_[1];
         const float dz = model[14] - cameraPosition_[2];
-        DrawItem item{&mesh, model, &material, dx * dx + dy * dy + dz * dz};
+        DrawItem item{&mesh, model, &material, materialBatchHash(material),
+                      dx * dx + dy * dy + dz * dz};
         if (material.opacity < 1.0f || !material.opacityTexture.empty()) {
             transparentDrawItems_.push_back(item);
         } else {
@@ -2073,8 +2252,39 @@ void Renderer::render(float deltaSeconds) {
         if (mesh == nullptr) continue;
         queueDraw(*mesh, model, entity.material);
     }
-    for (const DrawItem& item : opaqueDrawItems_) {
-        draw(*item.mesh, item.model, *item.material);
+    std::sort(opaqueDrawItems_.begin(), opaqueDrawItems_.end(),
+            [](const DrawItem& left, const DrawItem& right) {
+                if (left.mesh != right.mesh) {
+                    return std::less<const Mesh*>{}(left.mesh, right.mesh);
+                }
+                return left.materialSortKey < right.materialSortKey;
+            });
+    for (std::size_t begin = 0; begin < opaqueDrawItems_.size();) {
+        const DrawItem& first = opaqueDrawItems_[begin];
+        std::size_t end = begin + 1;
+        while (end < opaqueDrawItems_.size()
+                && opaqueDrawItems_[end].mesh == first.mesh
+                && opaqueDrawItems_[end].materialSortKey == first.materialSortKey
+                && sameMaterial(*opaqueDrawItems_[end].material, *first.material)) {
+            ++end;
+        }
+        if (end - begin > 1 && uniforms_.useInstancing >= 0
+                && instanceBuffer_ != 0
+                && end - begin <= static_cast<std::size_t>(
+                        std::numeric_limits<GLsizei>::max())) {
+            instanceModelsScratch_.clear();
+            instanceModelsScratch_.reserve(end - begin);
+            for (std::size_t index = begin; index < end; ++index) {
+                instanceModelsScratch_.push_back(opaqueDrawItems_[index].model);
+            }
+            draw(*first.mesh, first.model, *first.material, &instanceModelsScratch_);
+        } else {
+            for (std::size_t index = begin; index < end; ++index) {
+                const DrawItem& item = opaqueDrawItems_[index];
+                draw(*item.mesh, item.model, *item.material);
+            }
+        }
+        begin = end;
     }
     if (!transparentDrawItems_.empty()) {
         std::stable_sort(transparentDrawItems_.begin(), transparentDrawItems_.end(),
