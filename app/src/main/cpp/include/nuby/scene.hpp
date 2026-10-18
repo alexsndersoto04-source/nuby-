@@ -309,6 +309,12 @@ public:
                            std::vector<std::uint32_t>& entityIds,
                            std::uint32_t queryLayer = 1U,
                            std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    // Capsule endpoints form the center segment; tangential contact is excluded.
+    std::size_t overlapCapsule(const std::array<float, 3>& start,
+                               const std::array<float, 3>& end, float radius,
+                               std::vector<std::uint32_t>& entityIds,
+                               std::uint32_t queryLayer = 1U,
+                               std::uint32_t queryMask = 0xFFFFFFFFU) const;
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();

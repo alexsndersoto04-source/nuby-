@@ -1040,6 +1040,50 @@ void testSphereCastFindsFilteredSphereAndOrientedBoxContacts() {
            "sphere cast rejects a zero direction and clears the output hit");
 }
 
+void testCapsuleOverlapUsesSegmentDistanceAndCollisionFilters() {
+    nuby::Scene scene;
+    const std::uint32_t boxId = scene.create("capsule OBB", nuby::Primitive::None).id;
+    const std::uint32_t sphereId = scene.create("capsule sphere trigger", nuby::Primitive::None).id;
+    nuby::Entity* box = scene.find(boxId);
+    nuby::Entity* sphere = scene.find(sphereId);
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.5f, 0.5f, 0.5f};
+    box->boxCollider.collisionLayer = 8U;
+    box->boxCollider.collisionMask = 2U;
+    sphere->transform.position[0] = 4.0f;
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.5f;
+    sphere->sphereCollider.collisionLayer = 4U;
+    sphere->sphereCollider.collisionMask = 2U;
+    sphere->sphereCollider.trigger = true;
+
+    std::vector<std::uint32_t> entityIds;
+    expect(scene.overlapCapsule({-1.0f, 0.0f, 0.0f}, {5.0f, 0.0f, 0.0f},
+                   0.15f, entityIds, 2U, 12U) == 2
+                   && entityIds.size() == 2 && entityIds[0] == boxId
+                   && entityIds[1] == sphereId,
+           "capsule overlap returns sphere, OBB, and trigger hits in scene order");
+    expect(scene.overlapCapsule({-1.0f, 0.61f, 0.61f}, {1.0f, 0.61f, 0.61f},
+                   0.15f, entityIds, 2U, 8U) == 0 && entityIds.empty(),
+           "capsule-to-OBB distance rejects an AABB corner false positive");
+    expect(scene.overlapCapsule({-1.0f, 0.60f, 0.60f}, {1.0f, 0.60f, 0.60f},
+                   0.15f, entityIds, 2U, 8U) == 1
+                   && entityIds.size() == 1 && entityIds[0] == boxId,
+           "capsule overlap detects true rounded-corner contact with an OBB");
+    expect(scene.overlapCapsule({4.0f, 0.0f, 0.0f}, {4.0f, 0.0f, 0.0f},
+                   0.1f, entityIds, 2U, 4U) == 1 && entityIds[0] == sphereId,
+           "degenerate capsule segment behaves as a sphere query");
+    box->transform.rotation[1] = 0.6f;
+    const float cosine = std::cos(0.6f);
+    const float sine = std::sin(0.6f);
+    expect(scene.overlapCapsule({-cosine, 0.0f, sine}, {cosine, 0.0f, -sine},
+                   0.1f, entityIds, 2U, 8U) == 1 && entityIds[0] == boxId,
+           "capsule segment distance is evaluated in the rotated OBB frame");
+    expect(scene.overlapCapsule({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f},
+                   0.0f, entityIds) == 0 && entityIds.empty(),
+           "invalid capsule radius clears prior result IDs");
+}
+
 void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     nuby::Scene scene;
     scene.physicsSettings().floorEnabled = true;
@@ -1153,6 +1197,7 @@ int main() {
     testRaycastQueriesNearestSphereAndFilteredOrientedBox();
     testOverlapQueriesRespectSphereAndOrientedBoxGeometry();
     testSphereCastFindsFilteredSphereAndOrientedBoxContacts();
+    testCapsuleOverlapUsesSegmentDistanceAndCollisionFilters();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();

@@ -201,6 +201,78 @@ bool colliderPairAllowed(const CollisionShape& first, const CollisionShape& seco
             && (second.collisionMask & first.collisionLayer) != 0U;
 }
 
+float segmentBoxDistanceSquared(const Vec3& start, const Vec3& end,
+                                const CollisionShape& box) {
+    const Vec3 startOffset{start[0] - box.center[0], start[1] - box.center[1],
+            start[2] - box.center[2]};
+    const Vec3 endOffset{end[0] - box.center[0], end[1] - box.center[1],
+            end[2] - box.center[2]};
+    Vec3 localStart{};
+    Vec3 localDelta{};
+    std::array<float, 8> breakpoints{};
+    std::size_t breakpointCount = 2;
+    breakpoints[0] = 0.0f;
+    breakpoints[1] = 1.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        localStart[axis] = dot(startOffset, box.axes[axis]);
+        const float localEnd = dot(endOffset, box.axes[axis]);
+        localDelta[axis] = localEnd - localStart[axis];
+        if (!std::isfinite(localStart[axis]) || !std::isfinite(localDelta[axis])) {
+            return std::numeric_limits<float>::infinity();
+        }
+        if (std::fabs(localDelta[axis]) <= 1.0e-12f) continue;
+        for (const float face : {-box.halfExtents[axis], box.halfExtents[axis]}) {
+            const float crossing = (face - localStart[axis]) / localDelta[axis];
+            if (crossing > 0.0f && crossing < 1.0f) {
+                breakpoints[breakpointCount++] = crossing;
+            }
+        }
+    }
+    std::sort(breakpoints.begin(), breakpoints.begin() + breakpointCount);
+
+    const auto distanceAt = [&](float parameter) {
+        float distanceSquared = 0.0f;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const float coordinate = localStart[axis] + localDelta[axis] * parameter;
+            const float outside = coordinate < -box.halfExtents[axis]
+                    ? coordinate + box.halfExtents[axis]
+                    : coordinate > box.halfExtents[axis]
+                            ? coordinate - box.halfExtents[axis] : 0.0f;
+            distanceSquared += outside * outside;
+        }
+        return distanceSquared;
+    };
+
+    float minimumDistanceSquared = std::min(distanceAt(0.0f), distanceAt(1.0f));
+    for (std::size_t interval = 0; interval + 1 < breakpointCount; ++interval) {
+        const float lower = breakpoints[interval];
+        const float upper = breakpoints[interval + 1];
+        if (upper <= lower) continue;
+        const float midpoint = (lower + upper) * 0.5f;
+        float quadratic = 0.0f;
+        float linear = 0.0f;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const float coordinate = localStart[axis] + localDelta[axis] * midpoint;
+            float boundary = 0.0f;
+            if (coordinate < -box.halfExtents[axis]) {
+                boundary = -box.halfExtents[axis];
+            } else if (coordinate > box.halfExtents[axis]) {
+                boundary = box.halfExtents[axis];
+            } else {
+                continue;
+            }
+            quadratic += localDelta[axis] * localDelta[axis];
+            linear += localDelta[axis] * (localStart[axis] - boundary);
+        }
+        if (quadratic > 1.0e-20f) {
+            const float minimumParameter = std::clamp(-linear / quadratic, lower, upper);
+            minimumDistanceSquared = std::min(minimumDistanceSquared,
+                    distanceAt(minimumParameter));
+        }
+    }
+    return minimumDistanceSquared;
+}
+
 bool colliderCanHitFloor(std::uint32_t layer, std::uint32_t mask,
                          const PhysicsSettings& settings) {
     return (mask & settings.floorCollisionLayer) != 0U
@@ -871,6 +943,55 @@ std::size_t Scene::overlapBox(const std::array<float, 3>& center,
         if (!collisionShape(entity, target) || !colliderPairAllowed(query, target)) continue;
         CollisionContact contact;
         if (collideShapes(query, target, contact)) entityIds.push_back(entity.id);
+    }
+    return entityIds.size();
+}
+
+std::size_t Scene::overlapCapsule(const std::array<float, 3>& start,
+                                  const std::array<float, 3>& end, float radius,
+                                  std::vector<std::uint32_t>& entityIds,
+                                  std::uint32_t queryLayer,
+                                  std::uint32_t queryMask) const {
+    entityIds.clear();
+    if (!std::isfinite(radius) || radius <= 0.0f || queryLayer == 0U || queryMask == 0U) {
+        return 0;
+    }
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(start[axis]) || !std::isfinite(end[axis])) return 0;
+    }
+    const float radiusSquared = radius * radius;
+    if (!std::isfinite(radiusSquared)) return 0;
+    const Vec3 segment{end[0] - start[0], end[1] - start[1], end[2] - start[2]};
+    const float segmentLengthSquared = dot(segment, segment);
+    if (!std::isfinite(segmentLengthSquared)) return 0;
+
+    CollisionShape query;
+    query.collisionLayer = queryLayer;
+    query.collisionMask = queryMask;
+    for (const Entity& entity : entities_) {
+        CollisionShape target;
+        if (!collisionShape(entity, target) || !colliderPairAllowed(query, target)) continue;
+        bool overlaps = false;
+        if (target.sphere) {
+            const float combinedRadius = radius + target.radius;
+            const float combinedRadiusSquared = combinedRadius * combinedRadius;
+            if (!std::isfinite(combinedRadiusSquared)) continue;
+            const Vec3 fromStart{target.center[0] - start[0], target.center[1] - start[1],
+                    target.center[2] - start[2]};
+            const float parameter = segmentLengthSquared > 1.0e-20f
+                    ? std::clamp(dot(fromStart, segment) / segmentLengthSquared, 0.0f, 1.0f)
+                    : 0.0f;
+            const Vec3 difference{fromStart[0] - segment[0] * parameter,
+                    fromStart[1] - segment[1] * parameter,
+                    fromStart[2] - segment[2] * parameter};
+            const float distanceSquared = dot(difference, difference);
+            overlaps = std::isfinite(distanceSquared)
+                    && distanceSquared < combinedRadiusSquared;
+        } else {
+            const float distanceSquared = segmentBoxDistanceSquared(start, end, target);
+            overlaps = std::isfinite(distanceSquared) && distanceSquared < radiusSquared;
+        }
+        if (overlaps) entityIds.push_back(entity.id);
     }
     return entityIds.size();
 }
