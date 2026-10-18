@@ -128,6 +128,35 @@ std::string makeTriangleWithMaterialGlb(const std::string& materialJson) {
     return data;
 }
 
+std::string makeMultiNodeStaticGlb(bool cycle = false) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeTriangleGlb(), json, binary, error)) return {};
+    const std::string singleMesh = R"JSON("meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}])JSON";
+    const std::string twoMeshes = R"JSON("meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1},{"attributes":{"POSITION":0},"indices":1}]},{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}])JSON";
+    const std::size_t meshOffset = json.find(singleMesh);
+    if (meshOffset == std::string::npos) return {};
+    json.replace(meshOffset, singleMesh.size(), twoMeshes);
+    std::string scene = R"JSON("scene":0,"scenes":[{"nodes":[0,2,3]}],"nodes":[{"name":"parent","translation":[2,0,0],"children":[1]},{"name":"rotated_mesh","rotation":[0,0,0.7071067812,0.7071067812],"scale":[2,1,1],"mesh":0},{"name":"matrix_mesh","matrix":[-1,0,0,0,0,1,0,0,0,0,1,0,-4,1,0,1],"mesh":1},{"name":"mesh_instance","translation":[8,0,0],"mesh":0},{"name":"not_in_selected_scene","translation":[100,0,0],"mesh":1}],)JSON";
+    if (cycle) {
+        const std::size_t meshNode = scene.find(R"JSON("mesh":0)JSON");
+        if (meshNode == std::string::npos) return {};
+        scene.insert(meshNode + std::string(R"JSON("mesh":0)JSON").size(), R"JSON(,"children":[0])JSON");
+    }
+    const std::size_t updatedMeshes = json.find("\"meshes\":");
+    if (updatedMeshes == std::string::npos) return {};
+    json.insert(updatedMeshes, scene);
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, std::move(json));
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
 std::string makeSkeletalGlb() {
     std::string binary;
     for (float value : {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}) {
@@ -318,6 +347,50 @@ void testGltfPbrMaterialFactors() {
            "unsupported glTF material textures are not silently discarded");
 }
 
+void testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms() {
+    nuby::GltfStaticAsset asset;
+    std::string error;
+    expect(nuby::parseGlbStaticAsset(makeMultiNodeStaticGlb(), asset, error),
+           "static GLB traverses selected scene roots and nested mesh nodes");
+    expect(asset.primitives.size() == 5
+                   && asset.primitives[0].meshIndex == 0
+                   && asset.primitives[1].meshIndex == 0
+                   && asset.primitives[2].meshIndex == 1
+                   && asset.primitives[3].meshIndex == 0,
+           "multiple primitives, distinct meshes and repeated mesh instances are preserved");
+    if (asset.primitives.size() == 5
+            && asset.primitives[0].vertices.size() == 3
+            && asset.primitives[2].vertices.size() == 3
+            && asset.primitives[3].vertices.size() == 3) {
+        const auto& nested = asset.primitives[0].vertices;
+        const auto& matrixNode = asset.primitives[2].vertices;
+        const auto& instance = asset.primitives[3].vertices;
+        expect(std::fabs(nested[0].position[0] - 2.0f) < 1.0e-5f
+                       && std::fabs(nested[0].position[1]) < 1.0e-5f
+                       && std::fabs(nested[1].position[0] - 2.0f) < 1.0e-4f
+                       && std::fabs(nested[1].position[1] - 2.0f) < 1.0e-4f,
+               "parent translation, child quaternion rotation and non-uniform scale compose");
+        expect(std::fabs(matrixNode[0].position[0] + 4.0f) < 1.0e-5f
+                       && std::fabs(matrixNode[0].position[1] - 1.0f) < 1.0e-5f
+                       && std::fabs(matrixNode[1].position[0] + 5.0f) < 1.0e-5f
+                       && asset.primitives[2].indices == std::vector<std::uint32_t>({0, 2, 1}),
+               "matrix-authored reflection is baked with corrected triangle winding");
+        expect(std::fabs(instance[0].position[0] - 8.0f) < 1.0e-5f
+                       && std::fabs(instance[1].position[0] - 9.0f) < 1.0e-5f,
+               "a source mesh can be instanced by multiple nodes independently");
+    }
+    nuby::GltfStaticAsset cyclic;
+    expect(!nuby::parseGlbStaticAsset(makeMultiNodeStaticGlb(true), cyclic, error)
+                   && cyclic.primitives.empty(),
+           "static importer rejects cyclic node hierarchies without partial output");
+
+    nuby::GltfStaticAsset preserved;
+    preserved.primitives.push_back({});
+    expect(!nuby::parseGlbStaticAsset(makeSkeletalGlb(), preserved, error)
+                   && preserved.primitives.empty(),
+           "static importer rejects skinned assets and clears partial output");
+}
+
 void testSkeletalGlbImportsJointsBindMatricesAndClips() {
     nuby::GltfSkeletalAsset asset;
     std::string error;
@@ -483,6 +556,7 @@ int main() {
     testGlbRejectsInvalidHeadersAndLengths();
     testGlbImportsTriangleAndSkinAttributes();
     testGltfPbrMaterialFactors();
+    testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
     testPackagedWayfarerAsset();
     testGltfJsonSyntaxAndVersionValidation();

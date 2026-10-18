@@ -969,6 +969,81 @@ Renderer::Mesh Renderer::uploadSkinnedMesh(const GltfPrimitive& primitive) {
     return mesh;
 }
 
+Renderer::Mesh Renderer::uploadStaticGltfMesh(const GltfPrimitive& primitive) {
+    Mesh mesh{};
+    if (primitive.vertices.empty() || primitive.indices.empty()
+            || primitive.vertices.size() > static_cast<std::size_t>(
+                    std::numeric_limits<GLsizei>::max())
+            || primitive.indices.size() > static_cast<std::size_t>(
+                    std::numeric_limits<GLsizei>::max())) return mesh;
+    struct GpuVertex {
+        float position[3];
+        float normal[3];
+        float uv[2];
+    };
+    std::vector<GpuVertex> vertices(primitive.vertices.size());
+    for (std::size_t index = 0; index < primitive.vertices.size(); ++index) {
+        const MeshVertex& source = primitive.vertices[index];
+        GpuVertex& vertex = vertices[index];
+        std::copy(std::begin(source.position), std::end(source.position), vertex.position);
+        std::copy(std::begin(source.normal), std::end(source.normal), vertex.normal);
+        std::copy(std::begin(source.uv), std::end(source.uv), vertex.uv);
+    }
+    Vec3 minimum{vertices.front().position[0], vertices.front().position[1],
+                 vertices.front().position[2]};
+    Vec3 maximum = minimum;
+    for (const GpuVertex& vertex : vertices) {
+        for (std::size_t axis = 0; axis < 3U; ++axis) {
+            if (!std::isfinite(vertex.position[axis]) || !std::isfinite(vertex.normal[axis])) {
+                return {};
+            }
+            minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
+            maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
+        }
+    }
+    for (std::uint32_t index : primitive.indices) {
+        if (index >= vertices.size()) return {};
+    }
+    for (std::size_t axis = 0; axis < 3U; ++axis) {
+        mesh.boundsCenter[axis] = (minimum[axis] + maximum[axis]) * 0.5f;
+    }
+    float radiusSquared = 0.0f;
+    for (const GpuVertex& vertex : vertices) {
+        const float dx = vertex.position[0] - mesh.boundsCenter[0];
+        const float dy = vertex.position[1] - mesh.boundsCenter[1];
+        const float dz = vertex.position[2] - mesh.boundsCenter[2];
+        radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
+    }
+    if (!std::isfinite(radiusSquared)) return {};
+    mesh.boundsRadius = std::sqrt(radiusSquared);
+    mesh.boundsValid = std::isfinite(mesh.boundsRadius);
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glGenBuffers(1, &mesh.ebo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(GpuVertex)),
+                 vertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(primitive.indices.size() * sizeof(std::uint32_t)),
+                 primitive.indices.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, position)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, normal)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
+                          reinterpret_cast<const void*>(offsetof(GpuVertex, uv)));
+    glBindVertexArray(0);
+    mesh.vertexCount = static_cast<GLsizei>(vertices.size());
+    mesh.indexCount = static_cast<GLsizei>(primitive.indices.size());
+    return mesh;
+}
+
 bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) {
     std::string bytes;
     constexpr std::size_t kMaximumGlbAssetBytes = 64U * 1024U * 1024U;
@@ -977,12 +1052,55 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
                 "GLB asset is unavailable or exceeds limits: %s", assetPath.c_str());
         return false;
     }
+    const auto applyGltfMaterial = [](const GltfPrimitive& primitive, ImportedPart& part) {
+        part.hasMaterial = primitive.hasMaterial;
+        if (!primitive.hasMaterial) return;
+        part.material.color = {primitive.material.baseColorFactor[0],
+                               primitive.material.baseColorFactor[1],
+                               primitive.material.baseColorFactor[2]};
+        part.material.opacity = primitive.material.alphaBlend
+                ? primitive.material.baseColorFactor[3] : 1.0f;
+        part.material.emission = primitive.material.emissiveFactor;
+        part.material.metallic = primitive.material.metallicFactor;
+        part.material.roughness = primitive.material.roughnessFactor;
+    };
     GltfSkeletalAsset parsed;
     std::string error;
     if (!parseGlbSkeletalAsset(bytes, parsed, error)) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "GLB skeletal import failed for %s: %s", assetPath.c_str(), error.c_str());
-        return false;
+        const std::string skeletalError = error;
+        GltfStaticAsset staticAsset;
+        if (!parseGlbStaticAsset(bytes, staticAsset, error)) {
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "GLB import failed for %s (skeletal: %s; static: %s)",
+                    assetPath.c_str(), skeletalError.c_str(), error.c_str());
+            return false;
+        }
+        ImportedModel staticModel{};
+        staticModel.parts.reserve(staticAsset.primitives.size());
+        for (const GltfPrimitive& primitive : staticAsset.primitives) {
+            ImportedPart part{};
+            applyGltfMaterial(primitive, part);
+            part.mesh = uploadStaticGltfMesh(primitive);
+            if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
+                if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+                if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+                if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+                for (ImportedPart& uploaded : staticModel.parts) {
+                    if (uploaded.mesh.vao != 0) glDeleteVertexArrays(1, &uploaded.mesh.vao);
+                    if (uploaded.mesh.vbo != 0) glDeleteBuffers(1, &uploaded.mesh.vbo);
+                    if (uploaded.mesh.ebo != 0) glDeleteBuffers(1, &uploaded.mesh.ebo);
+                }
+                __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                        "Could not upload static GLB primitive from %s", assetPath.c_str());
+                return false;
+            }
+            staticModel.parts.push_back(std::move(part));
+        }
+        model = std::move(staticModel);
+        __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                "Loaded static GLB %s (%zu mesh instances)",
+                assetPath.c_str(), model.parts.size());
+        return true;
     }
     ImportedModel candidate{};
     candidate.skeleton = std::move(parsed.skeleton);
@@ -991,17 +1109,7 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
     for (GltfPrimitive& primitive : parsed.primitives) {
         ImportedPart part{};
         part.skinned = true;
-        part.hasMaterial = primitive.hasMaterial;
-        if (primitive.hasMaterial) {
-            part.material.color = {primitive.material.baseColorFactor[0],
-                                   primitive.material.baseColorFactor[1],
-                                   primitive.material.baseColorFactor[2]};
-            part.material.opacity = primitive.material.alphaBlend
-                    ? primitive.material.baseColorFactor[3] : 1.0f;
-            part.material.emission = primitive.material.emissiveFactor;
-            part.material.metallic = primitive.material.metallicFactor;
-            part.material.roughness = primitive.material.roughnessFactor;
-        }
+        applyGltfMaterial(primitive, part);
         part.mesh = uploadSkinnedMesh(primitive);
         if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);

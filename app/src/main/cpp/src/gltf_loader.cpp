@@ -724,6 +724,10 @@ struct NodeData {
     std::string name;
     std::int32_t parentIndex = -1;
     bool matrixAuthored = false;
+    std::array<float, 16> matrix{1.0f, 0.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f, 0.0f, 0.0f,
+                                 0.0f, 0.0f, 1.0f, 0.0f,
+                                 0.0f, 0.0f, 0.0f, 1.0f};
     std::array<float, 3> translation{0.0f, 0.0f, 0.0f};
     SkeletalQuaternion rotation;
     std::array<float, 3> scale{1.0f, 1.0f, 1.0f};
@@ -741,6 +745,19 @@ bool parseNodeData(const JsonValue& root, std::vector<NodeData>& nodes,
         const JsonValue& source = sourceNodes->arrayValue[index];
         NodeData& node = nodes[index];
         node.matrixAuthored = member(source, "matrix") != nullptr;
+        if (node.matrixAuthored) {
+            if (member(source, "translation") != nullptr || member(source, "rotation") != nullptr
+                    || member(source, "scale") != nullptr
+                    || !jsonFloatArray(member(source, "matrix"), node.matrix)) {
+                return fail(error, "GLB node matrix must be a finite MAT4 without TRS fields");
+            }
+            if (std::fabs(node.matrix[3]) > 1.0e-6f
+                    || std::fabs(node.matrix[7]) > 1.0e-6f
+                    || std::fabs(node.matrix[11]) > 1.0e-6f
+                    || std::fabs(node.matrix[15] - 1.0f) > 1.0e-6f) {
+                return fail(error, "GLB node matrix must be affine");
+            }
+        }
         if (const JsonValue* name = member(source, "name"); name != nullptr) {
             if (name->type != JsonValue::Type::String || name->stringValue.size() > 1024U) {
                 return fail(error, "GLB node name is invalid");
@@ -773,6 +790,105 @@ bool parseNodeData(const JsonValue& root, std::vector<NodeData>& nodes,
                 return fail(error, "GLB node hierarchy contains an invalid or repeated parent");
             }
             nodes[child].parentIndex = static_cast<std::int32_t>(index);
+        }
+    }
+    return true;
+}
+
+using Matrix4 = std::array<float, 16>;
+
+Matrix4 multiplyMatrix(const Matrix4& left, const Matrix4& right) {
+    Matrix4 result{};
+    for (std::size_t column = 0; column < 4U; ++column) {
+        for (std::size_t row = 0; row < 4U; ++row) {
+            for (std::size_t inner = 0; inner < 4U; ++inner) {
+                result[column * 4U + row] += left[inner * 4U + row]
+                        * right[column * 4U + inner];
+            }
+        }
+    }
+    return result;
+}
+
+bool nodeLocalMatrix(const NodeData& node, Matrix4& output) {
+    if (node.matrixAuthored) {
+        output = node.matrix;
+        return true;
+    }
+    SkeletalQuaternion rotation = node.rotation;
+    const float lengthSquared = rotation.x * rotation.x + rotation.y * rotation.y
+            + rotation.z * rotation.z + rotation.w * rotation.w;
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-12f) return false;
+    const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+    rotation.x *= inverseLength;
+    rotation.y *= inverseLength;
+    rotation.z *= inverseLength;
+    rotation.w *= inverseLength;
+    const float xx = rotation.x * rotation.x;
+    const float yy = rotation.y * rotation.y;
+    const float zz = rotation.z * rotation.z;
+    const float xy = rotation.x * rotation.y;
+    const float xz = rotation.x * rotation.z;
+    const float yz = rotation.y * rotation.z;
+    const float wx = rotation.w * rotation.x;
+    const float wy = rotation.w * rotation.y;
+    const float wz = rotation.w * rotation.z;
+    output = {
+        (1.0f - 2.0f * (yy + zz)) * node.scale[0],
+        (2.0f * (xy + wz)) * node.scale[0],
+        (2.0f * (xz - wy)) * node.scale[0], 0.0f,
+        (2.0f * (xy - wz)) * node.scale[1],
+        (1.0f - 2.0f * (xx + zz)) * node.scale[1],
+        (2.0f * (yz + wx)) * node.scale[1], 0.0f,
+        (2.0f * (xz + wy)) * node.scale[2],
+        (2.0f * (yz - wx)) * node.scale[2],
+        (1.0f - 2.0f * (xx + yy)) * node.scale[2], 0.0f,
+        node.translation[0], node.translation[1], node.translation[2], 1.0f};
+    return std::all_of(output.begin(), output.end(),
+                       [](float value) { return std::isfinite(value); });
+}
+
+bool transformStaticPrimitive(GltfPrimitive& primitive, const Matrix4& matrix) {
+    const float a = matrix[0];
+    const float b = matrix[4];
+    const float c = matrix[8];
+    const float d = matrix[1];
+    const float e = matrix[5];
+    const float f = matrix[9];
+    const float g = matrix[2];
+    const float h = matrix[6];
+    const float i = matrix[10];
+    const std::array<float, 9> cofactor{
+        e * i - f * h, f * g - d * i, d * h - e * g,
+        c * h - b * i, a * i - c * g, b * g - a * h,
+        b * f - c * e, c * d - a * f, a * e - b * d};
+    const float determinant = a * cofactor[0] + b * cofactor[1] + c * cofactor[2];
+    if (!std::isfinite(determinant) || std::fabs(determinant) <= 1.0e-12f) return false;
+    const float inverseDeterminant = 1.0f / determinant;
+    for (MeshVertex& vertex : primitive.vertices) {
+        const float x = vertex.position[0];
+        const float y = vertex.position[1];
+        const float z = vertex.position[2];
+        vertex.position[0] = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+        vertex.position[1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+        vertex.position[2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+        const float nx = (cofactor[0] * vertex.normal[0] + cofactor[1] * vertex.normal[1]
+                + cofactor[2] * vertex.normal[2]) * inverseDeterminant;
+        const float ny = (cofactor[3] * vertex.normal[0] + cofactor[4] * vertex.normal[1]
+                + cofactor[5] * vertex.normal[2]) * inverseDeterminant;
+        const float nz = (cofactor[6] * vertex.normal[0] + cofactor[7] * vertex.normal[1]
+                + cofactor[8] * vertex.normal[2]) * inverseDeterminant;
+        const float normalLength = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (!std::isfinite(vertex.position[0]) || !std::isfinite(vertex.position[1])
+                || !std::isfinite(vertex.position[2]) || !std::isfinite(normalLength)
+                || normalLength <= 1.0e-12f) return false;
+        vertex.normal[0] = nx / normalLength;
+        vertex.normal[1] = ny / normalLength;
+        vertex.normal[2] = nz / normalLength;
+    }
+    if (determinant < 0.0f) {
+        for (std::size_t index = 0; index < primitive.indices.size(); index += 3U) {
+            std::swap(primitive.indices[index + 1U], primitive.indices[index + 2U]);
         }
     }
     return true;
@@ -815,7 +931,8 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
     std::vector<GltfPrimitive> candidate;
     std::size_t totalVertices = 0;
     std::size_t totalIndices = 0;
-    for (const JsonValue& mesh : meshes->arrayValue) {
+    for (std::size_t meshIndex = 0; meshIndex < meshes->arrayValue.size(); ++meshIndex) {
+        const JsonValue& mesh = meshes->arrayValue[meshIndex];
         const JsonValue* primitives = member(mesh, "primitives");
         if (primitives == nullptr || primitives->type != JsonValue::Type::Array
                 || primitives->arrayValue.empty()) {
@@ -838,6 +955,7 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
             }
             const Accessor& positionAccessor = accessors[positionAccessorIndex];
             GltfPrimitive parsed{};
+            parsed.meshIndex = static_cast<std::uint32_t>(meshIndex);
             const JsonValue* materialIndexValue = member(primitive, "material");
             if (materialIndexValue != nullptr) {
                 std::uint32_t materialIndex = 0;
@@ -1006,6 +1124,192 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
         }
     }
     if (candidate.empty()) return fail(error, "GLB contains no supported mesh primitives");
+    output = std::move(candidate);
+    error.clear();
+    return true;
+}
+
+bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
+                         std::string& error) {
+    output = {};
+    std::string json;
+    std::string binary;
+    if (!parseGlbContainer(bytes, json, binary, error)) return false;
+    JsonValue root;
+    if (!parseGltfJsonDocument(json, root, error)) return false;
+
+    std::vector<NodeData> nodes;
+    if (!parseNodeData(root, nodes, error)) return false;
+    const JsonValue* meshes = member(root, "meshes");
+    if (meshes == nullptr || meshes->type != JsonValue::Type::Array
+            || meshes->arrayValue.empty() || meshes->arrayValue.size() > 4096U) {
+        return fail(error, "GLB static scene has no meshes or exceeds mesh limits");
+    }
+    const JsonValue* skins = member(root, "skins");
+    if (skins != nullptr && (skins->type != JsonValue::Type::Array
+            || !skins->arrayValue.empty())) {
+        return fail(error, "Skinned GLB assets must use the skeletal importer");
+    }
+    const JsonValue* animations = member(root, "animations");
+    if (animations != nullptr && (animations->type != JsonValue::Type::Array
+            || !animations->arrayValue.empty())) {
+        return fail(error, "Animated GLB assets are not static scenes");
+    }
+    for (const JsonValue& node : member(root, "nodes")->arrayValue) {
+        if (member(node, "skin") != nullptr) {
+            return fail(error, "Skinned GLB assets must use the skeletal importer");
+        }
+        if (member(node, "weights") != nullptr) {
+            return fail(error, "GLB morph weights are unsupported by the static importer");
+        }
+    }
+    for (const JsonValue& mesh : meshes->arrayValue) {
+        if (member(mesh, "weights") != nullptr) {
+            return fail(error, "GLB morph weights are unsupported by the static importer");
+        }
+        const JsonValue* primitives = member(mesh, "primitives");
+        if (primitives == nullptr || primitives->type != JsonValue::Type::Array) continue;
+        for (const JsonValue& primitive : primitives->arrayValue) {
+            if (member(primitive, "targets") != nullptr) {
+                return fail(error, "GLB morph targets are unsupported by the static importer");
+            }
+        }
+    }
+
+    std::vector<GltfPrimitive> decodedPrimitives;
+    if (!parseGlbMeshes(bytes, decodedPrimitives, error)) return false;
+    std::vector<std::vector<std::size_t>> primitiveIndices(meshes->arrayValue.size());
+    for (std::size_t index = 0; index < decodedPrimitives.size(); ++index) {
+        GltfPrimitive& primitive = decodedPrimitives[index];
+        if (primitive.meshIndex >= primitiveIndices.size() || primitive.hasSkinAttributes) {
+            return fail(error, "Static GLB primitive has an invalid mesh or skin attributes");
+        }
+        primitiveIndices[primitive.meshIndex].push_back(index);
+    }
+
+    std::vector<std::vector<std::uint32_t>> children(nodes.size());
+    std::vector<std::uint32_t> roots;
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        const std::int32_t parent = nodes[index].parentIndex;
+        if (parent < 0) roots.push_back(static_cast<std::uint32_t>(index));
+        else children[static_cast<std::size_t>(parent)].push_back(
+                static_cast<std::uint32_t>(index));
+    }
+    std::vector<std::uint8_t> hierarchyState(nodes.size(), 0U);
+    for (std::uint32_t rootNode : roots) {
+        if (hierarchyState[rootNode] == 2U) continue;
+        hierarchyState[rootNode] = 1U;
+        std::vector<std::pair<std::uint32_t, std::size_t>> stack{{rootNode, 0U}};
+        while (!stack.empty()) {
+            auto& frame = stack.back();
+            if (frame.second == children[frame.first].size()) {
+                hierarchyState[frame.first] = 2U;
+                stack.pop_back();
+                continue;
+            }
+            const std::uint32_t child = children[frame.first][frame.second++];
+            if (hierarchyState[child] == 1U) {
+                return fail(error, "GLB node hierarchy contains a cycle");
+            }
+            if (hierarchyState[child] == 0U) {
+                hierarchyState[child] = 1U;
+                stack.emplace_back(child, 0U);
+            }
+        }
+    }
+    if (std::find(hierarchyState.begin(), hierarchyState.end(), 0U) != hierarchyState.end()) {
+        return fail(error, "GLB node hierarchy contains a rootless cycle");
+    }
+
+    std::vector<Matrix4> localMatrices(nodes.size());
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        if (!nodeLocalMatrix(nodes[index], localMatrices[index])) {
+            return fail(error, "GLB node transform is invalid");
+        }
+    }
+
+    std::vector<std::uint32_t> sceneRoots;
+    const JsonValue* scenes = member(root, "scenes");
+    if (scenes == nullptr) {
+        sceneRoots = roots;
+    } else {
+        if (scenes->type != JsonValue::Type::Array || scenes->arrayValue.empty()
+                || scenes->arrayValue.size() > 4096U) {
+            return fail(error, "GLB scenes array is invalid or exceeds limits");
+        }
+        std::uint32_t sceneIndex = 0;
+        if (!optionalUnsigned(root, "scene", 0U, sceneIndex)
+                || sceneIndex >= scenes->arrayValue.size()) {
+            return fail(error, "GLB default scene index is invalid");
+        }
+        const JsonValue* sceneNodes = member(scenes->arrayValue[sceneIndex], "nodes");
+        if (sceneNodes == nullptr || sceneNodes->type != JsonValue::Type::Array
+                || sceneNodes->arrayValue.size() > nodes.size()) {
+            return fail(error, "Selected GLB scene has an invalid node-root list");
+        }
+        for (const JsonValue& nodeValue : sceneNodes->arrayValue) {
+            std::uint32_t nodeIndex = 0;
+            if (!unsignedInteger(&nodeValue, nodeIndex) || nodeIndex >= nodes.size()
+                    || nodes[nodeIndex].parentIndex >= 0
+                    || std::find(sceneRoots.begin(), sceneRoots.end(), nodeIndex)
+                            != sceneRoots.end()) {
+                return fail(error, "Selected GLB scene contains an invalid or duplicate root");
+            }
+            sceneRoots.push_back(nodeIndex);
+        }
+    }
+
+    GltfStaticAsset candidate;
+    std::size_t totalVertices = 0;
+    std::size_t totalIndices = 0;
+    const Matrix4 identity{1.0f, 0.0f, 0.0f, 0.0f,
+                           0.0f, 1.0f, 0.0f, 0.0f,
+                           0.0f, 0.0f, 1.0f, 0.0f,
+                           0.0f, 0.0f, 0.0f, 1.0f};
+    const auto appendNode = [&](std::uint32_t sceneRoot) -> bool {
+        std::vector<std::pair<std::uint32_t, Matrix4>> stack;
+        stack.emplace_back(sceneRoot, identity);
+        while (!stack.empty()) {
+            const std::uint32_t nodeIndex = stack.back().first;
+            const Matrix4 parentWorld = stack.back().second;
+            stack.pop_back();
+            const Matrix4 world = multiplyMatrix(parentWorld, localMatrices[nodeIndex]);
+            for (float value : world) {
+                if (!std::isfinite(value)) return false;
+            }
+            const JsonValue& sourceNode = member(root, "nodes")->arrayValue[nodeIndex];
+            if (const JsonValue* meshValue = member(sourceNode, "mesh"); meshValue != nullptr) {
+                std::uint32_t meshIndex = 0;
+                if (!unsignedInteger(meshValue, meshIndex) || meshIndex >= primitiveIndices.size()) {
+                    return false;
+                }
+                for (std::size_t primitiveIndex : primitiveIndices[meshIndex]) {
+                    const GltfPrimitive& source = decodedPrimitives[primitiveIndex];
+                    if (candidate.primitives.size() >= 8192U
+                            || source.vertices.size() > 4000000U - totalVertices
+                            || source.indices.size() > 12000000U - totalIndices) return false;
+                    GltfPrimitive instance = source;
+                    if (!transformStaticPrimitive(instance, world)) return false;
+                    totalVertices += instance.vertices.size();
+                    totalIndices += instance.indices.size();
+                    candidate.primitives.push_back(std::move(instance));
+                }
+            }
+            const std::vector<std::uint32_t>& nodeChildren = children[nodeIndex];
+            for (auto child = nodeChildren.rbegin(); child != nodeChildren.rend(); ++child) {
+                stack.emplace_back(*child, world);
+            }
+        }
+        return true;
+    };
+    for (std::uint32_t sceneRoot : sceneRoots) {
+        if (!appendNode(sceneRoot)) {
+            return fail(error, "GLB static node transform, mesh reference or instance limit is invalid");
+        }
+    }
+    if (candidate.primitives.empty()) {
+        return fail(error, "Selected GLB scene contains no static mesh instances");
+    }
     output = std::move(candidate);
     error.clear();
     return true;

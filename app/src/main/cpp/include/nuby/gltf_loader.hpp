@@ -20,6 +20,7 @@ struct GltfMaterial {
 };
 
 struct GltfPrimitive {
+    std::uint32_t meshIndex = 0;
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<SkeletalVertexInfluence> influences;
@@ -31,6 +32,12 @@ struct GltfPrimitive {
 struct GltfAnimation {
     std::string name;
     SkeletalAnimationClip clip;
+};
+
+struct GltfStaticAsset {
+    // One transformed primitive per visible mesh-node/primitive instance in the
+    // selected glTF scene. Node transforms are baked into positions and normals.
+    std::vector<GltfPrimitive> primitives;
 };
 
 struct GltfSkeletalAsset {
@@ -50,11 +57,18 @@ bool validateGltf2Json(std::string_view json, std::string& error);
 
 // Imports triangle primitives from a self-contained GLB with one embedded
 // buffer. Supports float POSITION/NORMAL/TEXCOORD_0, unsigned scalar indices,
-// JOINTS_0/WEIGHTS_0 with four influences, and per-primitive glTF metallic-
-// roughness material factors. Image textures and MASK alpha are rejected until
-// their renderer paths are implemented.
+// optional JOINTS_0/WEIGHTS_0 with four influences, and per-primitive glTF
+// metallic-roughness material factors. Image textures and MASK alpha are
+// rejected until their renderer paths are implemented.
 bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                     std::string& error);
+
+// Imports static meshes in the selected scene, traversing arbitrary acyclic
+// node hierarchies and baking each mesh-node transform into a distinct part.
+// Matrix-authored and TRS nodes, instancing, and multiple mesh primitives are
+// supported; skinned, animated, and morph-target assets are explicitly rejected.
+bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
+                         std::string& error);
 
 // Imports a constrained single-mesh-node, single-skin GLB subset, including
 // multiple triangle primitives, parent-first joints, inverse-bind matrices,

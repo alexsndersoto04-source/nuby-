@@ -154,6 +154,7 @@ private:
     GLuint createProgram(const char* vertexSource, const char* fragmentSource);
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
     Mesh uploadSkinnedMesh(const GltfPrimitive& primitive);
+    Mesh uploadStaticGltfMesh(const GltfPrimitive& primitive);
     bool loadObjAsset(const std::string& assetPath, ImportedModel& model);
     bool loadGlbAsset(const std::string& assetPath, ImportedModel& model);
     void uploadSkinPalette(const SkeletalPose* pose);
