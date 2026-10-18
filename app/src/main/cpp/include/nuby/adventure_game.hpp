@@ -1,11 +1,13 @@
 #pragma once
 
+#include "nuby/async_scene_asset_loader.hpp"
 #include "nuby/scene.hpp"
 #include "nuby/world_streaming.hpp"
 
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,9 +24,9 @@ public:
     void update(Scene& scene, float deltaSeconds);
     bool setMoveInput(Scene& scene, float horizontal, float forward);
     bool jump(Scene& scene);
-    using ZoneSceneReader = std::function<bool(const std::string&, Scene&, std::string&)>;
+    using ZoneSceneReader = AsyncSceneAssetLoader::Reader;
     using ZoneAssetsChangedCallback = std::function<void()>;
-    void setZoneSceneReader(ZoneSceneReader reader) { zoneSceneReader_ = std::move(reader); }
+    void setZoneSceneReader(ZoneSceneReader reader);
     void setZoneAssetsChangedCallback(ZoneAssetsChangedCallback callback) {
         zoneAssetsChangedCallback_ = std::move(callback);
     }
@@ -39,6 +41,8 @@ private:
     void buildScene(Scene& scene);
     void applyZoneTransitions(Scene& scene);
     void loadZone(Scene& scene, std::uint32_t zoneId);
+    void loadZoneFallback(Scene& scene, std::uint32_t zoneId);
+    void integrateReadyZoneScenes(Scene& scene);
     void unloadZone(Scene& scene, std::uint32_t zoneId);
 
     std::uint32_t playerId_ = 0;
@@ -49,9 +53,11 @@ private:
     std::array<std::vector<std::uint32_t>, 3> streamedZoneEntityIds_;
     std::array<WorldZoneDefinition, 3> zoneDefinitions_{};
     std::array<bool, 3> streamedZoneLoaded_{};
-    ZoneSceneReader zoneSceneReader_;
+    std::array<bool, 3> streamedZonePending_{};
+    std::unique_ptr<AsyncSceneAssetLoader> zoneSceneLoader_;
     ZoneAssetsChangedCallback zoneAssetsChangedCallback_;
     std::vector<WorldZoneTransition> zoneTransitionsScratch_;
+    std::vector<SceneAssetLoadResult> zoneLoadResultsScratch_;
     std::size_t zoneLoadFailureCount_ = 0;
     WorldZoneStreamer worldZoneStreamer_;
     int relicsCollected_ = 0;

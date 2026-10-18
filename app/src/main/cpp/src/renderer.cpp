@@ -2077,7 +2077,13 @@ void Renderer::renderBloom() {
     glEnable(GL_DEPTH_TEST);
 }
 
+Renderer::~Renderer() {
+    adventureGame_.setZoneSceneReader({});
+}
+
 void Renderer::initialize(AAssetManager* assetManager) {
+    // Join any previous asset worker before changing its captured manager source.
+    adventureGame_.setZoneSceneReader({});
     assetManager_ = assetManager;
     adventureGame_.setZoneSceneReader([this](const std::string& assetPath,
                                              Scene& fragment, std::string& error) {

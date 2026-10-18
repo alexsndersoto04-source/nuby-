@@ -25,7 +25,7 @@ namespace nuby {
 class Renderer final {
 public:
     Renderer() = default;
-    ~Renderer() = default;
+    ~Renderer();
 
     void initialize(AAssetManager* assetManager);
     void resize(int width, int height);

@@ -1,12 +1,18 @@
 #include "nuby/adventure_game.hpp"
 #include "nuby/scene_io.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cmath>
-#include <fstream>
 #include <cstdlib>
+#include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace {
 int failures = 0;
@@ -18,10 +24,25 @@ void expect(bool condition, const char* message) {
     }
 }
 
+std::uint32_t findEntityId(const nuby::Scene& scene, const std::string& name);
+
 void advance(nuby::AdventureGame& game, nuby::Scene& scene, int frames) {
     for (int frame = 0; frame < frames; ++frame) {
         game.update(scene, 1.0f / 60.0f);
     }
+}
+
+template <typename Predicate>
+bool waitForGameUpdate(nuby::AdventureGame& game, nuby::Scene& scene,
+                       Predicate predicate) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (std::chrono::steady_clock::now() < deadline) {
+        game.update(scene, 0.0f);
+        if (predicate()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    game.update(scene, 0.0f);
+    return predicate();
 }
 
 void movePlayerTo(nuby::Scene& scene, std::uint32_t playerId, float x, float z) {
@@ -183,14 +204,14 @@ void testAdventureStreamsSceneryByPlayerZone() {
 }
 
 void testAdventureLoadsSerializedZoneScenesAndPreservesMissionState() {
-    nuby::AdventureGame game;
-    int sceneAssetsRead = 0;
+    std::atomic<int> sceneAssetsRead{0};
     int resourceChanges = 0;
+    nuby::AdventureGame game;
     game.setZoneAssetsChangedCallback([&resourceChanges]() { ++resourceChanges; });
     game.setZoneSceneReader([&sceneAssetsRead](const std::string& assetPath,
                                                 nuby::Scene& fragment,
                                                 std::string& error) {
-        ++sceneAssetsRead;
+        sceneAssetsRead.fetch_add(1);
         std::ifstream input("app/src/main/assets/" + assetPath, std::ios::binary);
         if (!input) {
             error = "zone asset not found";
@@ -200,10 +221,13 @@ void testAdventureLoadsSerializedZoneScenesAndPreservesMissionState() {
     });
     nuby::Scene scene;
     game.start(scene);
+    const bool firstZoneLoaded = waitForGameUpdate(game, scene, [&scene]() {
+        return findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0;
+    });
 
-    expect(sceneAssetsRead == 1 && resourceChanges == 1
+    expect(firstZoneLoaded && sceneAssetsRead.load() == 1 && resourceChanges == 1
                    && game.zoneLoadFailureCount() == 0,
-           "adventure reads the nearby scene and notifies the renderer to load its resources");
+           "adventure asynchronously reads the nearby scene and notifies the renderer to load its resources");
     const nuby::Entity* loadedPillar = scene.find(
             findEntityId(scene, "Ruin Zone 1 Pillar 1"));
     expect(loadedPillar != nullptr && loadedPillar->primitive == nuby::Primitive::ImportedMesh
@@ -221,15 +245,77 @@ void testAdventureLoadsSerializedZoneScenesAndPreservesMissionState() {
 
     movePlayerTo(scene, game.playerId(), 0.0f, -13.0f);
     advance(game, scene, 1);
-    expect(findEntityId(scene, "Ruin Zone 1 Pillar 1") == 0
-                   && findEntityId(scene, "Ruin Zone 3 Pillar 9") != 0,
-           "streaming unloads distant asset entities and loads the new zone scene");
+    const bool thirdZoneLoaded = waitForGameUpdate(game, scene, [&scene]() {
+        return findEntityId(scene, "Ruin Zone 1 Pillar 1") == 0
+                && findEntityId(scene, "Ruin Zone 3 Pillar 9") != 0;
+    });
+    expect(thirdZoneLoaded,
+           "async streaming unloads distant assets and integrates the new scene without blocking the game loop");
     expect(scene.find(game.playerId()) != nullptr && scene.activeCamera() != nullptr
                    && game.relicsCollected() == 1 && scene.find(firstRelic) == nullptr,
            "zone transitions preserve player, camera, and collected mission progress");
-    expect(sceneAssetsRead >= 3 && resourceChanges >= 3
+    expect(sceneAssetsRead.load() >= 3 && resourceChanges >= 3
                    && game.zoneLoadFailureCount() == 0,
            "each new zone scene triggers resource loading without falling back");
+}
+
+void testAdventureCancelsZoneReadAfterLeavingItsResidencyRange() {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool firstZoneReadStarted = false;
+    bool releaseFirstZoneRead = false;
+    nuby::AdventureGame game;
+    game.setZoneSceneReader([&mutex, &condition, &firstZoneReadStarted,
+                             &releaseFirstZoneRead](const std::string& assetPath,
+                                                    nuby::Scene& fragment,
+                                                    std::string& error) {
+        if (assetPath == "scenes/zones/ruins_01.scene") {
+            std::unique_lock<std::mutex> lock(mutex);
+            firstZoneReadStarted = true;
+            condition.notify_all();
+            condition.wait(lock, [&releaseFirstZoneRead]() { return releaseFirstZoneRead; });
+        }
+        std::ifstream input("app/src/main/assets/" + assetPath, std::ios::binary);
+        if (!input) {
+            error = "zone asset not found";
+            return false;
+        }
+        return nuby::SceneSerializer::load(fragment, input, error);
+    });
+    nuby::Scene scene;
+    game.start(scene);
+
+    bool firstReadStarted = false;
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        firstReadStarted = condition.wait_for(lock, std::chrono::seconds(2),
+                [&firstZoneReadStarted]() { return firstZoneReadStarted; });
+    }
+    expect(firstReadStarted, "the first zone begins loading on the worker thread");
+    if (!firstReadStarted) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            releaseFirstZoneRead = true;
+        }
+        condition.notify_all();
+        return;
+    }
+
+    movePlayerTo(scene, game.playerId(), 0.0f, -13.0f);
+    advance(game, scene, 1);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        releaseFirstZoneRead = true;
+    }
+    condition.notify_all();
+
+    const bool farZoneLoaded = waitForGameUpdate(game, scene, [&scene]() {
+        return findEntityId(scene, "Ruin Zone 3 Pillar 9") != 0;
+    });
+    expect(farZoneLoaded && findEntityId(scene, "Ruin Zone 1 Pillar 1") == 0
+                   && findEntityId(scene, "Ruin Zone 3 Pillar 9") != 0
+                   && game.zoneLoadFailureCount() == 0,
+           "a stale in-flight read is discarded after zone exit while current-zone requests succeed");
 }
 
 void testMissingZoneSceneFallsBackWithoutBreakingAdventure() {
@@ -240,9 +326,12 @@ void testMissingZoneSceneFallsBackWithoutBreakingAdventure() {
     });
     nuby::Scene scene;
     game.start(scene);
-    expect(game.zoneLoadFailureCount() == 1
-                   && findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0,
-           "a missing zone scene records an error and keeps deterministic fallback scenery");
+    const bool fallbackLoaded = waitForGameUpdate(game, scene, [&game, &scene]() {
+        return game.zoneLoadFailureCount() == 1
+                && findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0;
+    });
+    expect(fallbackLoaded,
+           "a missing scene asynchronously records its error and keeps fallback scenery");
     expect(scene.find(game.playerId()) != nullptr && scene.activeCamera() != nullptr
                    && findEntityId(scene, "Sun Relic 1") != 0,
            "scene asset failure leaves mission-critical adventure state playable");
@@ -327,6 +416,7 @@ int main() {
     testWayfarerSelectsIdleWalkRunAndJumpClips();
     testAdventureStreamsSceneryByPlayerZone();
     testAdventureLoadsSerializedZoneScenesAndPreservesMissionState();
+    testAdventureCancelsZoneReadAfterLeavingItsResidencyRange();
     testMissingZoneSceneFallsBackWithoutBreakingAdventure();
     testMovementJumpAndCameraFollow();
     testRelicsUnlockTheGateAndRestartResetsProgress();
