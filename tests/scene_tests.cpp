@@ -1062,6 +1062,52 @@ void testSphereCastFindsFilteredSphereAndOrientedBoxContacts() {
            "sphere cast rejects a zero direction and clears the output hit");
 }
 
+void testCapsuleCastSweepsSphereAndOrientedBoxTargets() {
+    nuby::Scene scene;
+    const std::uint32_t sphereId = scene.create("capsule-cast sphere trigger", nuby::Primitive::None).id;
+    const std::uint32_t boxId = scene.create("capsule-cast OBB", nuby::Primitive::None).id;
+    nuby::Entity* sphere = scene.find(sphereId);
+    nuby::Entity* box = scene.find(boxId);
+    sphere->transform.position[0] = 5.0f;
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.5f;
+    sphere->sphereCollider.trigger = true;
+    sphere->sphereCollider.collisionLayer = 4U;
+    sphere->sphereCollider.collisionMask = 2U;
+    box->transform.position[0] = 9.0f;
+    box->transform.rotation[1] = 0.6f;
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.5f, 0.5f, 0.1f};
+    box->boxCollider.collisionLayer = 8U;
+    box->boxCollider.collisionMask = 2U;
+
+    nuby::CapsuleCastHit hit;
+    expect(scene.capsuleCast({0.0f, -0.25f, 0.0f}, {0.0f, 0.25f, 0.0f},
+                   {4.0f, 0.0f, 0.0f}, 0.25f, 12.0f, hit, 2U, 4U)
+                   && hit.entityId == sphereId && near(hit.distance, 4.25f)
+                   && near(hit.position[0], 4.5f) && near(hit.normal[0], -1.0f),
+           "capsule cast reports the nearest sphere contact with normalized direction and trigger filtering");
+    expect(scene.capsuleCast({0.0f, -0.25f, 0.0f}, {0.0f, 0.25f, 0.0f},
+                   {1.0f, 0.0f, 0.0f}, 0.2f, 12.0f, hit, 2U, 8U)
+                   && hit.entityId == boxId && near(hit.distance, 8.469f, 0.03f)
+                   && near(std::sqrt(hit.normal[0] * hit.normal[0]
+                               + hit.normal[1] * hit.normal[1]
+                               + hit.normal[2] * hit.normal[2]), 1.0f, 0.002f),
+           "capsule cast uses exact segment distance against a rotated OBB");
+    expect(!scene.capsuleCast({0.0f, -0.25f, 0.0f}, {0.0f, 0.25f, 0.0f},
+                   {1.0f, 0.0f, 0.0f}, 0.2f, 1.0f, hit, 2U, 8U)
+                   && hit.entityId == 0,
+           "capsule cast respects maximum travel distance and clears misses");
+    expect(scene.capsuleCast({5.0f, -0.2f, 0.0f}, {5.0f, 0.2f, 0.0f},
+                   {0.0f, 0.0f, 1.0f}, 0.2f, 0.0f, hit, 2U, 4U)
+                   && hit.entityId == sphereId && near(hit.distance, 0.0f),
+           "capsule cast reports a starting overlap with zero travel distance");
+    expect(!scene.capsuleCast({0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                   {0.0f, 0.0f, 0.0f}, 0.2f, 1.0f, hit)
+                   && hit.entityId == 0,
+           "capsule cast rejects a zero direction and clears the output hit");
+}
+
 void testCapsuleOverlapUsesSegmentDistanceAndCollisionFilters() {
     nuby::Scene scene;
     const std::uint32_t boxId = scene.create("capsule OBB", nuby::Primitive::None).id;
@@ -1220,6 +1266,7 @@ int main() {
     testOverlapQueriesRespectSphereAndOrientedBoxGeometry();
     testSphereCastFindsFilteredSphereAndOrientedBoxContacts();
     testCapsuleOverlapUsesSegmentDistanceAndCollisionFilters();
+    testCapsuleCastSweepsSphereAndOrientedBoxTargets();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();

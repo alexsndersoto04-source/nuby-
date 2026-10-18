@@ -209,6 +209,13 @@ struct SphereCastHit {
     std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
 };
 
+struct CapsuleCastHit {
+    std::uint32_t entityId = 0;
+    float distance = 0.0f;
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> normal{0.0f, 0.0f, 0.0f};
+};
+
 struct PointLightComponent {
     bool enabled = false;
     std::array<float, 3> color{1.0f, 1.0f, 1.0f};
@@ -303,6 +310,12 @@ public:
                     float maximumDistance, SphereCastHit& hit,
                     std::uint32_t queryLayer = 1U,
                     std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    // Sweeps a capsule segment by translating both endpoints; returns target-surface contact.
+    bool capsuleCast(const std::array<float, 3>& start, const std::array<float, 3>& end,
+                     const std::array<float, 3>& direction, float radius,
+                     float maximumDistance, CapsuleCastHit& hit,
+                     std::uint32_t queryLayer = 1U,
+                     std::uint32_t queryMask = 0xFFFFFFFFU) const;
     // Overlap queries include triggers; touching without penetration is excluded.
     std::size_t overlapSphere(const std::array<float, 3>& center, float radius,
                               std::vector<std::uint32_t>& entityIds,

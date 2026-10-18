@@ -260,8 +260,9 @@ bool raycastShape(const Vec3& origin, const Vec3& rayDirection, float maximumDis
     return true;
 }
 
-float segmentBoxDistanceSquared(const Vec3& start, const Vec3& end,
-                                const CollisionShape& box) {
+float segmentBoxClosestPoints(const Vec3& start, const Vec3& end,
+                               const CollisionShape& box, Vec3* segmentPointOutput = nullptr,
+                               Vec3* boxPointOutput = nullptr) {
     const Vec3 startOffset{start[0] - box.center[0], start[1] - box.center[1],
             start[2] - box.center[2]};
     const Vec3 endOffset{end[0] - box.center[0], end[1] - box.center[1],
@@ -302,7 +303,18 @@ float segmentBoxDistanceSquared(const Vec3& start, const Vec3& end,
         return distanceSquared;
     };
 
-    float minimumDistanceSquared = std::min(distanceAt(0.0f), distanceAt(1.0f));
+    float minimumDistanceSquared = std::numeric_limits<float>::infinity();
+    float bestParameter = 0.0f;
+    const auto consider = [&](float parameter) {
+        const float distanceSquared = distanceAt(parameter);
+        if (distanceSquared < minimumDistanceSquared) {
+            minimumDistanceSquared = distanceSquared;
+            bestParameter = parameter;
+        }
+    };
+    for (std::size_t index = 0; index < breakpointCount; ++index) {
+        consider(breakpoints[index]);
+    }
     for (std::size_t interval = 0; interval + 1 < breakpointCount; ++interval) {
         const float lower = breakpoints[interval];
         const float upper = breakpoints[interval + 1];
@@ -324,11 +336,25 @@ float segmentBoxDistanceSquared(const Vec3& start, const Vec3& end,
             linear += localDelta[axis] * (localStart[axis] - boundary);
         }
         if (quadratic > 1.0e-20f) {
-            const float minimumParameter = std::clamp(-linear / quadratic, lower, upper);
-            minimumDistanceSquared = std::min(minimumDistanceSquared,
-                    distanceAt(minimumParameter));
+            consider(std::clamp(-linear / quadratic, lower, upper));
         }
     }
+    Vec3 segmentPoint{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        segmentPoint[axis] = start[axis] + (end[axis] - start[axis]) * bestParameter;
+    }
+    const Vec3 relative{segmentPoint[0] - box.center[0], segmentPoint[1] - box.center[1],
+            segmentPoint[2] - box.center[2]};
+    Vec3 boxPoint = box.center;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const float coordinate = std::clamp(dot(relative, box.axes[axis]),
+                -box.halfExtents[axis], box.halfExtents[axis]);
+        for (std::size_t component = 0; component < 3; ++component) {
+            boxPoint[component] += box.axes[axis][component] * coordinate;
+        }
+    }
+    if (segmentPointOutput != nullptr) *segmentPointOutput = segmentPoint;
+    if (boxPointOutput != nullptr) *boxPointOutput = boxPoint;
     return minimumDistanceSquared;
 }
 
@@ -404,6 +430,113 @@ bool sweepSphereAgainstShape(const Vec3& start, const Vec3& displacement, float 
         const float advance = (distance - radius) / closingDistance;
         if (!std::isfinite(advance) || advance <= 1.0e-7f) return false;
         candidate += advance;
+        if (candidate > 1.0f) return false;
+    }
+    return false;
+}
+
+bool sweepCapsuleAgainstShape(const Vec3& start, const Vec3& end,
+                              const Vec3& displacement, float radius,
+                              const CollisionShape& target, float& timeOfImpact,
+                              Vec3& contactPoint, Vec3& normal) {
+    float candidate = 0.0f;
+    for (unsigned int iteration = 0; iteration < 32; ++iteration) {
+        const Vec3 first{start[0] + displacement[0] * candidate,
+                start[1] + displacement[1] * candidate,
+                start[2] + displacement[2] * candidate};
+        const Vec3 second{end[0] + displacement[0] * candidate,
+                end[1] + displacement[1] * candidate,
+                end[2] + displacement[2] * candidate};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(first[axis]) || !std::isfinite(second[axis])) return false;
+        }
+
+        Vec3 capsulePoint{};
+        Vec3 targetPoint{};
+        float targetRadius = 0.0f;
+        float distanceSquared = 0.0f;
+        if (target.sphere) {
+            const Vec3 segment{second[0] - first[0], second[1] - first[1],
+                    second[2] - first[2]};
+            const float segmentLengthSquared = dot(segment, segment);
+            const Vec3 fromStart{target.center[0] - first[0], target.center[1] - first[1],
+                    target.center[2] - first[2]};
+            const float parameter = segmentLengthSquared > 1.0e-20f
+                    ? std::clamp(dot(fromStart, segment) / segmentLengthSquared, 0.0f, 1.0f)
+                    : 0.0f;
+            capsulePoint = {first[0] + segment[0] * parameter,
+                    first[1] + segment[1] * parameter,
+                    first[2] + segment[2] * parameter};
+            const Vec3 between{capsulePoint[0] - target.center[0],
+                    capsulePoint[1] - target.center[1], capsulePoint[2] - target.center[2]};
+            distanceSquared = dot(between, between);
+            if (!std::isfinite(distanceSquared)) return false;
+            targetRadius = target.radius;
+            const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
+            if (distance > 1.0e-8f) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    normal[axis] = between[axis] / distance;
+                }
+            } else {
+                const float displacementLength = std::sqrt(dot(displacement, displacement));
+                normal = displacementLength > 1.0e-8f
+                        ? Vec3{-displacement[0] / displacementLength,
+                               -displacement[1] / displacementLength,
+                               -displacement[2] / displacementLength}
+                        : Vec3{1.0f, 0.0f, 0.0f};
+            }
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                targetPoint[axis] = target.center[axis] + normal[axis] * targetRadius;
+            }
+        } else {
+            distanceSquared = segmentBoxClosestPoints(first, second, target,
+                    &capsulePoint, &targetPoint);
+            if (!std::isfinite(distanceSquared)) return false;
+            const Vec3 between{capsulePoint[0] - targetPoint[0],
+                    capsulePoint[1] - targetPoint[1], capsulePoint[2] - targetPoint[2]};
+            const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
+            if (distance > 1.0e-8f) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    normal[axis] = between[axis] / distance;
+                }
+            } else {
+                const Vec3 relative{capsulePoint[0] - target.center[0],
+                        capsulePoint[1] - target.center[1],
+                        capsulePoint[2] - target.center[2]};
+                std::size_t nearestAxis = 0;
+                float nearestFaceDistance = std::numeric_limits<float>::max();
+                float nearestSide = 1.0f;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const float local = dot(relative, target.axes[axis]);
+                    const float faceDistance = target.halfExtents[axis] - std::fabs(local);
+                    if (faceDistance < nearestFaceDistance) {
+                        nearestFaceDistance = faceDistance;
+                        nearestAxis = axis;
+                        nearestSide = local >= 0.0f ? 1.0f : -1.0f;
+                    }
+                }
+                for (std::size_t component = 0; component < 3; ++component) {
+                    normal[component] = target.axes[nearestAxis][component] * nearestSide;
+                    targetPoint[component] = target.center[component]
+                            + normal[component] * target.halfExtents[nearestAxis];
+                }
+            }
+        }
+        if (!std::isfinite(distanceSquared)) return false;
+        const float distance = std::sqrt(std::max(distanceSquared, 0.0f));
+        const float separation = distance - radius - targetRadius;
+        if (separation <= 1.0e-5f) {
+            timeOfImpact = candidate;
+            contactPoint = targetPoint;
+            return true;
+        }
+
+        const Vec3 towardTarget{-normal[0], -normal[1], -normal[2]};
+        const float closingDistance = dot(displacement, towardTarget);
+        if (!std::isfinite(closingDistance) || closingDistance <= 1.0e-8f) return false;
+        const float advance = separation / closingDistance;
+        if (!std::isfinite(advance) || advance <= 0.0f) return false;
+        candidate += std::max(advance, 1.0e-7f);
         if (candidate > 1.0f) return false;
     }
     return false;
@@ -907,6 +1040,50 @@ bool Scene::sphereCast(const std::array<float, 3>& origin,
     return found;
 }
 
+bool Scene::capsuleCast(const std::array<float, 3>& start,
+                        const std::array<float, 3>& end,
+                        const std::array<float, 3>& direction, float radius,
+                        float maximumDistance, CapsuleCastHit& hit,
+                        std::uint32_t queryLayer, std::uint32_t queryMask) const {
+    hit = CapsuleCastHit{};
+    if (!std::isfinite(radius) || radius <= 0.0f || !std::isfinite(maximumDistance)
+            || maximumDistance < 0.0f || queryLayer == 0U || queryMask == 0U
+            || !std::isfinite(radius * radius)) return false;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(start[axis]) || !std::isfinite(end[axis])
+                || !std::isfinite(direction[axis])) return false;
+    }
+    const float directionLength = std::sqrt(dot(direction, direction));
+    if (!std::isfinite(directionLength) || directionLength <= 1.0e-8f) return false;
+    const Vec3 unitDirection{direction[0] / directionLength,
+            direction[1] / directionLength, direction[2] / directionLength};
+    const Vec3 displacement{unitDirection[0] * maximumDistance,
+            unitDirection[1] * maximumDistance, unitDirection[2] * maximumDistance};
+
+    bool found = false;
+    float closestDistance = maximumDistance;
+    for (const Entity& entity : entities_) {
+        CollisionShape target;
+        if (!collisionShape(entity, target)
+                || (queryMask & target.collisionLayer) == 0U
+                || (target.collisionMask & queryLayer) == 0U) continue;
+        float fraction = 0.0f;
+        Vec3 contactPoint{};
+        Vec3 normal{};
+        if (!sweepCapsuleAgainstShape(start, end, displacement, radius, target,
+                                      fraction, contactPoint, normal)) continue;
+        const float distance = fraction * maximumDistance;
+        if (found && distance >= closestDistance) continue;
+        found = true;
+        closestDistance = distance;
+        hit.entityId = entity.id;
+        hit.distance = distance;
+        hit.position = contactPoint;
+        hit.normal = normal;
+    }
+    return found;
+}
+
 std::size_t Scene::overlapSphere(const std::array<float, 3>& center, float radius,
                                  std::vector<std::uint32_t>& entityIds,
                                  std::uint32_t queryLayer,
@@ -1023,7 +1200,7 @@ std::size_t Scene::overlapCapsule(const std::array<float, 3>& start,
             overlaps = std::isfinite(distanceSquared)
                     && distanceSquared < combinedRadiusSquared;
         } else {
-            const float distanceSquared = segmentBoxDistanceSquared(start, end, target);
+            const float distanceSquared = segmentBoxClosestPoints(start, end, target);
             overlaps = std::isfinite(distanceSquared) && distanceSquared < radiusSquared;
         }
         if (overlaps) entityIds.push_back(entity.id);
