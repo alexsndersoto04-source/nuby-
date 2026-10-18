@@ -168,6 +168,23 @@ struct CharacterControllerComponent {
     bool grounded = false;
 };
 
+// Global diffuse environment lighting stored as nine RGB spherical-harmonic
+// coefficients. Basis order: Y00, Y1y, Y1z, Y1x, Y2xy, Y2yz, Y2z2, Y2xz, Y2x2-y2.
+// The defaults preserve the renderer's previous sky/ground ambient gradient.
+struct AmbientLighting {
+    std::array<float, 27> sphericalHarmonics{
+        0.52287f, 0.66467f, 1.06347f,
+        0.14828f, 0.20958f, 0.32747f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f
+    };
+};
+
 struct PhysicsSettings {
     // The implicit world floor participates in the same reciprocal layer/mask filter.
     std::array<float, 3> gravity{0.0f, -9.81f, 0.0f};
@@ -356,6 +373,8 @@ public:
     const std::vector<Entity>& entities() const { return entities_; }
     std::vector<Entity>& entities() { return entities_; }
     float elapsedSeconds() const { return elapsedSeconds_; }
+    AmbientLighting& ambientLighting() { return ambientLighting_; }
+    const AmbientLighting& ambientLighting() const { return ambientLighting_; }
     PhysicsSettings& physicsSettings() { return physicsSettings_; }
     const PhysicsSettings& physicsSettings() const { return physicsSettings_; }
     void consumePhysicsEvents(std::vector<PhysicsEvent>& output);
@@ -368,6 +387,7 @@ private:
     std::uint32_t nextId_ = 1;
     std::uint32_t activeCameraId_ = 0;
     float elapsedSeconds_ = 0.0f;
+    AmbientLighting ambientLighting_;
     PhysicsSettings physicsSettings_;
     float physicsAccumulator_ = 0.0f;
     std::vector<std::uint64_t> activeTriggerPairs_;

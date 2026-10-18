@@ -1664,6 +1664,7 @@ void Scene::clear() {
     nextId_ = 1;
     activeCameraId_ = 0;
     elapsedSeconds_ = 0.0f;
+    ambientLighting_ = AmbientLighting{};
     physicsSettings_ = PhysicsSettings{};
     physicsAccumulator_ = 0.0f;
     activeTriggerPairs_.clear();

@@ -262,6 +262,12 @@ bool validateScene(const Scene& scene, std::uint32_t activeCameraId,
         }
         maximumId = std::max(maximumId, entity.id);
     }
+    const AmbientLighting& ambient = scene.ambientLighting();
+    for (const float coefficient : ambient.sphericalHarmonics) {
+        if (!std::isfinite(coefficient) || std::fabs(coefficient) > 1000.0f) {
+            return fail(error, "Scene ambient-light coefficients are invalid");
+        }
+    }
     const PhysicsSettings& physics = scene.physicsSettings();
     if (!std::isfinite(physics.gravity[0]) || !std::isfinite(physics.gravity[1])
             || !std::isfinite(physics.gravity[2]) || !std::isfinite(physics.fixedTimeStep)
@@ -768,6 +774,9 @@ bool SceneSerializer::save(const Scene& scene, std::ostream& output, std::string
            << (physics.floorEnabled ? 1 : 0) << ' ' << physics.floorHeight << ' '
            << physics.floorRestitution << ' ' << physics.floorFriction << ' '
            << physics.floorCollisionLayer << ' ' << physics.floorCollisionMask << '\n';
+    output << "AMBIENT_SH";
+    writeFloatArray(output, scene.ambientLighting_.sphericalHarmonics);
+    output << '\n';
     for (const Entity& entity : scene.entities_) writeEntity(output, entity);
     output << "END_SCENE\n";
     if (!output) return fail(error, "Could not write complete scene data");
@@ -815,6 +824,18 @@ bool SceneSerializer::load(Scene& scene, std::istream& input, std::string& error
                         || !readUint32(input, physics.floorCollisionMask)
                         || physics.floorCollisionLayer == 0U))) {
             return fail(error, "Scene physics settings are invalid");
+        }
+    }
+    if (version >= 16) {
+        AmbientLighting& ambient = candidate.ambientLighting_;
+        if (!readTag(input, "AMBIENT_SH", error)
+                || !readFloatArray(input, ambient.sphericalHarmonics)) {
+            return fail(error, "Scene ambient-light coefficients are invalid");
+        }
+        for (const float coefficient : ambient.sphericalHarmonics) {
+            if (std::fabs(coefficient) > 1000.0f) {
+                return fail(error, "Scene ambient-light coefficients are invalid");
+            }
         }
     }
     std::uint32_t maximumId = 0;

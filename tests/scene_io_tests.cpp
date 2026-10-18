@@ -65,8 +65,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 15") {
+        if (line == "NUBY_SCENE 16") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("AMBIENT_SH ", 0) == 0 && targetVersion < 16) {
+            continue;
         } else if (line.rfind("SPHERE_COLLIDER ", 0) == 0 && targetVersion < 15) {
             legacy << withoutTrailingFields(line, 2) << '\n';
         } else if (line.rfind("BOX_COLLIDER ", 0) == 0) {
@@ -168,6 +170,9 @@ std::string downgradeTextureSchema(const std::string& encoded,
 
 nuby::Scene makeScene() {
     nuby::Scene scene;
+    scene.ambientLighting().sphericalHarmonics[0] = 0.7f;
+    scene.ambientLighting().sphericalHarmonics[4] = -0.12f;
+    scene.ambientLighting().sphericalHarmonics[26] = 0.23f;
     scene.physicsSettings().floorCollisionLayer = 4U;
     scene.physicsSettings().floorCollisionMask = 0x0000000CU;
     nuby::Entity& root = scene.create("root \"quoted\" \\ node", nuby::Primitive::None);
@@ -333,6 +338,10 @@ void testRoundTripAllSceneData() {
                    && loaded.physicsSettings().floorCollisionLayer == 4U
                    && loaded.physicsSettings().floorCollisionMask == 0x0000000CU,
            "round-trip preserves world physics settings");
+    expect(near(loaded.ambientLighting().sphericalHarmonics[0], 0.7f)
+                   && near(loaded.ambientLighting().sphericalHarmonics[4], -0.12f)
+                   && near(loaded.ambientLighting().sphericalHarmonics[26], 0.23f),
+           "round-trip preserves the scene's spherical-harmonic environment light");
 
     const nuby::Entity* root = loaded.find(1);
     const nuby::Entity* mesh = loaded.find(2);
@@ -540,6 +549,25 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "zero world-floor layers are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid floor filter cannot partially replace the target scene");
+
+    std::string invalidAmbient = valid.str();
+    expect(replaceRecordField(invalidAmbient, "AMBIENT_SH", 1, "1001"),
+           "v16 scene stores spherical-harmonic ambient-light coefficients");
+    std::stringstream malformedAmbient(invalidAmbient);
+    expect(!nuby::SceneSerializer::load(target, malformedAmbient, error),
+           "excessive ambient-light coefficients are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid ambient lighting cannot partially replace the target scene");
+
+    std::stringstream legacyV15(downgradeTextureSchema(valid.str(), 15, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV15, error),
+           "version-fifteen scenes remain readable after ambient-light support");
+    expect(near(target.ambientLighting().sphericalHarmonics[0], 0.52287f)
+                   && near(target.ambientLighting().sphericalHarmonics[1], 0.66467f),
+           "legacy scenes receive the backward-compatible default environment light");
+    target.clear();
+    expect(target.create("keep", nuby::Primitive::Sphere).id == keepId,
+           "malformed-file checks restore their sentinel scene after legacy load");
 
     std::string truncated = valid.str();
     truncated.resize(truncated.size() - 8);

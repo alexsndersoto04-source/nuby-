@@ -96,6 +96,7 @@ private:
         GLint roughness = -1;
         GLint opacity = -1;
         GLint ambientOcclusion = -1;
+        GLint ambientSphericalHarmonics = -1;
         GLint albedoTexture = -1;
         GLint normalTexture = -1;
         GLint metallicRoughnessTexture = -1;
@@ -197,6 +198,7 @@ private:
     static constexpr int kMaxPointLights = 4;
     Uniforms uniforms_{};
     std::vector<PointLightData> pointLights_;
+    std::array<float, 27> ambientSphericalHarmonics_{};
     std::array<float, kMaxPointLights * 4> pointLightPositionRanges_{};
     std::array<float, kMaxPointLights * 4> pointLightColorIntensities_{};
     Mesh sphere_{};

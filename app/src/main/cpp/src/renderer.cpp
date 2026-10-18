@@ -249,6 +249,7 @@ uniform int uGrid;
 uniform int uPointLightCount;
 uniform vec4 uPointLightPositionRange[4];
 uniform vec4 uPointLightColorIntensity[4];
+uniform vec3 uAmbientSH[9];
 out vec4 fragmentColor;
 
 vec3 srgbToLinear(vec3 color) {
@@ -327,6 +328,18 @@ float geometrySchlickGGX(float normalDirection, float roughness) {
 
 vec3 fresnelSchlick(float viewHalf, vec3 baseReflectance) {
     return baseReflectance + (1.0 - baseReflectance) * pow(1.0 - viewHalf, 5.0);
+}
+
+vec3 evaluateAmbientSH(vec3 normal) {
+    return uAmbientSH[0] * 0.282095
+         + uAmbientSH[1] * (0.488603 * normal.y)
+         + uAmbientSH[2] * (0.488603 * normal.z)
+         + uAmbientSH[3] * (0.488603 * normal.x)
+         + uAmbientSH[4] * (1.092548 * normal.x * normal.y)
+         + uAmbientSH[5] * (1.092548 * normal.y * normal.z)
+         + uAmbientSH[6] * (0.315392 * (3.0 * normal.z * normal.z - 1.0))
+         + uAmbientSH[7] * (1.092548 * normal.x * normal.z)
+         + uAmbientSH[8] * (0.546274 * (normal.x * normal.x - normal.y * normal.y));
 }
 
 vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
@@ -460,9 +473,7 @@ void main() {
                 pointRadiance);
     }
 
-    float skyAmount = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 ambientLight = mix(vec3(0.075, 0.085, 0.14),
-                            vec3(0.22, 0.29, 0.46), skyAmount);
+    vec3 ambientLight = max(evaluateAmbientSH(normal), vec3(0.0));
     vec3 ambient = baseColor * ambientLight * occlusion * (1.0 - metallic * 0.55);
     vec3 emission = uEmission;
     if (uHasEmissiveTexture != 0) {
@@ -1708,6 +1719,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.roughness = glGetUniformLocation(program_, "uRoughness");
     uniforms_.opacity = glGetUniformLocation(program_, "uOpacity");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
+    uniforms_.ambientSphericalHarmonics = glGetUniformLocation(program_, "uAmbientSH[0]");
     uniforms_.albedoTexture = glGetUniformLocation(program_, "uAlbedoTexture");
     uniforms_.normalTexture = glGetUniformLocation(program_, "uNormalTexture");
     uniforms_.metallicRoughnessTexture = glGetUniformLocation(program_, "uMetallicRoughnessTexture");
@@ -1802,6 +1814,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.roughness, material.roughness);
     glUniform1f(uniforms_.opacity, material.opacity);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
+    glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
+                 ambientSphericalHarmonics_.data());
     const auto textureFor = [this](const std::string& path) -> GLuint {
         if (path.empty()) return 0U;
         const std::string assetPath = projectAssetPath(path);
@@ -1928,6 +1942,13 @@ void Renderer::render(float deltaSeconds) {
     else if (adventureMode_) adventureGame_.update(scene_, dt);
     else scene_.update(dt);
     Scene& frameScene = activeScene();
+    const auto& ambientCoefficients = frameScene.ambientLighting().sphericalHarmonics;
+    const auto& defaultAmbient = AmbientLighting{}.sphericalHarmonics;
+    for (std::size_t index = 0; index < ambientSphericalHarmonics_.size(); ++index) {
+        const float coefficient = ambientCoefficients[index];
+        ambientSphericalHarmonics_[index] = std::isfinite(coefficient)
+                && std::fabs(coefficient) <= 1000.0f ? coefficient : defaultAmbient[index];
+    }
     frameScene.collectPointLights(kMaxPointLights, pointLights_);
     pointLightPositionRanges_.fill(0.0f);
     pointLightColorIntensities_.fill(0.0f);
