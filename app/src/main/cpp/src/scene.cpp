@@ -201,6 +201,65 @@ bool colliderPairAllowed(const CollisionShape& first, const CollisionShape& seco
             && (second.collisionMask & first.collisionLayer) != 0U;
 }
 
+bool raycastShape(const Vec3& origin, const Vec3& rayDirection, float maximumDistance,
+                  const CollisionShape& shape, float& distance, Vec3& normal) {
+    distance = 0.0f;
+    normal = {-rayDirection[0], -rayDirection[1], -rayDirection[2]};
+    if (shape.sphere) {
+        const Vec3 offset{origin[0] - shape.center[0], origin[1] - shape.center[1],
+                origin[2] - shape.center[2]};
+        const float b = dot(offset, rayDirection);
+        const float c = dot(offset, offset) - shape.radius * shape.radius;
+        const float discriminant = b * b - c;
+        if (!std::isfinite(discriminant) || discriminant < 0.0f
+                || (c > 0.0f && b > 0.0f)) return false;
+        const float candidate = -b - std::sqrt(discriminant);
+        distance = candidate >= 0.0f ? candidate : 0.0f;
+        if (distance > maximumDistance) return false;
+        if (distance > 0.0f) {
+            const Vec3 hitPosition{origin[0] + rayDirection[0] * distance,
+                    origin[1] + rayDirection[1] * distance,
+                    origin[2] + rayDirection[2] * distance};
+            normal = {hitPosition[0] - shape.center[0],
+                    hitPosition[1] - shape.center[1], hitPosition[2] - shape.center[2]};
+            const float normalLength = std::sqrt(dot(normal, normal));
+            if (!std::isfinite(normalLength) || normalLength <= 1.0e-8f) return false;
+            for (float& component : normal) component /= normalLength;
+        }
+        return true;
+    }
+
+    const Vec3 relative{origin[0] - shape.center[0], origin[1] - shape.center[1],
+            origin[2] - shape.center[2]};
+    float nearDistance = 0.0f;
+    float farDistance = maximumDistance;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const float localOrigin = dot(relative, shape.axes[axis]);
+        const float localDirection = dot(rayDirection, shape.axes[axis]);
+        if (std::fabs(localDirection) <= 1.0e-8f) {
+            if (localOrigin < -shape.halfExtents[axis]
+                    || localOrigin > shape.halfExtents[axis]) return false;
+            continue;
+        }
+        const float first = (-shape.halfExtents[axis] - localOrigin) / localDirection;
+        const float second = (shape.halfExtents[axis] - localOrigin) / localDirection;
+        const float axisNear = std::min(first, second);
+        const float axisFar = std::max(first, second);
+        if (axisNear > nearDistance) {
+            nearDistance = axisNear;
+            const float side = localDirection > 0.0f ? -1.0f : 1.0f;
+            for (std::size_t component = 0; component < 3; ++component) {
+                normal[component] = shape.axes[axis][component] * side;
+            }
+        }
+        farDistance = std::min(farDistance, axisFar);
+        if (nearDistance > farDistance) return false;
+    }
+    if (farDistance < 0.0f || nearDistance > maximumDistance) return false;
+    distance = nearDistance;
+    return true;
+}
+
 float segmentBoxDistanceSquared(const Vec3& start, const Vec3& end,
                                 const CollisionShape& box) {
     const Vec3 startOffset{start[0] - box.center[0], start[1] - box.center[1],
@@ -638,73 +697,10 @@ bool Scene::raycast(const std::array<float, 3>& origin,
         if (!collisionShape(entity, shape)
                 || (queryMask & shape.collisionLayer) == 0U
                 || (shape.collisionMask & queryLayer) == 0U) continue;
-
         float distance = 0.0f;
-        Vec3 normal{-rayDirection[0], -rayDirection[1], -rayDirection[2]};
-        if (shape.sphere) {
-            const Vec3 offset{origin[0] - shape.center[0], origin[1] - shape.center[1],
-                              origin[2] - shape.center[2]};
-            const float b = dot(offset, rayDirection);
-            const float c = dot(offset, offset) - shape.radius * shape.radius;
-            const float discriminant = b * b - c;
-            if (!std::isfinite(discriminant) || discriminant < 0.0f
-                    || (c > 0.0f && b > 0.0f)) continue;
-            const float candidate = -b - std::sqrt(discriminant);
-            distance = candidate >= 0.0f ? candidate : 0.0f;
-            if (distance > maximumDistance) continue;
-            if (distance > 0.0f) {
-                const Vec3 hitPosition{origin[0] + rayDirection[0] * distance,
-                        origin[1] + rayDirection[1] * distance,
-                        origin[2] + rayDirection[2] * distance};
-                normal = {hitPosition[0] - shape.center[0],
-                        hitPosition[1] - shape.center[1],
-                        hitPosition[2] - shape.center[2]};
-                const float normalLength = std::sqrt(dot(normal, normal));
-                if (!std::isfinite(normalLength) || normalLength <= 1.0e-8f) continue;
-                for (float& component : normal) component /= normalLength;
-            }
-        } else {
-            const Vec3 relative{origin[0] - shape.center[0],
-                    origin[1] - shape.center[1], origin[2] - shape.center[2]};
-            float nearDistance = 0.0f;
-            float farDistance = maximumDistance;
-            bool intersects = true;
-            Vec3 faceNormal{-rayDirection[0], -rayDirection[1], -rayDirection[2]};
-            for (std::size_t axis = 0; axis < 3; ++axis) {
-                const float localOrigin = dot(relative, shape.axes[axis]);
-                const float localDirection = dot(rayDirection, shape.axes[axis]);
-                if (std::fabs(localDirection) <= 1.0e-8f) {
-                    if (localOrigin < -shape.halfExtents[axis]
-                            || localOrigin > shape.halfExtents[axis]) {
-                        intersects = false;
-                        break;
-                    }
-                    continue;
-                }
-                const float first = (-shape.halfExtents[axis] - localOrigin)
-                        / localDirection;
-                const float second = (shape.halfExtents[axis] - localOrigin)
-                        / localDirection;
-                const float axisNear = std::min(first, second);
-                const float axisFar = std::max(first, second);
-                if (axisNear > nearDistance) {
-                    nearDistance = axisNear;
-                    const float side = localDirection > 0.0f ? -1.0f : 1.0f;
-                    for (std::size_t component = 0; component < 3; ++component) {
-                        faceNormal[component] = shape.axes[axis][component] * side;
-                    }
-                }
-                farDistance = std::min(farDistance, axisFar);
-                if (nearDistance > farDistance) {
-                    intersects = false;
-                    break;
-                }
-            }
-            if (!intersects || farDistance < 0.0f || nearDistance > maximumDistance) continue;
-            distance = nearDistance;
-            normal = faceNormal;
-        }
-        if (found && distance >= closestDistance) continue;
+        Vec3 normal{};
+        if (!raycastShape(origin, rayDirection, maximumDistance, shape, distance, normal)
+                || (found && distance >= closestDistance)) continue;
         found = true;
         closestDistance = distance;
         hit.entityId = entity.id;
@@ -715,6 +711,45 @@ bool Scene::raycast(const std::array<float, 3>& origin,
         }
     }
     return found;
+}
+
+std::size_t Scene::raycastAll(const std::array<float, 3>& origin,
+                              const std::array<float, 3>& direction,
+                              float maximumDistance, std::vector<RaycastHit>& hits,
+                              std::uint32_t queryLayer, std::uint32_t queryMask) const {
+    hits.clear();
+    if (!std::isfinite(maximumDistance) || maximumDistance < 0.0f
+            || queryLayer == 0U || queryMask == 0U) return 0;
+    for (float component : origin) {
+        if (!std::isfinite(component)) return 0;
+    }
+    for (float component : direction) {
+        if (!std::isfinite(component)) return 0;
+    }
+    const float directionLength = std::sqrt(dot(direction, direction));
+    if (!std::isfinite(directionLength) || directionLength <= 1.0e-8f) return 0;
+    const Vec3 rayDirection{direction[0] / directionLength,
+            direction[1] / directionLength, direction[2] / directionLength};
+
+    for (const Entity& entity : entities_) {
+        CollisionShape shape;
+        if (!collisionShape(entity, shape)
+                || (queryMask & shape.collisionLayer) == 0U
+                || (shape.collisionMask & queryLayer) == 0U) continue;
+        RaycastHit hit;
+        if (!raycastShape(origin, rayDirection, maximumDistance, shape,
+                          hit.distance, hit.normal)) continue;
+        hit.entityId = entity.id;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            hit.position[axis] = origin[axis] + rayDirection[axis] * hit.distance;
+        }
+        hits.push_back(hit);
+    }
+    std::stable_sort(hits.begin(), hits.end(), [](const RaycastHit& first,
+                                                   const RaycastHit& second) {
+        return first.distance < second.distance;
+    });
+    return hits.size();
 }
 
 bool Scene::sphereCast(const std::array<float, 3>& origin,

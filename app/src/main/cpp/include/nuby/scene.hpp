@@ -291,6 +291,11 @@ public:
                  const std::array<float, 3>& direction, float maximumDistance,
                  RaycastHit& hit, std::uint32_t queryLayer = 1U,
                  std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    // Returns all filtered hits sorted by distance; ties keep scene order.
+    std::size_t raycastAll(const std::array<float, 3>& origin,
+                           const std::array<float, 3>& direction, float maximumDistance,
+                           std::vector<RaycastHit>& hits, std::uint32_t queryLayer = 1U,
+                           std::uint32_t queryMask = 0xFFFFFFFFU) const;
     // Sweeps a fixed-radius sphere; starting overlaps report distance zero.
     // Position is the target-surface contact point; triggers and reciprocal filters apply.
     bool sphereCast(const std::array<float, 3>& origin,

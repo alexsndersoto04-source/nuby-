@@ -963,6 +963,28 @@ void testRaycastQueriesNearestSphereAndFilteredOrientedBox() {
     expect(!scene.raycast({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, hit)
                    && hit.entityId == 0,
            "raycast rejects a zero direction and clears the output hit");
+
+    const std::uint32_t tiedSphereId = scene.create("tied ray sphere", nuby::Primitive::None).id;
+    nuby::Entity* tiedSphere = scene.find(tiedSphereId);
+    tiedSphere->sphereCollider.enabled = true;
+    tiedSphere->sphereCollider.radius = 0.5f;
+    tiedSphere->sphereCollider.collisionLayer = 2U;
+    tiedSphere->sphereCollider.collisionMask = 1U;
+    sphere = scene.find(sphereId);
+    box = scene.find(boxId);
+    sphere->sphereCollider.collisionMask = 1U;
+    sphere->sphereCollider.trigger = true;
+    box->boxCollider.collisionMask = 1U;
+    std::vector<nuby::RaycastHit> hits;
+    expect(scene.raycastAll({-3.0f, 0.0f, 0.0f}, {7.0f, 0.0f, 0.0f},
+                   10.0f, hits, 1U, 6U) == 3 && hits.size() == 3
+                   && hits[0].entityId == sphereId && hits[1].entityId == tiedSphereId
+                   && hits[2].entityId == boxId && near(hits[0].distance, 2.5f)
+                   && near(hits[1].distance, 2.5f) && hits[2].distance > hits[1].distance,
+           "raycastAll returns every filtered hit sorted by distance with stable scene-order ties, including triggers");
+    expect(scene.raycastAll({-3.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+                   10.0f, hits) == 0 && hits.empty(),
+           "raycastAll rejects a zero direction and clears old hits");
 }
 
 void testOverlapQueriesRespectSphereAndOrientedBoxGeometry() {
