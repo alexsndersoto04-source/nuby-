@@ -645,6 +645,81 @@ bool Scene::raycast(const std::array<float, 3>& origin,
     return found;
 }
 
+std::size_t Scene::overlapSphere(const std::array<float, 3>& center, float radius,
+                                 std::vector<std::uint32_t>& entityIds,
+                                 std::uint32_t queryLayer,
+                                 std::uint32_t queryMask) const {
+    entityIds.clear();
+    if (!std::isfinite(radius) || radius <= 0.0f || queryLayer == 0U || queryMask == 0U) {
+        return 0;
+    }
+    for (float component : center) {
+        if (!std::isfinite(component)) return 0;
+    }
+
+    CollisionShape query;
+    query.sphere = true;
+    query.center = center;
+    query.radius = radius;
+    query.halfExtents = {radius, radius, radius};
+    query.worldHalfExtents = query.halfExtents;
+    query.collisionLayer = queryLayer;
+    query.collisionMask = queryMask;
+    for (const Entity& entity : entities_) {
+        CollisionShape target;
+        if (!collisionShape(entity, target) || !colliderPairAllowed(query, target)) continue;
+        bool overlaps = false;
+        if (target.sphere) {
+            const Vec3 difference{target.center[0] - center[0],
+                    target.center[1] - center[1], target.center[2] - center[2]};
+            const float combinedRadius = radius + target.radius;
+            overlaps = dot(difference, difference) < combinedRadius * combinedRadius;
+        } else {
+            CollisionContact contact;
+            overlaps = collideShapes(query, target, contact);
+        }
+        if (overlaps) entityIds.push_back(entity.id);
+    }
+    return entityIds.size();
+}
+
+std::size_t Scene::overlapBox(const std::array<float, 3>& center,
+                              const std::array<float, 3>& halfExtents,
+                              const std::array<float, 3>& rotation,
+                              std::vector<std::uint32_t>& entityIds,
+                              std::uint32_t queryLayer,
+                              std::uint32_t queryMask) const {
+    entityIds.clear();
+    if (queryLayer == 0U || queryMask == 0U) return 0;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(center[axis]) || !std::isfinite(halfExtents[axis])
+                || halfExtents[axis] <= 0.0f || !std::isfinite(rotation[axis])) return 0;
+    }
+
+    CollisionShape query;
+    query.center = center;
+    query.halfExtents = halfExtents;
+    const Quaternion orientation = quaternionFromEuler(rotation);
+    query.axes = {{rotateVector(orientation, {1.0f, 0.0f, 0.0f}),
+                   rotateVector(orientation, {0.0f, 1.0f, 0.0f}),
+                   rotateVector(orientation, {0.0f, 0.0f, 1.0f})}};
+    for (std::size_t worldAxis = 0; worldAxis < 3; ++worldAxis) {
+        for (std::size_t localAxis = 0; localAxis < 3; ++localAxis) {
+            query.worldHalfExtents[worldAxis] += halfExtents[localAxis]
+                    * std::fabs(query.axes[localAxis][worldAxis]);
+        }
+    }
+    query.collisionLayer = queryLayer;
+    query.collisionMask = queryMask;
+    for (const Entity& entity : entities_) {
+        CollisionShape target;
+        if (!collisionShape(entity, target) || !colliderPairAllowed(query, target)) continue;
+        CollisionContact contact;
+        if (collideShapes(query, target, contact)) entityIds.push_back(entity.id);
+    }
+    return entityIds.size();
+}
+
 bool Vector3Track::addKeyframe(float timeSeconds, const std::array<float, 3>& value) {
     if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f
             || !std::isfinite(value[0]) || !std::isfinite(value[1])

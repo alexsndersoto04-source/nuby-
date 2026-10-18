@@ -278,11 +278,22 @@ public:
     void collectPointLights(std::size_t maximum, std::vector<PointLightData>& output) const;
     // Direction is normalized internally; the distance is measured in world units.
     // Enabled triggers are queryable; query and collider filters must reciprocally match.
-    // Like the current physics solver, raycasts consider root-level colliders only.
+    // Queries cover root-level entity colliders only, not the implicit world floor.
     bool raycast(const std::array<float, 3>& origin,
                  const std::array<float, 3>& direction, float maximumDistance,
                  RaycastHit& hit, std::uint32_t queryLayer = 1U,
                  std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    // Overlap queries include triggers; touching without penetration is excluded.
+    std::size_t overlapSphere(const std::array<float, 3>& center, float radius,
+                              std::vector<std::uint32_t>& entityIds,
+                              std::uint32_t queryLayer = 1U,
+                              std::uint32_t queryMask = 0xFFFFFFFFU) const;
+    std::size_t overlapBox(const std::array<float, 3>& center,
+                           const std::array<float, 3>& halfExtents,
+                           const std::array<float, 3>& rotation,
+                           std::vector<std::uint32_t>& entityIds,
+                           std::uint32_t queryLayer = 1U,
+                           std::uint32_t queryMask = 0xFFFFFFFFU) const;
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
     void clear();

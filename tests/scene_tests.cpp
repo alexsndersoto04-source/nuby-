@@ -965,6 +965,37 @@ void testRaycastQueriesNearestSphereAndFilteredOrientedBox() {
            "raycast rejects a zero direction and clears the output hit");
 }
 
+void testOverlapQueriesRespectSphereAndOrientedBoxGeometry() {
+    nuby::Scene scene;
+    const std::uint32_t boxId = scene.create("query OBB", nuby::Primitive::None).id;
+    const std::uint32_t sphereId = scene.create("query sphere", nuby::Primitive::Sphere).id;
+    nuby::Entity* box = scene.find(boxId);
+    nuby::Entity* sphere = scene.find(sphereId);
+    box->boxCollider.enabled = true;
+    box->boxCollider.halfExtents = {0.5f, 0.5f, 0.1f};
+    box->transform.rotation[1] = 0.6f;
+    box->boxCollider.collisionLayer = 4U;
+    box->boxCollider.collisionMask = 2U;
+    sphere->transform.position[0] = 0.7f;
+    sphere->sphereCollider.enabled = true;
+    sphere->sphereCollider.radius = 0.5f;
+    sphere->sphereCollider.collisionLayer = 2U;
+    sphere->sphereCollider.collisionMask = 2U;
+
+    std::vector<std::uint32_t> entityIds;
+    expect(scene.overlapSphere({0.0f, 0.0f, 0.0f}, 0.4f, entityIds, 2U, 6U) == 2
+                   && entityIds.size() == 2 && entityIds[0] == boxId
+                   && entityIds[1] == sphereId,
+           "sphere overlap queries return matching OBB and sphere IDs in scene order");
+    expect(scene.overlapBox({0.0f, 0.0f, 0.0f}, {0.25f, 0.5f, 0.25f},
+                   {0.0f, 0.0f, 0.0f}, entityIds, 2U, 4U) == 1
+                   && entityIds.size() == 1 && entityIds[0] == boxId,
+           "oriented-box overlap queries use SAT and reciprocal layer filters");
+    expect(scene.overlapSphere({0.0f, 0.0f, 0.0f}, 0.0f, entityIds) == 0
+                   && entityIds.empty(),
+           "invalid overlap-query inputs clear prior result IDs");
+}
+
 void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     nuby::Scene scene;
     scene.physicsSettings().floorEnabled = true;
@@ -1076,6 +1107,7 @@ int main() {
     testContinuousSphereCollisionWithFloor();
     testCollisionLayersFilterContactsTriggersAndFloor();
     testRaycastQueriesNearestSphereAndFilteredOrientedBox();
+    testOverlapQueriesRespectSphereAndOrientedBoxGeometry();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();
