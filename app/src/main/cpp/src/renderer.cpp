@@ -1536,6 +1536,30 @@ void Renderer::releaseSceneAssets() {
     transparentDrawItems_.clear();
 }
 
+void Renderer::synchronizeSkeletalClipDurations(Scene& frameScene) {
+    for (Entity& entity : frameScene.entities()) {
+        if (!entity.skeletalAnimation.enabled || entity.meshAsset.empty()) continue;
+        const auto model = importedMeshes_.find(projectAssetPath(entity.meshAsset));
+        if (model == importedMeshes_.end()) continue;
+        const auto clip = std::find_if(model->second.animations.begin(),
+                model->second.animations.end(), [&entity](const GltfAnimation& animation) {
+                    return animation.name == entity.skeletalAnimation.clipName;
+                });
+        if (clip == model->second.animations.end()
+                || !std::isfinite(clip->clip.durationSeconds)
+                || clip->clip.durationSeconds <= 0.0f) {
+            continue;
+        }
+        SkeletalAnimationComponent& playback = entity.skeletalAnimation;
+        playback.durationSeconds = clip->clip.durationSeconds;
+        if (playback.timeSeconds > playback.durationSeconds) {
+            playback.timeSeconds = playback.looping
+                    ? std::fmod(playback.timeSeconds, playback.durationSeconds)
+                    : playback.durationSeconds;
+        }
+    }
+}
+
 void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> attemptedMeshes;
     std::unordered_set<std::string> attemptedTextures;
@@ -2383,6 +2407,7 @@ void Renderer::render(float deltaSeconds) {
     }
 
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
+    synchronizeSkeletalClipDurations(activeScene());
     if (projectRuntime_.loaded()) projectRuntime_.update(dt);
     else if (gameMode_) sampleGame_.update(scene_, dt);
     else if (adventureMode_) adventureGame_.update(scene_, dt);

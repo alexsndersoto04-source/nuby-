@@ -141,8 +141,10 @@ void AdventureGame::buildScene(Scene& scene) {
         1.0f / playerScale[1],
         1.0f / playerScale[2]};
     animatedBody.skeletalAnimation.enabled = true;
-    animatedBody.skeletalAnimation.clipName = "walk";
+    animatedBody.skeletalAnimation.clipName = "idle";
+    animatedBody.skeletalAnimation.durationSeconds = 1.0f;
     animatedBody.skeletalAnimation.looping = true;
+    animatedBody.skeletalLocomotion.enabled = true;
     animatedBody.material = playerMaterial;
     scene.setParent(animatedBody.id, playerId_);
 

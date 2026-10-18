@@ -70,8 +70,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 17") {
+        if (line == "NUBY_SCENE 18") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("SKELETAL_LOCOMOTION ", 0) == 0 && targetVersion < 18) {
+            continue;
         } else if (line.rfind("SKELETAL_PLAYER ", 0) == 0 && targetVersion < 17) {
             continue;
         } else if (line.rfind("AMBIENT_SH ", 0) == 0 && targetVersion < 16) {
@@ -221,6 +223,13 @@ nuby::Scene makeScene() {
     mesh.skeletalAnimation.timeSeconds = 0.5f;
     mesh.skeletalAnimation.durationSeconds = 1.5f;
     mesh.skeletalAnimation.clipName = "walk";
+    mesh.skeletalLocomotion.enabled = true;
+    mesh.skeletalLocomotion.idleClip = "idle";
+    mesh.skeletalLocomotion.walkClip = "walk";
+    mesh.skeletalLocomotion.runClip = "run";
+    mesh.skeletalLocomotion.jumpClip = "jump";
+    mesh.skeletalLocomotion.walkSpeedThreshold = 0.25f;
+    mesh.skeletalLocomotion.runSpeedThreshold = 2.5f;
     mesh.material.albedoTexture = "textures/hero diffuse.tga";
     mesh.material.normalTexture = "textures/hero normal.tga";
     mesh.material.metallicRoughnessTexture = "textures/hero metal-rough.tga";
@@ -447,6 +456,14 @@ void testRoundTripAllSceneData() {
                        && near(mesh->skeletalAnimation.durationSeconds, 1.5f)
                        && mesh->skeletalAnimation.clipName == "walk",
                "skeletal animation playback state and quoted clip name are restored");
+        expect(mesh->skeletalLocomotion.enabled
+                       && mesh->skeletalLocomotion.idleClip == "idle"
+                       && mesh->skeletalLocomotion.walkClip == "walk"
+                       && mesh->skeletalLocomotion.runClip == "run"
+                       && mesh->skeletalLocomotion.jumpClip == "jump"
+                       && near(mesh->skeletalLocomotion.walkSpeedThreshold, 0.25f)
+                       && near(mesh->skeletalLocomotion.runSpeedThreshold, 2.5f),
+               "skeletal locomotion clips and speed thresholds are restored");
         expect(mesh->pointLight.enabled && near(mesh->pointLight.intensity, 3.5f),
                "point-light component is restored");
     }
@@ -588,6 +605,21 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "skeletal playback time beyond clip duration is rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid skeletal playback state cannot partially replace the target scene");
+
+    std::string invalidLocomotion = valid.str();
+    expect(replaceRecordField(invalidLocomotion, "SKELETAL_LOCOMOTION", 7, "0.1", 1),
+           "v18 scene stores configurable locomotion thresholds");
+    std::stringstream malformedLocomotion(invalidLocomotion);
+    expect(!nuby::SceneSerializer::load(target, malformedLocomotion, error),
+           "run threshold not greater than walk threshold is rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid locomotion settings cannot partially replace the target scene");
+
+    std::stringstream legacyV17(downgradeTextureSchema(valid.str(), 17, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV17, error),
+           "version-seventeen scenes remain readable after locomotion support");
+    expect(target.find(2) != nullptr && !target.find(2)->skeletalLocomotion.enabled,
+           "version-seventeen scenes receive default skeletal locomotion state");
 
     std::stringstream legacyV16(downgradeTextureSchema(valid.str(), 16, 8));
     expect(nuby::SceneSerializer::load(target, legacyV16, error),

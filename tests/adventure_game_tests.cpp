@@ -55,8 +55,14 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
                    && animatedBody->primitive == nuby::Primitive::ImportedMesh
                    && animatedBody->meshAsset == "characters/wayfarer_skeletal.glb"
                    && animatedBody->skeletalAnimation.enabled
-                   && animatedBody->skeletalAnimation.clipName == "walk",
-           "wayfarer renders a skinned GLB child driven by its named walk clip");
+                   && animatedBody->skeletalAnimation.clipName == "idle"
+                   && animatedBody->skeletalAnimation.looping
+                   && animatedBody->skeletalLocomotion.enabled
+                   && animatedBody->skeletalLocomotion.idleClip == "idle"
+                   && animatedBody->skeletalLocomotion.walkClip == "walk"
+                   && animatedBody->skeletalLocomotion.runClip == "run"
+                   && animatedBody->skeletalLocomotion.jumpClip == "jump",
+           "wayfarer has a reusable idle/walk/run/jump skeletal locomotion controller");
     expect(camera != nullptr && camera->orbitCamera.enabled,
            "adventure has an orbit-follow camera");
     const nuby::Entity* head = scene.find(findEntityId(scene, "Wayfarer Head"));
@@ -85,6 +91,45 @@ void testCharacterFacesItsMovementDirection() {
     expect(player != nullptr && std::fabs(player->transform.rotation[1]
                     - expectedYaw) < 0.001f,
            "character turns toward its camera-relative world-space movement direction");
+}
+
+void testWayfarerSelectsIdleWalkRunAndJumpClips() {
+    nuby::AdventureGame game;
+    nuby::Scene scene;
+    game.start(scene);
+    const std::uint32_t bodyId = findEntityId(scene, "Wayfarer Animated Body");
+    nuby::Entity* body = scene.find(bodyId);
+    expect(body != nullptr && body->skeletalAnimation.clipName == "idle",
+           "Wayfarer starts with the idle clip");
+    advance(game, scene, 1);
+
+    expect(game.setMoveInput(scene, 0.0f, 1.0f), "walking input is accepted");
+    advance(game, scene, 1);
+    body = scene.find(bodyId);
+    expect(body != nullptr && body->skeletalAnimation.clipName == "walk",
+           "low movement speed selects the walk clip");
+    advance(game, scene, 15);
+    body = scene.find(bodyId);
+    expect(body != nullptr && body->skeletalAnimation.clipName == "run",
+           "high movement speed selects the run clip");
+
+    expect(game.setMoveInput(scene, 0.0f, 0.0f), "idle input is accepted");
+    advance(game, scene, 30);
+    body = scene.find(bodyId);
+    expect(body != nullptr && body->skeletalAnimation.clipName == "idle",
+           "stopping movement returns the character to idle");
+    expect(game.jump(scene), "animation-state test can jump from rest");
+    advance(game, scene, 1);
+    body = scene.find(bodyId);
+    expect(body != nullptr && body->skeletalAnimation.clipName == "jump"
+                   && !body->skeletalAnimation.looping,
+           "airborne movement selects a non-looping jump clip");
+    advance(game, scene, 75);
+    body = scene.find(bodyId);
+    const nuby::Entity* player = scene.find(game.playerId());
+    expect(player != nullptr && player->characterController.grounded
+                   && body != nullptr && body->skeletalAnimation.clipName == "idle",
+           "landing restores the idle clip after the jump");
 }
 
 void testMovementJumpAndCameraFollow() {
@@ -163,6 +208,7 @@ void testRelicsUnlockTheGateAndRestartResetsProgress() {
 int main() {
     testAdventureBuildsItsOwnCharacterAndScene();
     testCharacterFacesItsMovementDirection();
+    testWayfarerSelectsIdleWalkRunAndJumpClips();
     testMovementJumpAndCameraFollow();
     testRelicsUnlockTheGateAndRestartResetsProgress();
     if (failures != 0) {

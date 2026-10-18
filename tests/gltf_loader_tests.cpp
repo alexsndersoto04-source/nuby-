@@ -1,5 +1,6 @@
 #include "nuby/gltf_loader.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
@@ -306,16 +307,41 @@ void testPackagedWayfarerAsset() {
     std::string error;
     expect(nuby::parseGlbSkeletalAsset(bytes, asset, error),
            "packaged Wayfarer GLB passes the skeletal importer");
-    expect(asset.skeleton.size() == 7 && asset.animations.size() == 1
-                   && asset.animations[0].name == "walk"
+    expect(asset.skeleton.size() == 7 && asset.animations.size() == 4
                    && asset.primitives.size() == 1,
-           "Wayfarer asset contains the expected rig, clip, and skinned mesh");
-    if (asset.animations.size() == 1) {
-        nuby::SkeletalPose pose;
-        expect(nuby::evaluateSkeletalPose(asset.skeleton, asset.animations[0].clip,
-                                          0.25f, pose, error)
-                       && pose.jointMatrices.size() == 7,
-               "packaged Wayfarer walk clip evaluates through the CPU pose core");
+           "Wayfarer asset contains its rig, four action clips, and skinned mesh");
+    const auto clipNamed = [&asset](const char* name) {
+        return std::find_if(asset.animations.begin(), asset.animations.end(),
+                [name](const nuby::GltfAnimation& animation) {
+                    return animation.name == name;
+                });
+    };
+    const auto idle = clipNamed("idle");
+    const auto walk = clipNamed("walk");
+    const auto run = clipNamed("run");
+    const auto jump = clipNamed("jump");
+    expect(idle != asset.animations.end() && walk != asset.animations.end()
+                   && run != asset.animations.end() && jump != asset.animations.end(),
+           "Wayfarer exposes named idle, walk, run, and jump clips");
+    if (idle != asset.animations.end() && walk != asset.animations.end()
+            && run != asset.animations.end() && jump != asset.animations.end()) {
+        nuby::SkeletalPose idlePose;
+        nuby::SkeletalPose walkPose;
+        nuby::SkeletalPose runPose;
+        nuby::SkeletalPose jumpPose;
+        expect(nuby::evaluateSkeletalPose(asset.skeleton, idle->clip, 0.25f, idlePose, error)
+                       && nuby::evaluateSkeletalPose(asset.skeleton, walk->clip, 0.25f, walkPose, error)
+                       && nuby::evaluateSkeletalPose(asset.skeleton, run->clip, 0.25f, runPose, error)
+                       && nuby::evaluateSkeletalPose(asset.skeleton, jump->clip, 0.25f, jumpPose, error)
+                       && idlePose.jointMatrices.size() == 7
+                       && walkPose.jointMatrices.size() == 7
+                       && runPose.jointMatrices.size() == 7
+                       && jumpPose.jointMatrices.size() == 7,
+               "all packaged Wayfarer clips evaluate through the CPU pose core");
+        expect(idlePose.jointMatrices[3] != runPose.jointMatrices[3]
+                       && walkPose.jointMatrices[5] != runPose.jointMatrices[5]
+                       && idlePose.jointMatrices[3] != jumpPose.jointMatrices[3],
+               "action clips produce distinct articulated poses");
     }
 }
 

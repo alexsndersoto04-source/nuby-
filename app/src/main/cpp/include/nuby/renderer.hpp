@@ -170,6 +170,7 @@ private:
                                const ViewFrustum& frustum) const;
     void buildScene();
     void loadSceneAssets();
+    void synchronizeSkeletalClipDurations(Scene& scene);
     void releaseSceneAssets();
     Scene& activeScene();
     const Scene& activeScene() const;

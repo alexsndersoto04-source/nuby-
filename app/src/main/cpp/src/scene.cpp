@@ -2508,6 +2508,39 @@ void Scene::update(float deltaSeconds) {
         }
     }
     simulatePhysics(dt);
+
+    for (Entity& entity : entities_) {
+        SkeletalLocomotionComponent& locomotion = entity.skeletalLocomotion;
+        SkeletalAnimationComponent& animation = entity.skeletalAnimation;
+        if (!locomotion.enabled || !animation.enabled || entity.parentId == 0
+                || !std::isfinite(locomotion.walkSpeedThreshold)
+                || !std::isfinite(locomotion.runSpeedThreshold)
+                || locomotion.idleClip.empty() || locomotion.walkClip.empty()
+                || locomotion.runClip.empty() || locomotion.jumpClip.empty()) {
+            continue;
+        }
+        const Entity* character = find(entity.parentId);
+        if (character == nullptr || !character->characterController.enabled
+                || !character->rigidbody.enabled) {
+            continue;
+        }
+        const float planarSpeed = std::hypot(character->rigidbody.velocity[0],
+                                             character->rigidbody.velocity[2]);
+        if (!std::isfinite(planarSpeed)) continue;
+        const float walkThreshold = std::max(0.0f, locomotion.walkSpeedThreshold);
+        const float runThreshold = std::max(walkThreshold, locomotion.runSpeedThreshold);
+        const char* selectedClip = !character->characterController.grounded
+                ? locomotion.jumpClip.c_str()
+                : planarSpeed >= runThreshold ? locomotion.runClip.c_str()
+                : planarSpeed >= walkThreshold ? locomotion.walkClip.c_str()
+                : locomotion.idleClip.c_str();
+        if (animation.clipName != selectedClip) {
+            animation.clipName = selectedClip;
+            animation.timeSeconds = 0.0f;
+            animation.playing = true;
+            animation.looping = animation.clipName != locomotion.jumpClip;
+        }
+    }
 }
 
 }  // namespace nuby

@@ -136,6 +136,18 @@ struct SkeletalAnimationComponent {
     std::string clipName;
 };
 
+// Selects animation clips from a parent character controller's movement. The
+// renderer resolves clip names from the skinned mesh asset.
+struct SkeletalLocomotionComponent {
+    bool enabled = false;
+    std::string idleClip = "idle";
+    std::string walkClip = "walk";
+    std::string runClip = "run";
+    std::string jumpClip = "jump";
+    float walkSpeedThreshold = 0.18f;
+    float runSpeedThreshold = 2.4f;
+};
+
 struct RigidbodyComponent {
     bool enabled = false;
     float mass = 1.0f;
@@ -302,6 +314,7 @@ struct Entity {
     PulseComponent pulse;
     AnimationComponent animation;
     SkeletalAnimationComponent skeletalAnimation;
+    SkeletalLocomotionComponent skeletalLocomotion;
     RigidbodyComponent rigidbody;
     SphereColliderComponent sphereCollider;
     BoxColliderComponent boxCollider;

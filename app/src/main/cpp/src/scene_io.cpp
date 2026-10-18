@@ -23,6 +23,13 @@ bool fail(std::string& error, const char* message) {
     return false;
 }
 
+bool validClipName(const std::string& name) {
+    if (name.size() > 256) return false;
+    return std::all_of(name.begin(), name.end(), [](unsigned char character) {
+        return character >= 0x20U && character != 0x7FU;
+    });
+}
+
 bool validTexturePath(const std::string& path) {
     if (path.empty()) return true;
     if (path.size() > kMaximumTextLength || path.front() == '/' || path.front() == '\\'
@@ -140,7 +147,11 @@ bool validTrack(const Vector3Track& track) {
 bool validEntity(const Entity& entity) {
     if (entity.id == 0 || entity.name.size() > kMaximumTextLength
             || entity.meshAsset.size() > kMaximumTextLength
-            || entity.skeletalAnimation.clipName.size() > 256
+            || !validClipName(entity.skeletalAnimation.clipName)
+            || !validClipName(entity.skeletalLocomotion.idleClip)
+            || !validClipName(entity.skeletalLocomotion.walkClip)
+            || !validClipName(entity.skeletalLocomotion.runClip)
+            || !validClipName(entity.skeletalLocomotion.jumpClip)
             || !validTexturePath(entity.material.albedoTexture)
             || !validTexturePath(entity.material.normalTexture)
             || !validTexturePath(entity.material.metallicRoughnessTexture)
@@ -193,6 +204,8 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.skeletalAnimation.playbackRate)
             || !finite(entity.skeletalAnimation.timeSeconds)
             || !finite(entity.skeletalAnimation.durationSeconds)
+            || !finite(entity.skeletalLocomotion.walkSpeedThreshold)
+            || !finite(entity.skeletalLocomotion.runSpeedThreshold)
             || !finite(entity.rigidbody.mass) || !finite3(entity.rigidbody.velocity)
             || !finite3(entity.rigidbody.angularVelocity)
             || !finite(entity.rigidbody.linearDamping)
@@ -248,7 +261,15 @@ bool validEntity(const Entity& entity) {
             || entity.skeletalAnimation.durationSeconds < 0.0f
             || entity.skeletalAnimation.durationSeconds > 1000000.0f
             || entity.skeletalAnimation.timeSeconds > entity.skeletalAnimation.durationSeconds
-            || (entity.skeletalAnimation.enabled && entity.skeletalAnimation.clipName.empty())) {
+            || (entity.skeletalAnimation.enabled && entity.skeletalAnimation.clipName.empty())
+            || (entity.skeletalLocomotion.enabled
+                && (entity.skeletalLocomotion.idleClip.empty()
+                    || entity.skeletalLocomotion.walkClip.empty()
+                    || entity.skeletalLocomotion.runClip.empty()
+                    || entity.skeletalLocomotion.jumpClip.empty()
+                    || entity.skeletalLocomotion.walkSpeedThreshold < 0.0f
+                    || entity.skeletalLocomotion.runSpeedThreshold
+                            <= entity.skeletalLocomotion.walkSpeedThreshold))) {
         return false;
     }
     return validTrack(entity.animation.position) && validTrack(entity.animation.rotation)
@@ -438,6 +459,14 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << entity.skeletalAnimation.timeSeconds << ' '
            << entity.skeletalAnimation.durationSeconds << ' '
            << std::quoted(entity.skeletalAnimation.clipName) << '\n';
+
+    output << "SKELETAL_LOCOMOTION " << (entity.skeletalLocomotion.enabled ? 1 : 0) << ' '
+           << std::quoted(entity.skeletalLocomotion.idleClip) << ' '
+           << std::quoted(entity.skeletalLocomotion.walkClip) << ' '
+           << std::quoted(entity.skeletalLocomotion.runClip) << ' '
+           << std::quoted(entity.skeletalLocomotion.jumpClip) << ' '
+           << entity.skeletalLocomotion.walkSpeedThreshold << ' '
+           << entity.skeletalLocomotion.runSpeedThreshold << '\n';
 
     output << "POINT_LIGHT " << (entity.pointLight.enabled ? 1 : 0);
     writeFloatArray(output, entity.pointLight.color);
@@ -682,6 +711,20 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.skeletalAnimation.timeSeconds)
                 || !std::isfinite(entity.skeletalAnimation.durationSeconds)) {
             return fail(error, "Entity skeletal-animation playback state is invalid");
+        }
+    }
+    if (version >= 18) {
+        if (!readTag(input, "SKELETAL_LOCOMOTION", error)
+                || !readBool(input, entity.skeletalLocomotion.enabled)
+                || !(input >> std::quoted(entity.skeletalLocomotion.idleClip)
+                             >> std::quoted(entity.skeletalLocomotion.walkClip)
+                             >> std::quoted(entity.skeletalLocomotion.runClip)
+                             >> std::quoted(entity.skeletalLocomotion.jumpClip)
+                             >> entity.skeletalLocomotion.walkSpeedThreshold
+                             >> entity.skeletalLocomotion.runSpeedThreshold)
+                || !std::isfinite(entity.skeletalLocomotion.walkSpeedThreshold)
+                || !std::isfinite(entity.skeletalLocomotion.runSpeedThreshold)) {
+            return fail(error, "Entity skeletal-locomotion state is invalid");
         }
     }
 
