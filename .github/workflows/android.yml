@@ -87,6 +87,15 @@ jobs:
           -Iapp/src/main/cpp/include tests/frustum_tests.cpp
           -o /tmp/nuby-frustum-tests && /tmp/nuby-frustum-tests
 
+      - name: Compile and run skeletal animation tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/skeletal_animation.cpp
+          tests/skeletal_animation_tests.cpp
+          -o /tmp/nuby-skeletal-animation-tests
+          && /tmp/nuby-skeletal-animation-tests
+
       - name: Compile and run standalone project tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic
