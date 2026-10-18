@@ -1606,12 +1606,16 @@ void Renderer::buildScene() {
 
 Scene& Renderer::activeScene() {
     Scene* const loadedScene = projectRuntime_.scene();
-    return loadedScene != nullptr ? *loadedScene : scene_;
+    if (loadedScene != nullptr) return *loadedScene;
+    Scene* const editorScene = editorSession_.scene();
+    return editorScene != nullptr ? *editorScene : scene_;
 }
 
 const Scene& Renderer::activeScene() const {
     const Scene* const loadedScene = projectRuntime_.scene();
-    return loadedScene != nullptr ? *loadedScene : scene_;
+    if (loadedScene != nullptr) return *loadedScene;
+    const Scene* const editorScene = editorSession_.scene();
+    return editorScene != nullptr ? *editorScene : scene_;
 }
 
 std::string Renderer::projectAssetPath(const std::string& relativePath) const {
@@ -1658,6 +1662,7 @@ bool Renderer::loadProject(const std::string& descriptorAssetPath) {
         return false;
     }
 
+    editorSession_.close();
     projectAssetPrefix_ = candidatePrefix;
     projectLoadError_.clear();
     demoMode_ = 0;
@@ -1690,27 +1695,137 @@ std::string Renderer::projectStatusText() const {
     return project == nullptr ? "No project loaded" : project->displayName;
 }
 
+bool Renderer::saveEditorProject(std::string& descriptorText, std::string& sceneText,
+                                 std::string& error) const {
+    if (demoMode_ != 3 || !editorSession_.active()) {
+        error = "Open the visual editor before saving a project";
+        return false;
+    }
+    return editorSession_.saveProjectText(descriptorText, sceneText, error);
+}
+
+bool Renderer::loadEditorProject(const std::string& descriptorText,
+                                 const std::string& sceneText, std::string& error) {
+    if (demoMode_ != 3) {
+        error = "Open the visual editor before loading a project";
+        return false;
+    }
+    if (!editorSession_.loadProjectText(descriptorText, sceneText, error)) return false;
+    projectRuntime_.unload();
+    projectAssetPrefix_.clear();
+    projectLoadError_.clear();
+    gameMode_ = false;
+    adventureMode_ = false;
+    releaseSceneAssets();
+    loadSceneAssets();
+    return true;
+}
+
+bool Renderer::editorAddPrimitive(int type) {
+    if (demoMode_ != 3 || !editorSession_.active()) return false;
+    const Primitive primitive = type == 0 ? Primitive::Sphere
+            : type == 1 ? Primitive::Torus : Primitive::None;
+    std::string error;
+    const bool added = editorSession_.addPrimitive(primitive, error);
+    if (!added && !error.empty()) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "Scene editor add object failed: %s", error.c_str());
+    }
+    return added;
+}
+
+bool Renderer::editorSelectEntity(std::uint32_t entityId) {
+    return demoMode_ == 3 && editorSession_.active()
+            && editorSession_.selectEntity(entityId);
+}
+
+bool Renderer::editorSelectNext(int direction) {
+    return demoMode_ == 3 && editorSession_.active()
+            && editorSession_.selectNext(direction);
+}
+
+bool Renderer::editorTranslate(int axis, float amount) {
+    if (demoMode_ != 3 || axis < 0 || axis > 2) return false;
+    const float x = axis == 0 ? amount : 0.0f;
+    const float y = axis == 1 ? amount : 0.0f;
+    const float z = axis == 2 ? amount : 0.0f;
+    return editorSession_.moveSelected(x, y, z);
+}
+
+bool Renderer::editorRotate(int axis, float amount) {
+    if (demoMode_ != 3 || axis < 0 || axis > 2) return false;
+    const float x = axis == 0 ? amount : 0.0f;
+    const float y = axis == 1 ? amount : 0.0f;
+    const float z = axis == 2 ? amount : 0.0f;
+    return editorSession_.rotateSelected(x, y, z);
+}
+
+bool Renderer::editorScale(float factor) {
+    return demoMode_ == 3 && editorSession_.scaleSelected(factor);
+}
+
+bool Renderer::editorCycleColor() {
+    return demoMode_ == 3 && editorSession_.cycleSelectedColor();
+}
+
+bool Renderer::editorDuplicate() {
+    if (demoMode_ != 3) return false;
+    std::string error;
+    return editorSession_.duplicateSelected(error);
+}
+
+bool Renderer::editorDelete() {
+    return demoMode_ == 3 && editorSession_.deleteSelected();
+}
+
+std::string Renderer::editorSelectionStatus() const {
+    return demoMode_ == 3 ? editorSession_.selectionStatus() : std::string{};
+}
+
 void Renderer::setGameMode(bool enabled) {
     setDemoMode(enabled ? 1 : 0);
 }
 
 void Renderer::setDemoMode(int mode) {
-    const int safeMode = std::clamp(mode, 0, 2);
+    const int safeMode = std::clamp(mode, 0, 3);
+    if (safeMode == 3 && demoMode_ == 3 && editorSession_.active()
+            && !projectRuntime_.loaded()) return;
+
     const bool leavingProject = projectRuntime_.loaded();
     if (leavingProject) {
         projectRuntime_.unload();
         projectAssetPrefix_.clear();
         projectLoadError_.clear();
-        releaseSceneAssets();
-        demoMode_ = 0;
+    }
+    if (safeMode != 3) editorSession_.close();
+    if (demoMode_ == safeMode && !leavingProject && safeMode != 3) return;
+
+    releaseSceneAssets();
+    gameSwipeDistance_ = 0.0f;
+    if (safeMode == 3) {
+        std::string error;
+        projectAssetPrefix_.clear();
+        if (!editorSession_.createDefaultProject(error)) {
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "Could not create editor starter project: %s", error.c_str());
+            editorSession_.close();
+            demoMode_ = 0;
+            gameMode_ = false;
+            adventureMode_ = false;
+            buildScene();
+            loadSceneAssets();
+            return;
+        }
+        demoMode_ = 3;
         gameMode_ = false;
         adventureMode_ = false;
+        loadSceneAssets();
+        return;
     }
-    if (demoMode_ == safeMode && !leavingProject) return;
+
     demoMode_ = safeMode;
     gameMode_ = demoMode_ == 1;
     adventureMode_ = demoMode_ == 2;
-    gameSwipeDistance_ = 0.0f;
     if (gameMode_) {
         sampleGame_.start(scene_);
     } else if (adventureMode_) {
@@ -2729,6 +2844,7 @@ void Renderer::render(float deltaSeconds) {
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
     synchronizeSkeletalClipDurations(activeScene());
     if (projectRuntime_.loaded()) projectRuntime_.update(dt);
+    else if (editorSession_.active()) editorSession_.update(dt);
     else if (gameMode_) sampleGame_.update(scene_, dt);
     else if (adventureMode_) adventureGame_.update(scene_, dt);
     else scene_.update(dt);
@@ -2987,6 +3103,27 @@ void Renderer::touch(int action, float x, float y, float pinchDistance, int poin
         gameSwipeDistance_ = 0.0f;
         lastPinchDistance_ = pointerCount >= 2 && pinchDistance > 0.0f
                 ? pinchDistance : 0.0f;
+        if (demoMode_ == 3 && pointerCount == 1 && width_ > 0 && height_ > 0) {
+            const Entity* camera = activeScene().activeCamera();
+            const float fov = camera == nullptr ? 0.76f
+                    : std::clamp(camera->camera.verticalFovRadians, 0.1f, 2.8f);
+            const float ndcX = 2.0f * x / static_cast<float>(width_) - 1.0f;
+            const float ndcY = 1.0f - 2.0f * y / static_cast<float>(height_);
+            const float halfHeight = std::tan(fov * 0.5f);
+            const float halfWidth = halfHeight * static_cast<float>(width_)
+                    / static_cast<float>(height_);
+            const Vec3 side{view_[0], view_[4], view_[8]};
+            const Vec3 up{view_[1], view_[5], view_[9]};
+            const Vec3 forward{-view_[2], -view_[6], -view_[10]};
+            const Vec3 rayDirection = normalize({
+                    forward[0] + side[0] * ndcX * halfWidth + up[0] * ndcY * halfHeight,
+                    forward[1] + side[1] * ndcX * halfWidth + up[1] * ndcY * halfHeight,
+                    forward[2] + side[2] * ndcX * halfWidth + up[2] * ndcY * halfHeight});
+            RaycastHit hit;
+            if (activeScene().raycast(cameraPosition_, rayDirection, 100.0f, hit)) {
+                editorSelectEntity(hit.entityId);
+            }
+        }
         return;
     }
     if (action == kActionUp || action == kActionCancel || action == kActionPointerUp) {

@@ -13,7 +13,16 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import android.system.ErrnoException;
+import android.system.Os;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
@@ -29,8 +38,11 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private TextView hint;
     private TextView gameStatus;
     private TextView modeButton;
+    private TextView editorButton;
     private TextView restartButton;
     private TextView jumpButton;
+    private TextView editorSelection;
+    private LinearLayout editorPanel;
     private AdventureJoystickView adventureJoystick;
     private volatile boolean gameMode = false;
     private volatile boolean adventureMode = false;
@@ -52,6 +64,17 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native int nativeSampleAssetStatus();
     private static native String nativeLoadProject(String descriptorAssetPath);
     private static native boolean nativeUnloadProject();
+    private static native String[] nativeSaveEditorProject();
+    private static native String nativeLoadEditorProject(String descriptor, String scene);
+    private static native boolean nativeEditorAddPrimitive(int type);
+    private static native boolean nativeEditorSelectNext(int direction);
+    private static native boolean nativeEditorTranslate(int axis, float amount);
+    private static native boolean nativeEditorRotate(int axis, float amount);
+    private static native boolean nativeEditorScale(float factor);
+    private static native boolean nativeEditorCycleColor();
+    private static native boolean nativeEditorDuplicate();
+    private static native boolean nativeEditorDelete();
+    private static native String nativeEditorSelectionStatus();
     private static native void nativeSetDemoMode(int mode);
     private static native void nativeAdventureMove(float horizontal, float forward);
     private static native void nativeAdventureJump();
@@ -189,6 +212,16 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         modeParams.leftMargin = dp(8);
         actions.addView(modeButton, modeParams);
+
+        editorButton = label("OPEN EDITOR", 10, 0xFFF2F5FF, true);
+        editorButton.setGravity(Gravity.CENTER);
+        editorButton.setPadding(dp(13), dp(10), dp(13), dp(10));
+        editorButton.setBackground(pill(0xD85A518A, dp(18)));
+        LinearLayout.LayoutParams editorButtonParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        editorButtonParams.leftMargin = dp(7);
+        actions.addView(editorButton, editorButtonParams);
         controls.addView(actions);
 
         FrameLayout.LayoutParams controlsParams = new FrameLayout.LayoutParams(
@@ -197,6 +230,48 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 Gravity.BOTTOM);
         controlsParams.bottomMargin = dp(10);
         root.addView(controls, controlsParams);
+
+        editorPanel = new LinearLayout(this);
+        editorPanel.setOrientation(LinearLayout.VERTICAL);
+        editorPanel.setPadding(dp(7), dp(6), dp(7), dp(6));
+        editorPanel.setBackground(pill(0xD8141B2D, dp(12)));
+        editorSelection = label("No object selected", 8, 0xFFB7E5DF, true);
+        editorSelection.setPadding(dp(5), dp(2), dp(5), dp(5));
+        editorPanel.addView(editorSelection);
+        LinearLayout editorRowOne = new LinearLayout(this);
+        editorRowOne.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout editorRowTwo = new LinearLayout(this);
+        editorRowTwo.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout editorRowThree = new LinearLayout(this);
+        editorRowThree.setOrientation(LinearLayout.HORIZONTAL);
+        editorPanel.addView(editorRowOne);
+        editorPanel.addView(editorRowTwo);
+        editorPanel.addView(editorRowThree);
+        addEditorButton(editorRowOne, "+ SPHERE", () -> queueEditorCommand(() -> nativeEditorAddPrimitive(0)));
+        addEditorButton(editorRowOne, "+ TORUS", () -> queueEditorCommand(() -> nativeEditorAddPrimitive(1)));
+        addEditorButton(editorRowOne, "PREV", () -> queueEditorCommand(() -> nativeEditorSelectNext(-1)));
+        addEditorButton(editorRowOne, "NEXT", () -> queueEditorCommand(() -> nativeEditorSelectNext(1)));
+        addEditorButton(editorRowOne, "DUP", () -> queueEditorCommand(MainActivity::nativeEditorDuplicate));
+        addEditorButton(editorRowOne, "DELETE", () -> queueEditorCommand(MainActivity::nativeEditorDelete));
+        addEditorButton(editorRowTwo, "COLOR", () -> queueEditorCommand(MainActivity::nativeEditorCycleColor));
+        addEditorButton(editorRowTwo, "SAVE", this::saveEditorProject);
+        addEditorButton(editorRowTwo, "LOAD", this::loadEditorProject);
+        addEditorButton(editorRowTwo, "X−", () -> queueEditorCommand(() -> nativeEditorTranslate(0, -0.25f)));
+        addEditorButton(editorRowTwo, "X+", () -> queueEditorCommand(() -> nativeEditorTranslate(0, 0.25f)));
+        addEditorButton(editorRowTwo, "Y−", () -> queueEditorCommand(() -> nativeEditorTranslate(1, -0.25f)));
+        addEditorButton(editorRowThree, "Y+", () -> queueEditorCommand(() -> nativeEditorTranslate(1, 0.25f)));
+        addEditorButton(editorRowThree, "Z−", () -> queueEditorCommand(() -> nativeEditorTranslate(2, -0.25f)));
+        addEditorButton(editorRowThree, "Z+", () -> queueEditorCommand(() -> nativeEditorTranslate(2, 0.25f)));
+        addEditorButton(editorRowThree, "ROTATE", () -> queueEditorCommand(() -> nativeEditorRotate(1, 0.24f)));
+        addEditorButton(editorRowThree, "SIZE−", () -> queueEditorCommand(() -> nativeEditorScale(0.85f)));
+        addEditorButton(editorRowThree, "SIZE+", () -> queueEditorCommand(() -> nativeEditorScale(1.18f)));
+        editorPanel.setVisibility(View.GONE);
+        FrameLayout.LayoutParams editorPanelParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM);
+        editorPanelParams.setMargins(dp(10), 0, dp(10), dp(68));
+        root.addView(editorPanel, editorPanelParams);
 
         adventureJoystick = new AdventureJoystickView(this, (horizontal, forward) ->
                 surface.queueEvent(() -> nativeAdventureMove(horizontal, forward)));
@@ -220,22 +295,11 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 surface.queueEvent(MainActivity::nativeAdventureJump));
 
         modeButton.setOnClickListener(view -> {
-            activeDemoMode = activeDemoMode == 0 ? 2 : activeDemoMode == 2 ? 1 : 0;
-            gameMode = activeDemoMode != 0;
-            adventureMode = activeDemoMode == 2;
-            gameFinished = false;
-            final int selectedMode = activeDemoMode;
-            surface.queueEvent(() -> nativeSetDemoMode(selectedMode));
-            hint.setText(activeDemoMode == 0 ? "DRAG TO ORBIT"
-                    : activeDemoMode == 1 ? "SWIPE LEFT / RIGHT TO MOVE"
-                    : "LEFT: MOVE  ·  RIGHT: LOOK");
-            modeButton.setText(activeDemoMode == 0 ? "START ADVENTURE"
-                    : activeDemoMode == 1 ? "ENGINE LAB" : "AETHER RUN");
-            gameStatus.setVisibility(gameMode ? View.VISIBLE : View.GONE);
-            adventureJoystick.setVisibility(adventureMode ? View.VISIBLE : View.GONE);
-            jumpButton.setVisibility(adventureMode ? View.VISIBLE : View.GONE);
-            restartButton.setVisibility(View.GONE);
+            int nextMode = activeDemoMode == 0 ? 2 : activeDemoMode == 2 ? 1 : 0;
+            setActiveDemoMode(nextMode);
         });
+        editorButton.setOnClickListener(view ->
+                setActiveDemoMode(activeDemoMode == 3 ? 0 : 3));
         restartButton.setOnClickListener(view -> {
             gameFinished = false;
             restartButton.setVisibility(View.GONE);
@@ -243,6 +307,158 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         });
 
         setContentView(root);
+    }
+
+    private void setActiveDemoMode(int selectedMode) {
+        activeDemoMode = selectedMode;
+        gameMode = selectedMode == 1 || selectedMode == 2;
+        adventureMode = selectedMode == 2;
+        gameFinished = false;
+        final String[] savedProject = selectedMode == 3 ? readSavedEditorProject() : null;
+        surface.queueEvent(() -> {
+            nativeSetDemoMode(selectedMode);
+            if (selectedMode == 3 && savedProject != null) {
+                nativeLoadEditorProject(savedProject[0], savedProject[1]);
+            }
+            final String selection = selectedMode == 3
+                    ? nativeEditorSelectionStatus() : "";
+            runOnUiThread(() -> {
+                if (editorSelection != null && selectedMode == 3) {
+                    editorSelection.setText(selection);
+                }
+            });
+        });
+        hint.setText(selectedMode == 0 ? "DRAG TO ORBIT"
+                : selectedMode == 1 ? "SWIPE LEFT / RIGHT TO MOVE"
+                : selectedMode == 2 ? "LEFT: MOVE  ·  RIGHT: LOOK"
+                : "TAP OBJECT · TRANSFORM · SAVE PROJECT");
+        modeButton.setText(selectedMode == 0 ? "START ADVENTURE"
+                : selectedMode == 1 ? "ENGINE LAB" : "AETHER RUN");
+        modeButton.setVisibility(selectedMode == 3 ? View.GONE : View.VISIBLE);
+        editorButton.setText(selectedMode == 3 ? "EXIT EDITOR" : "OPEN EDITOR");
+        gameStatus.setVisibility(gameMode ? View.VISIBLE : View.GONE);
+        adventureJoystick.setVisibility(adventureMode ? View.VISIBLE : View.GONE);
+        jumpButton.setVisibility(adventureMode ? View.VISIBLE : View.GONE);
+        editorPanel.setVisibility(selectedMode == 3 ? View.VISIBLE : View.GONE);
+        restartButton.setVisibility(View.GONE);
+    }
+
+    private void addEditorButton(LinearLayout row, String text, Runnable action) {
+        TextView button = label(text, 8, 0xFFF2F5FF, true);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(4), dp(7), dp(4), dp(7));
+        button.setMinWidth(dp(43));
+        button.setBackground(pill(0xB826746F, dp(8)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        params.setMargins(dp(2), dp(2), dp(2), dp(2));
+        row.addView(button, params);
+        button.setOnClickListener(view -> action.run());
+    }
+
+    private void queueEditorCommand(Runnable command) {
+        if (surface == null) return;
+        surface.queueEvent(() -> {
+            command.run();
+            final String selection = nativeEditorSelectionStatus();
+            runOnUiThread(() -> {
+                if (editorSelection != null) editorSelection.setText(selection);
+            });
+        });
+    }
+
+    private File editorProjectDirectory() {
+        return new File(getFilesDir(), "nuby-projects/user-project");
+    }
+
+    private String[] readSavedEditorProject() {
+        File root = editorProjectDirectory();
+        File descriptor = new File(root, "project.nuby");
+        File scene = new File(root, "Scenes/main.nuby");
+        try {
+            if (!descriptor.isFile() || !scene.isFile()) return null;
+            return new String[]{readTextFile(descriptor, 64 * 1024),
+                    readTextFile(scene, 16 * 1024 * 1024)};
+        } catch (IOException exception) {
+            return null;
+        }
+    }
+
+    private String readTextFile(File file, int maximumBytes) throws IOException {
+        if (file.length() <= 0L || file.length() > maximumBytes) {
+            throw new IOException("Project file is empty or too large");
+        }
+        try (FileInputStream input = new FileInputStream(file);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            int total = 0;
+            while ((count = input.read(buffer)) != -1) {
+                total += count;
+                if (total > maximumBytes) throw new IOException("Project file is too large");
+                output.write(buffer, 0, count);
+            }
+            return new String(output.toByteArray(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private void writeTextFileAtomically(File target, String text) throws IOException {
+        File parent = target.getParentFile();
+        if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) {
+            throw new IOException("Could not create project folder");
+        }
+        File temporary = new File(parent, target.getName() + ".tmp");
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        try (FileOutputStream output = new FileOutputStream(temporary)) {
+            output.write(bytes);
+            output.getFD().sync();
+        }
+        try {
+            Os.rename(temporary.getAbsolutePath(), target.getAbsolutePath());
+        } catch (ErrnoException exception) {
+            temporary.delete();
+            throw new IOException("Could not replace saved project file", exception);
+        }
+    }
+
+    private void saveEditorProject() {
+        if (surface == null) return;
+        surface.queueEvent(() -> {
+            String[] project = nativeSaveEditorProject();
+            runOnUiThread(() -> {
+                if (project == null || project.length != 2) {
+                    if (hint != null) hint.setText("NOTHING TO SAVE");
+                    return;
+                }
+                try {
+                    File root = editorProjectDirectory();
+                    writeTextFileAtomically(new File(root, "Scenes/main.nuby"), project[1]);
+                    writeTextFileAtomically(new File(root, "project.nuby"), project[0]);
+                    if (hint != null) hint.setText("PROJECT SAVED ON THIS PHONE");
+                    Toast.makeText(this, "Project saved", Toast.LENGTH_SHORT).show();
+                } catch (IOException exception) {
+                    if (hint != null) hint.setText("SAVE FAILED · " + exception.getMessage());
+                }
+            });
+        });
+    }
+
+    private void loadEditorProject() {
+        if (surface == null) return;
+        final String[] project = readSavedEditorProject();
+        if (project == null) {
+            if (hint != null) hint.setText("NO SAVED PROJECT ON THIS PHONE");
+            return;
+        }
+        surface.queueEvent(() -> {
+            final String status = nativeLoadEditorProject(project[0], project[1]);
+            final String selection = nativeEditorSelectionStatus();
+            runOnUiThread(() -> {
+                if (editorSelection != null) editorSelection.setText(selection);
+                if (hint != null) hint.setText(status != null && status.startsWith("Project loaded")
+                        ? "PROJECT REOPENED" : status);
+            });
+        });
     }
 
     /** Loads a standalone Nuby project packaged under Android assets. */
@@ -275,11 +491,19 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         adventureMode = false;
         gameFinished = false;
         if (hint != null) hint.setText(hintText);
-        if (modeButton != null) modeButton.setText("START ADVENTURE");
+        if (modeButton != null) {
+            modeButton.setText("START ADVENTURE");
+            modeButton.setVisibility(View.VISIBLE);
+        }
+        if (editorButton != null) {
+            editorButton.setText("OPEN EDITOR");
+            editorButton.setVisibility(View.VISIBLE);
+        }
         if (gameStatus != null) gameStatus.setVisibility(View.GONE);
         if (restartButton != null) restartButton.setVisibility(View.GONE);
         if (adventureJoystick != null) adventureJoystick.setVisibility(View.GONE);
         if (jumpButton != null) jumpButton.setVisibility(View.GONE);
+        if (editorPanel != null) editorPanel.setVisibility(View.GONE);
     }
 
     private TextView label(String text, float sizeSp, int color, boolean bold) {
@@ -308,7 +532,13 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         nativeCreate(getAssets());
-        if (activeDemoMode != 0) nativeSetDemoMode(activeDemoMode);
+        if (activeDemoMode != 0) {
+            nativeSetDemoMode(activeDemoMode);
+            if (activeDemoMode == 3) {
+                String[] savedProject = readSavedEditorProject();
+                if (savedProject != null) nativeLoadEditorProject(savedProject[0], savedProject[1]);
+            }
+        }
         String detected = gl.glGetString(GL10.GL_RENDERER);
         gpuName = detected == null ? "GPU desconocida" : detected.trim();
         if (gpuName.length() > 26) gpuName = gpuName.substring(0, 26);
@@ -347,6 +577,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
             framesInWindow = 0;
             fpsWindowStartNanos = now;
             final String currentGameStatus = nativeGameStatus();
+            final String currentEditorSelection = activeDemoMode == 3
+                    ? nativeEditorSelectionStatus() : "";
             runOnUiThread(() -> {
                 if (telemetry != null) telemetry.setText(
                         String.format(Locale.US, "%d FPS  ·  %s  ·  %s  ·  %s  ·  %s",
@@ -361,6 +593,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                         restartButton.setText(adventureMode ? "RESTART ADVENTURE" : "RESTART RUN");
                         restartButton.setVisibility(finished ? View.VISIBLE : View.GONE);
                     }
+                }
+                if (activeDemoMode == 3 && editorSelection != null) {
+                    editorSelection.setText(currentEditorSelection);
                 }
             });
         }

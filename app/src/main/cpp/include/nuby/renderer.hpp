@@ -18,6 +18,7 @@
 #include "nuby/obj_loader.hpp"
 #include "nuby/sample_game.hpp"
 #include "nuby/scene.hpp"
+#include "nuby/scene_editor.hpp"
 #include "nuby/shadow_cascades.hpp"
 
 namespace nuby {
@@ -38,6 +39,20 @@ public:
     void restartGame();
     bool loadProject(const std::string& descriptorAssetPath);
     void unloadProject();
+    bool saveEditorProject(std::string& descriptorText, std::string& sceneText,
+                           std::string& error) const;
+    bool loadEditorProject(const std::string& descriptorText,
+                           const std::string& sceneText, std::string& error);
+    bool editorAddPrimitive(int type);
+    bool editorSelectEntity(std::uint32_t entityId);
+    bool editorSelectNext(int direction);
+    bool editorTranslate(int axis, float amount);
+    bool editorRotate(int axis, float amount);
+    bool editorScale(float factor);
+    bool editorCycleColor();
+    bool editorDuplicate();
+    bool editorDelete();
+    std::string editorSelectionStatus() const;
     bool projectLoaded() const { return projectRuntime_.loaded(); }
     std::string projectStatusText() const;
     std::string gameStatusText() const;
@@ -256,6 +271,7 @@ private:
     Mesh ground_{};
     Scene scene_;
     GameProjectRuntime projectRuntime_;
+    SceneEditorSession editorSession_;
     std::string projectAssetPrefix_;
     std::string projectLoadError_;
     SampleGame sampleGame_;

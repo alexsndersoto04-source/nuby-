@@ -150,6 +150,17 @@ jobs:
           -o /tmp/nuby-game-project-runtime-tests
           && /tmp/nuby-game-project-runtime-tests
 
+      - name: Compile and run visual scene editor tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/scene.cpp app/src/main/cpp/src/scene_io.cpp
+          app/src/main/cpp/src/game_project.cpp
+          app/src/main/cpp/src/game_project_runtime.cpp
+          app/src/main/cpp/src/scene_editor.cpp tests/scene_editor_tests.cpp
+          -o /tmp/nuby-scene-editor-tests
+          && /tmp/nuby-scene-editor-tests
+
       - name: Compile and run world streaming tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic

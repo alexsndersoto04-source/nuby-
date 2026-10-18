@@ -73,6 +73,99 @@ Java_com_nuby_engine_MainActivity_nativeUnloadProject(JNIEnv*, jclass) {
     return JNI_TRUE;
 }
 
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_nuby_engine_MainActivity_nativeSaveEditorProject(JNIEnv* env, jclass) {
+    if (!gRenderer) return nullptr;
+    std::string descriptor;
+    std::string scene;
+    std::string error;
+    if (!gRenderer->saveEditorProject(descriptor, scene, error)) return nullptr;
+    jclass stringClass = env->FindClass("java/lang/String");
+    if (stringClass == nullptr) return nullptr;
+    jobjectArray result = env->NewObjectArray(2, stringClass, nullptr);
+    if (result == nullptr) return nullptr;
+    jstring descriptorText = env->NewStringUTF(descriptor.c_str());
+    jstring sceneText = env->NewStringUTF(scene.c_str());
+    if (descriptorText == nullptr || sceneText == nullptr) return nullptr;
+    env->SetObjectArrayElement(result, 0, descriptorText);
+    env->SetObjectArrayElement(result, 1, sceneText);
+    env->DeleteLocalRef(descriptorText);
+    env->DeleteLocalRef(sceneText);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeLoadEditorProject(
+        JNIEnv* env, jclass, jstring descriptorValue, jstring sceneValue) {
+    if (!gRenderer) return env->NewStringUTF("Renderer is not initialized");
+    if (descriptorValue == nullptr || sceneValue == nullptr) {
+        return env->NewStringUTF("Saved project files are unavailable");
+    }
+    const char* descriptorChars = env->GetStringUTFChars(descriptorValue, nullptr);
+    const char* sceneChars = env->GetStringUTFChars(sceneValue, nullptr);
+    if (descriptorChars == nullptr || sceneChars == nullptr) {
+        if (descriptorChars != nullptr) env->ReleaseStringUTFChars(descriptorValue, descriptorChars);
+        if (sceneChars != nullptr) env->ReleaseStringUTFChars(sceneValue, sceneChars);
+        return nullptr;
+    }
+    const std::string descriptor(descriptorChars);
+    const std::string scene(sceneChars);
+    env->ReleaseStringUTFChars(descriptorValue, descriptorChars);
+    env->ReleaseStringUTFChars(sceneValue, sceneChars);
+    std::string error;
+    const bool loaded = gRenderer->loadEditorProject(descriptor, scene, error);
+    const std::string status = loaded ? "Project loaded" : "Load failed: " + error;
+    return env->NewStringUTF(status.c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorAddPrimitive(JNIEnv*, jclass, jint type) {
+    return gRenderer && gRenderer->editorAddPrimitive(type) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorSelectNext(JNIEnv*, jclass, jint direction) {
+    return gRenderer && gRenderer->editorSelectNext(direction) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorTranslate(
+        JNIEnv*, jclass, jint axis, jfloat amount) {
+    return gRenderer && gRenderer->editorTranslate(axis, amount) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorRotate(
+        JNIEnv*, jclass, jint axis, jfloat amount) {
+    return gRenderer && gRenderer->editorRotate(axis, amount) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorScale(JNIEnv*, jclass, jfloat factor) {
+    return gRenderer && gRenderer->editorScale(factor) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorCycleColor(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->editorCycleColor() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorDuplicate(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->editorDuplicate() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorDelete(JNIEnv*, jclass) {
+    return gRenderer && gRenderer->editorDelete() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeEditorSelectionStatus(JNIEnv* env, jclass) {
+    const std::string status = gRenderer ? gRenderer->editorSelectionStatus() : std::string{};
+    return env->NewStringUTF(status.c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeAdventureMove(
         JNIEnv*, jclass, jfloat horizontal, jfloat forward) {
