@@ -155,8 +155,15 @@ void AdventureGame::buildScene(Scene& scene) {
     head.material.roughness = 0.72f;
     scene.setParent(head.id, playerId_);
 
+    Entity& hair = scene.create("Wayfarer Hair", Primitive::Sphere);
+    hair.transform.position = {0.0f, 1.5f, 0.0f};
+    hair.transform.scale = {0.5f, 0.14f, 0.5f};
+    hair.material.color = {0.075f, 0.045f, 0.035f};
+    hair.material.roughness = 0.92f;
+    scene.setParent(hair.id, playerId_);
+
     Entity& pack = scene.create("Wayfarer Satchel", Primitive::Sphere);
-    pack.transform.position = {0.0f, 0.15f, 0.78f};
+    pack.transform.position = {0.0f, 0.15f, -0.72f};
     pack.transform.scale = {0.43f, 0.48f, 0.38f};
     pack.material.color = {0.55f, 0.27f, 0.11f};
     pack.material.roughness = 0.84f;

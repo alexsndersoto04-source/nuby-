@@ -647,6 +647,79 @@ bool jsonFloatArray(const JsonValue* value, std::array<float, N>& output) {
     return true;
 }
 
+bool parseGltfMaterials(const JsonValue& root, std::vector<GltfMaterial>& output,
+                        std::string& error) {
+    output.clear();
+    const JsonValue* materials = member(root, "materials");
+    if (materials == nullptr) return true;
+    if (materials->type != JsonValue::Type::Array || materials->arrayValue.size() > 4096U) {
+        return fail(error, "GLB materials array is invalid or exceeds limits");
+    }
+    output.reserve(materials->arrayValue.size());
+    for (const JsonValue& source : materials->arrayValue) {
+        if (source.type != JsonValue::Type::Object) {
+            return fail(error, "GLB material must be an object");
+        }
+        for (const char* textureSlot : {"normalTexture", "occlusionTexture", "emissiveTexture"}) {
+            if (member(source, textureSlot) != nullptr) {
+                return fail(error, "Textured glTF materials are not supported by this renderer");
+            }
+        }
+        GltfMaterial material;
+        const JsonValue* pbr = member(source, "pbrMetallicRoughness");
+        if (pbr != nullptr && pbr->type != JsonValue::Type::Object) {
+            return fail(error, "GLB pbrMetallicRoughness must be an object");
+        }
+        if (pbr != nullptr) {
+            if (member(*pbr, "baseColorTexture") != nullptr
+                    || member(*pbr, "metallicRoughnessTexture") != nullptr) {
+                return fail(error, "Textured glTF materials are not supported by this renderer");
+            }
+            const JsonValue* baseColor = member(*pbr, "baseColorFactor");
+            if (baseColor != nullptr && !jsonFloatArray(baseColor, material.baseColorFactor)) {
+                return fail(error, "GLB baseColorFactor must contain four finite values");
+            }
+            const JsonValue* metallic = member(*pbr, "metallicFactor");
+            const JsonValue* roughness = member(*pbr, "roughnessFactor");
+            if ((metallic != nullptr && !jsonFloat(metallic, material.metallicFactor))
+                    || (roughness != nullptr
+                        && !jsonFloat(roughness, material.roughnessFactor))) {
+                return fail(error, "GLB metallic or roughness factor is invalid");
+            }
+        }
+        const JsonValue* emissive = member(source, "emissiveFactor");
+        if (emissive != nullptr && !jsonFloatArray(emissive, material.emissiveFactor)) {
+            return fail(error, "GLB emissiveFactor must contain three finite values");
+        }
+        for (float value : material.baseColorFactor) {
+            if (value < 0.0f || value > 1.0f) {
+                return fail(error, "GLB baseColorFactor components must be in [0, 1]");
+            }
+        }
+        if (material.metallicFactor < 0.0f || material.metallicFactor > 1.0f
+                || material.roughnessFactor < 0.0f || material.roughnessFactor > 1.0f) {
+            return fail(error, "GLB metallic and roughness factors must be in [0, 1]");
+        }
+        for (float value : material.emissiveFactor) {
+            if (value < 0.0f) return fail(error, "GLB emissiveFactor cannot be negative");
+        }
+        const JsonValue* alphaMode = member(source, "alphaMode");
+        if (alphaMode != nullptr) {
+            if (alphaMode->type != JsonValue::Type::String) {
+                return fail(error, "GLB alphaMode must be a string");
+            }
+            if (alphaMode->stringValue == "BLEND") material.alphaBlend = true;
+            else if (alphaMode->stringValue == "MASK") {
+                return fail(error, "GLB MASK alpha mode is unsupported without alpha-cutout rendering");
+            } else if (alphaMode->stringValue != "OPAQUE") {
+                return fail(error, "GLB alphaMode is unknown");
+            }
+        }
+        output.push_back(material);
+    }
+    return true;
+}
+
 struct NodeData {
     std::string name;
     std::int32_t parentIndex = -1;
@@ -731,6 +804,8 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
     std::vector<BufferView> views;
     std::vector<Accessor> accessors;
     if (!parseViewsAndAccessors(root, binary.size(), views, accessors, error)) return false;
+    std::vector<GltfMaterial> materials;
+    if (!parseGltfMaterials(root, materials, error)) return false;
 
     const JsonValue* meshes = member(root, "meshes");
     if (meshes == nullptr || meshes->type != JsonValue::Type::Array
@@ -763,6 +838,16 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
             }
             const Accessor& positionAccessor = accessors[positionAccessorIndex];
             GltfPrimitive parsed{};
+            const JsonValue* materialIndexValue = member(primitive, "material");
+            if (materialIndexValue != nullptr) {
+                std::uint32_t materialIndex = 0;
+                if (!unsignedInteger(materialIndexValue, materialIndex)
+                        || materialIndex >= materials.size()) {
+                    return fail(error, "GLB primitive references an invalid material");
+                }
+                parsed.material = materials[materialIndex];
+                parsed.hasMaterial = true;
+            }
             std::vector<float> positions;
             if (!readFloatAccessor(positionAccessor, views, binary, "VEC3", 3U, positions)) {
                 return fail(error, "GLB POSITION accessor has an unsupported layout");

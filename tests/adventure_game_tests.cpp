@@ -130,8 +130,12 @@ void testWayfarerSelectsIdleWalkRunAndJumpClips() {
     game.start(scene);
     const std::uint32_t bodyId = findEntityId(scene, "Wayfarer Animated Body");
     nuby::Entity* body = scene.find(bodyId);
+    const nuby::Entity* hair = scene.find(findEntityId(scene, "Wayfarer Hair"));
+    const nuby::Entity* satchel = scene.find(findEntityId(scene, "Wayfarer Satchel"));
     expect(body != nullptr && body->skeletalAnimation.clipName == "idle",
            "Wayfarer starts with the idle clip");
+    expect(hair != nullptr && satchel != nullptr && satchel->transform.position[2] < 0.0f,
+           "the detailed explorer model has a hair silhouette and a back-mounted satchel");
     advance(game, scene, 1);
 
     expect(game.setMoveInput(scene, 0.0f, 1.0f), "walking input is accepted");

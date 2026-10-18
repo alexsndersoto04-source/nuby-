@@ -16,6 +16,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
+      - name: Verify deterministic Wayfarer model and animation generation
+        run: |
+          python3 tools/generate_wayfarer_model.py
+          python3 tools/generate_wayfarer_animations.py
+          git diff --exit-code -- app/src/main/assets/characters/wayfarer_skeletal.glb
+
       - name: Compile scene tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic

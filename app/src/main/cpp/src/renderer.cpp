@@ -991,6 +991,17 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
     for (GltfPrimitive& primitive : parsed.primitives) {
         ImportedPart part{};
         part.skinned = true;
+        part.hasMaterial = primitive.hasMaterial;
+        if (primitive.hasMaterial) {
+            part.material.color = {primitive.material.baseColorFactor[0],
+                                   primitive.material.baseColorFactor[1],
+                                   primitive.material.baseColorFactor[2]};
+            part.material.opacity = primitive.material.alphaBlend
+                    ? primitive.material.baseColorFactor[3] : 1.0f;
+            part.material.emission = primitive.material.emissiveFactor;
+            part.material.metallic = primitive.material.metallicFactor;
+            part.material.roughness = primitive.material.roughnessFactor;
+        }
         part.mesh = uploadSkinnedMesh(primitive);
         if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);

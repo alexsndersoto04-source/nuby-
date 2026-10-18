@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -10,10 +11,20 @@
 
 namespace nuby {
 
+struct GltfMaterial {
+    std::array<float, 4> baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 3> emissiveFactor{0.0f, 0.0f, 0.0f};
+    float metallicFactor = 1.0f;
+    float roughnessFactor = 1.0f;
+    bool alphaBlend = false;
+};
+
 struct GltfPrimitive {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<SkeletalVertexInfluence> influences;
+    GltfMaterial material;
+    bool hasMaterial = false;
     bool hasSkinAttributes = false;
 };
 
@@ -39,15 +50,17 @@ bool validateGltf2Json(std::string_view json, std::string& error);
 
 // Imports triangle primitives from a self-contained GLB with one embedded
 // buffer. Supports float POSITION/NORMAL/TEXCOORD_0, unsigned scalar indices,
-// and JOINTS_0/WEIGHTS_0 with four influences. Skeletons, materials and clips
-// are not decoded yet.
+// JOINTS_0/WEIGHTS_0 with four influences, and per-primitive glTF metallic-
+// roughness material factors. Image textures and MASK alpha are rejected until
+// their renderer paths are implemented.
 bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                     std::string& error);
 
-// Imports a constrained single-mesh, single-skin GLB subset, including
-// parent-first joints, inverse-bind matrices, per-vertex weights and LINEAR
-// translation/rotation/scale channels. Unsupported hierarchy and interpolation
-// forms are rejected rather than silently discarded.
+// Imports a constrained single-mesh-node, single-skin GLB subset, including
+// multiple triangle primitives, parent-first joints, inverse-bind matrices,
+// per-vertex weights, PBR material factors and LINEAR TRS animation channels.
+// Unsupported hierarchy, image textures and interpolation forms are rejected
+// rather than silently discarded.
 bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                            std::string& error);
 

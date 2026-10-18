@@ -106,6 +106,28 @@ std::string makeTriangleGlb(std::uint16_t thirdIndex = 2, bool includeSkin = fal
     return data;
 }
 
+std::string makeTriangleWithMaterialGlb(const std::string& materialJson) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeTriangleGlb(), json, binary, error)) return {};
+    const std::string primitiveEnd = "\"indices\":1}]";
+    const std::size_t primitive = json.find(primitiveEnd);
+    const std::size_t meshes = json.find("\"meshes\":");
+    if (primitive == std::string::npos || meshes == std::string::npos) return {};
+    json.replace(primitive, primitiveEnd.size(), "\"indices\":1,\"material\":0}]");
+    const std::size_t updatedMeshes = json.find("\"meshes\":");
+    json.insert(updatedMeshes, "\"materials\":[{" + materialJson + "}],");
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, std::move(json));
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
 std::string makeSkeletalGlb() {
     std::string binary;
     for (float value : {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}) {
@@ -263,6 +285,39 @@ void testGlbImportsTriangleAndSkinAttributes() {
     }
 }
 
+void testGltfPbrMaterialFactors() {
+    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.2,0.4,0.6,0.5],"metallicFactor":0.7,"roughnessFactor":0.3},"emissiveFactor":[0.1,0.2,0.3],"alphaMode":"BLEND")JSON";
+    std::vector<nuby::GltfPrimitive> primitives;
+    std::string error;
+    expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(material), primitives, error),
+           "glTF metallic-roughness factors import on a mesh primitive");
+    expect(primitives.size() == 1 && primitives[0].hasMaterial,
+           "primitive preserves its referenced glTF material");
+    if (primitives.size() == 1 && primitives[0].hasMaterial) {
+        const nuby::GltfMaterial& parsed = primitives[0].material;
+        expect(std::fabs(parsed.baseColorFactor[0] - 0.2f) < 1.0e-6f
+                       && std::fabs(parsed.baseColorFactor[2] - 0.6f) < 1.0e-6f
+                       && std::fabs(parsed.baseColorFactor[3] - 0.5f) < 1.0e-6f
+                       && std::fabs(parsed.metallicFactor - 0.7f) < 1.0e-6f
+                       && std::fabs(parsed.roughnessFactor - 0.3f) < 1.0e-6f
+                       && std::fabs(parsed.emissiveFactor[1] - 0.2f) < 1.0e-6f
+                       && parsed.alphaBlend,
+               "PBR color, metalness, roughness, emission and alpha mode are retained");
+    }
+
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("pbrMetallicRoughness":{"baseColorFactor":[-0.1,0,0,1]})JSON"),
+                   primitives, error),
+           "out-of-range glTF base color factors are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("alphaMode":"MASK")JSON"), primitives, error),
+           "masked materials are rejected until alpha-cutout rendering is supported");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0}})JSON"),
+                   primitives, error),
+           "unsupported glTF material textures are not silently discarded");
+}
+
 void testSkeletalGlbImportsJointsBindMatricesAndClips() {
     nuby::GltfSkeletalAsset asset;
     std::string error;
@@ -308,8 +363,13 @@ void testPackagedWayfarerAsset() {
     expect(nuby::parseGlbSkeletalAsset(bytes, asset, error),
            "packaged Wayfarer GLB passes the skeletal importer");
     expect(asset.skeleton.size() == 7 && asset.animations.size() == 4
-                   && asset.primitives.size() == 1,
-           "Wayfarer asset contains its rig, four action clips, and skinned mesh");
+                   && asset.primitives.size() == 6,
+           "Wayfarer asset contains its rig, four clips, and six material-separated skinned parts");
+    expect(std::all_of(asset.primitives.begin(), asset.primitives.end(),
+                       [](const nuby::GltfPrimitive& primitive) {
+                           return primitive.hasSkinAttributes && primitive.hasMaterial;
+                       }),
+           "every Wayfarer outfit part carries a skin and a parsed PBR material");
     const auto clipNamed = [&asset](const char* name) {
         return std::find_if(asset.animations.begin(), asset.animations.end(),
                 [name](const nuby::GltfAnimation& animation) {
@@ -422,6 +482,7 @@ int main() {
     testGlbChunksExtractAndTrimJsonPadding();
     testGlbRejectsInvalidHeadersAndLengths();
     testGlbImportsTriangleAndSkinAttributes();
+    testGltfPbrMaterialFactors();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
     testPackagedWayfarerAsset();
     testGltfJsonSyntaxAndVersionValidation();
