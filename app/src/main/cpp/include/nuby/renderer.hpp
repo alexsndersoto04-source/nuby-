@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -108,6 +109,23 @@ private:
         std::vector<CpuObjPart> parts;
     };
 
+    struct CpuGlbModel {
+        bool skeletal = false;
+        std::vector<GltfPrimitive> primitives;
+        std::vector<GltfEmbeddedImage> images;
+        std::vector<SkeletalJoint> skeleton;
+        std::vector<GltfAnimation> animations;
+    };
+
+    struct PendingGpuAsset {
+        std::string assetPath;
+        bool isGlb = false;
+        CpuObjModel objModel;
+        CpuGlbModel glbModel;
+        ImportedModel importedModel;
+        std::size_t nextPrimitive = 0;
+    };
+
     struct DrawItem {
         const Mesh* mesh = nullptr;
         std::array<float, 16> model{};
@@ -196,11 +214,14 @@ private:
     static bool prepareObjAsset(AAssetManager* manager, const std::string& assetPath,
                                 CpuObjModel& model, std::string& error);
     void uploadPreparedObjAsset(const std::string& assetPath, CpuObjModel model);
-    bool loadGlbAsset(const std::string& assetPath, ImportedModel& model);
+    static bool prepareGlbAsset(AAssetManager* manager, const std::string& assetPath,
+                                CpuGlbModel& model, std::string& error);
+    void uploadPreparedGlbAsset(const std::string& assetPath, CpuGlbModel model);
     void uploadSkinPalette(const SkeletalPose* pose);
     bool uploadImageAsset(const std::string& assetPath, const ImageRgba8& image,
                           GLuint& texture);
     void processAssetTasks();
+    void processPendingGpuUpload();
     void requestTextureDecode(const std::string& assetPath);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
@@ -231,6 +252,8 @@ private:
     AAssetManager* assetManager_ = nullptr;
     AsyncAssetTaskQueue asyncAssetTasks_{2U};
     std::vector<AsyncAssetTaskQueue::Completion> assetCompletionsScratch_;
+    std::deque<PendingGpuAsset> pendingGpuUploads_;
+    bool gpuAssetUploadedThisFrame_ = false;
     std::unordered_set<std::string> pendingMeshAssets_;
     std::unordered_set<std::string> failedMeshAssets_;
     std::unordered_set<std::string> pendingTextureAssets_;

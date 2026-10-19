@@ -1094,134 +1094,40 @@ Renderer::Mesh Renderer::uploadStaticGltfMesh(const GltfPrimitive& primitive) {
     return mesh;
 }
 
-bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) {
+bool Renderer::prepareGlbAsset(AAssetManager* manager, const std::string& assetPath,
+                               CpuGlbModel& model, std::string& error) {
     std::string bytes;
     constexpr std::size_t kMaximumGlbAssetBytes = 64U * 1024U * 1024U;
-    if (!readTextAsset(assetManager_, assetPath, kMaximumGlbAssetBytes, bytes)) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "GLB asset is unavailable or exceeds limits: %s", assetPath.c_str());
+    if (!readTextAsset(manager, assetPath, kMaximumGlbAssetBytes, bytes)) {
+        error = "GLB asset is unavailable or exceeds limits: " + assetPath;
         return false;
     }
-    const auto applyGltfMaterial = [this, &assetPath](
-            const GltfPrimitive& primitive,
-            const std::vector<GltfEmbeddedImage>& images, ImportedPart& part) {
-        part.hasMaterial = primitive.hasMaterial;
-        if (!primitive.hasMaterial) return;
-        part.material.color = {primitive.material.baseColorFactor[0],
-                               primitive.material.baseColorFactor[1],
-                               primitive.material.baseColorFactor[2]};
-        part.material.opacity = primitive.material.alphaBlend || primitive.material.alphaMask
-                ? primitive.material.baseColorFactor[3] : 1.0f;
-        part.alphaMask = primitive.material.alphaMask;
-        part.alphaCutoff = primitive.material.alphaCutoff;
-        part.material.emission = primitive.material.emissiveFactor;
-        part.material.metallic = primitive.material.metallicFactor;
-        part.material.roughness = primitive.material.roughnessFactor;
-        part.material.ambientOcclusion = primitive.material.occlusionStrength;
-        const auto texturePath = [this, &assetPath, &images](std::int32_t imageIndex) {
-            if (imageIndex < 0 || static_cast<std::size_t>(imageIndex) >= images.size()) {
-                return std::string{};
-            }
-            const std::string relative = "__nuby_internal/gltf/" + assetPath
-                    + "/image_" + std::to_string(imageIndex) + ".png";
-            const std::string resolved = projectAssetPath(relative);
-            if (resolved.empty()) return std::string{};
-            if (embeddedImageData_.find(resolved) == embeddedImageData_.end()) {
-                embeddedImageData_.emplace(
-                        resolved, images[static_cast<std::size_t>(imageIndex)].bytes);
-            }
-            return relative;
-        };
-        const auto applyTextureBinding = [&](const GltfTextureBinding& binding,
-                                             TextureMapTransform& transform) {
-            transform.uvScale = binding.uvScale;
-            transform.uvOffset = binding.uvOffset;
-            transform.clampToEdge = binding.clampToEdge;
-            return texturePath(binding.imageIndex);
-        };
-        part.material.albedoTexture = applyTextureBinding(
-                primitive.material.baseColorTexture, part.material.albedoMapTransform);
-        part.material.metallicRoughnessTexture = applyTextureBinding(
-                primitive.material.metallicRoughnessTexture,
-                part.material.metallicRoughnessMapTransform);
-        part.material.normalTexture = applyTextureBinding(
-                primitive.material.normalTexture, part.material.normalMapTransform);
-        part.material.occlusionTexture = applyTextureBinding(
-                primitive.material.occlusionTexture, part.material.occlusionMapTransform);
-        part.material.emissiveTexture = applyTextureBinding(
-                primitive.material.emissiveTexture, part.material.emissiveMapTransform);
-        if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
-            part.material.opacityTexture = part.material.albedoTexture;
-            part.material.opacityMapTransform = part.material.albedoMapTransform;
-            part.material.opacityMapChannel = ScalarTextureChannel::Matte;
-        }
-    };
-    GltfSkeletalAsset parsed;
-    std::string error;
-    if (!parseGlbSkeletalAsset(bytes, parsed, error)) {
-        const std::string skeletalError = error;
-        GltfStaticAsset staticAsset;
-        if (!parseGlbStaticAsset(bytes, staticAsset, error)) {
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                    "GLB import failed for %s (skeletal: %s; static: %s)",
-                    assetPath.c_str(), skeletalError.c_str(), error.c_str());
-            return false;
-        }
-        ImportedModel staticModel{};
-        staticModel.parts.reserve(staticAsset.primitives.size());
-        for (const GltfPrimitive& primitive : staticAsset.primitives) {
-            ImportedPart part{};
-            applyGltfMaterial(primitive, staticAsset.images, part);
-            part.mesh = uploadStaticGltfMesh(primitive);
-            if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
-                if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
-                if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
-                if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
-                for (ImportedPart& uploaded : staticModel.parts) {
-                    if (uploaded.mesh.vao != 0) glDeleteVertexArrays(1, &uploaded.mesh.vao);
-                    if (uploaded.mesh.vbo != 0) glDeleteBuffers(1, &uploaded.mesh.vbo);
-                    if (uploaded.mesh.ebo != 0) glDeleteBuffers(1, &uploaded.mesh.ebo);
-                }
-                __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                        "Could not upload static GLB primitive from %s", assetPath.c_str());
-                return false;
-            }
-            staticModel.parts.push_back(std::move(part));
-        }
-        model = std::move(staticModel);
-        __android_log_print(ANDROID_LOG_INFO, kLogTag,
-                "Loaded static GLB %s (%zu mesh instances)",
-                assetPath.c_str(), model.parts.size());
+
+    GltfSkeletalAsset skeletal;
+    if (parseGlbSkeletalAsset(bytes, skeletal, error)) {
+        CpuGlbModel candidate{};
+        candidate.skeletal = true;
+        candidate.primitives = std::move(skeletal.primitives);
+        candidate.images = std::move(skeletal.images);
+        candidate.skeleton = std::move(skeletal.skeleton);
+        candidate.animations = std::move(skeletal.animations);
+        model = std::move(candidate);
+        error.clear();
         return true;
     }
-    ImportedModel candidate{};
-    candidate.skeleton = std::move(parsed.skeleton);
-    candidate.animations = std::move(parsed.animations);
-    candidate.parts.reserve(parsed.primitives.size());
-    for (GltfPrimitive& primitive : parsed.primitives) {
-        ImportedPart part{};
-        part.skinned = true;
-        applyGltfMaterial(primitive, parsed.images, part);
-        part.mesh = uploadSkinnedMesh(primitive);
-        if (part.mesh.vao == 0 || part.mesh.vbo == 0 || part.mesh.ebo == 0) {
-            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
-            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
-            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
-            for (ImportedPart& uploaded : candidate.parts) {
-                if (uploaded.mesh.vao != 0) glDeleteVertexArrays(1, &uploaded.mesh.vao);
-                if (uploaded.mesh.vbo != 0) glDeleteBuffers(1, &uploaded.mesh.vbo);
-                if (uploaded.mesh.ebo != 0) glDeleteBuffers(1, &uploaded.mesh.ebo);
-            }
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                    "Could not upload skinned GLB primitive from %s", assetPath.c_str());
-            return false;
-        }
-        candidate.parts.push_back(std::move(part));
+
+    const std::string skeletalError = error;
+    GltfStaticAsset staticAsset;
+    if (!parseGlbStaticAsset(bytes, staticAsset, error)) {
+        error = "GLB import failed for " + assetPath + " (skeletal: "
+                + skeletalError + "; static: " + error + ")";
+        return false;
     }
+    CpuGlbModel candidate{};
+    candidate.primitives = std::move(staticAsset.primitives);
+    candidate.images = std::move(staticAsset.images);
     model = std::move(candidate);
-    __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Loaded skeletal GLB %s (%zu joints, %zu clips, %zu primitives)",
-            assetPath.c_str(), model.skeleton.size(), model.animations.size(), model.parts.size());
+    error.clear();
     return true;
 }
 
@@ -1291,35 +1197,22 @@ bool Renderer::prepareObjAsset(AAssetManager* manager, const std::string& assetP
 }
 
 void Renderer::uploadPreparedObjAsset(const std::string& assetPath, CpuObjModel cpuModel) {
-    ImportedModel model{};
-    model.parts.reserve(cpuModel.parts.size());
-    std::size_t totalVertices = 0;
-    for (CpuObjPart& cpuPart : cpuModel.parts) {
-        ImportedPart part{};
-        part.objectName = std::move(cpuPart.objectName);
-        part.groupName = std::move(cpuPart.groupName);
-        part.material = std::move(cpuPart.material);
-        part.hasMaterial = cpuPart.hasMaterial;
-        part.mesh = uploadMesh(cpuPart.vertices);
-        if (part.mesh.vao == 0) {
-            for (ImportedPart& uploaded : model.parts) {
-                if (uploaded.mesh.vao != 0) glDeleteVertexArrays(1, &uploaded.mesh.vao);
-                if (uploaded.mesh.vbo != 0) glDeleteBuffers(1, &uploaded.mesh.vbo);
-            }
-            failedMeshAssets_.insert(assetPath);
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                    "Could not upload OBJ submesh from %s", assetPath.c_str());
-            loadSceneAssets();
-            return;
-        }
-        totalVertices += cpuPart.vertices.size();
-        model.parts.push_back(std::move(part));
-    }
-    importedMeshes_[assetPath] = std::move(model);
-    __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Loaded OBJ %s (%zu triangle vertices, %zu material submeshes)",
-            assetPath.c_str(), totalVertices, importedMeshes_[assetPath].parts.size());
-    loadSceneAssets();
+    PendingGpuAsset pending{};
+    pending.assetPath = assetPath;
+    pending.objModel = std::move(cpuModel);
+    pending.importedModel.parts.reserve(pending.objModel.parts.size());
+    pendingGpuUploads_.push_back(std::move(pending));
+}
+
+void Renderer::uploadPreparedGlbAsset(const std::string& assetPath, CpuGlbModel cpuModel) {
+    PendingGpuAsset pending{};
+    pending.assetPath = assetPath;
+    pending.isGlb = true;
+    pending.importedModel.skeleton = std::move(cpuModel.skeleton);
+    pending.importedModel.animations = std::move(cpuModel.animations);
+    pending.importedModel.parts.reserve(cpuModel.primitives.size());
+    pending.glbModel = std::move(cpuModel);
+    pendingGpuUploads_.push_back(std::move(pending));
 }
 
 bool Renderer::uploadImageAsset(const std::string& assetPath, const ImageRgba8& image,
@@ -1335,6 +1228,7 @@ bool Renderer::uploadImageAsset(const std::string& assetPath, const ImageRgba8& 
         return false;
     }
 
+    gpuAssetUploadedThisFrame_ = true;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
@@ -1434,12 +1328,153 @@ void Renderer::requestTextureDecode(const std::string& assetPath) {
 }
 
 void Renderer::processAssetTasks() {
+    gpuAssetUploadedThisFrame_ = false;
     assetCompletionsScratch_.clear();
     asyncAssetTasks_.poll(assetCompletionsScratch_, 1U);
     for (AsyncAssetTaskQueue::Completion& completion : assetCompletionsScratch_) {
         if (completion) completion();
     }
     assetCompletionsScratch_.clear();
+    if (!gpuAssetUploadedThisFrame_) processPendingGpuUpload();
+}
+
+void Renderer::processPendingGpuUpload() {
+    if (pendingGpuUploads_.empty()) return;
+    PendingGpuAsset& pending = pendingGpuUploads_.front();
+    const std::size_t primitiveCount = pending.isGlb
+            ? pending.glbModel.primitives.size() : pending.objModel.parts.size();
+    const auto deleteImportedParts = [](ImportedModel& model) {
+        for (ImportedPart& part : model.parts) {
+            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+        }
+        model.parts.clear();
+    };
+    if (pending.nextPrimitive >= primitiveCount) {
+        const std::string assetPath = pending.assetPath;
+        deleteImportedParts(pending.importedModel);
+        pendingGpuUploads_.pop_front();
+        pendingMeshAssets_.erase(assetPath);
+        failedMeshAssets_.insert(assetPath);
+        loadSceneAssets();
+        return;
+    }
+
+    ImportedPart part{};
+    if (!pending.isGlb) {
+        CpuObjPart& cpuPart = pending.objModel.parts[pending.nextPrimitive];
+        part.objectName = cpuPart.objectName;
+        part.groupName = cpuPart.groupName;
+        part.material = cpuPart.material;
+        part.hasMaterial = cpuPart.hasMaterial;
+        part.mesh = uploadMesh(cpuPart.vertices);
+    } else {
+        GltfPrimitive& primitive = pending.glbModel.primitives[pending.nextPrimitive];
+        part.skinned = pending.glbModel.skeletal;
+        part.hasMaterial = primitive.hasMaterial;
+        if (primitive.hasMaterial) {
+            part.material.color = {primitive.material.baseColorFactor[0],
+                                   primitive.material.baseColorFactor[1],
+                                   primitive.material.baseColorFactor[2]};
+            part.material.opacity = primitive.material.alphaBlend || primitive.material.alphaMask
+                    ? primitive.material.baseColorFactor[3] : 1.0f;
+            part.alphaMask = primitive.material.alphaMask;
+            part.alphaCutoff = primitive.material.alphaCutoff;
+            part.material.emission = primitive.material.emissiveFactor;
+            part.material.metallic = primitive.material.metallicFactor;
+            part.material.roughness = primitive.material.roughnessFactor;
+            part.material.ambientOcclusion = primitive.material.occlusionStrength;
+            const auto texturePath = [this, &pending](std::int32_t imageIndex) {
+                if (imageIndex < 0 || static_cast<std::size_t>(imageIndex)
+                        >= pending.glbModel.images.size()) return std::string{};
+                const std::string relative = "__nuby_internal/gltf/" + pending.assetPath
+                        + "/image_" + std::to_string(imageIndex) + ".png";
+                const std::string resolved = projectAssetPath(relative);
+                if (resolved.empty()) return std::string{};
+                if (embeddedImageData_.find(resolved) == embeddedImageData_.end()) {
+                    embeddedImageData_.emplace(resolved,
+                            pending.glbModel.images[static_cast<std::size_t>(imageIndex)].bytes);
+                }
+                return relative;
+            };
+            const auto applyTextureBinding = [&](const GltfTextureBinding& binding,
+                                                 TextureMapTransform& transform) {
+                transform.uvScale = binding.uvScale;
+                transform.uvOffset = binding.uvOffset;
+                transform.clampToEdge = binding.clampToEdge;
+                return texturePath(binding.imageIndex);
+            };
+            part.material.albedoTexture = applyTextureBinding(
+                    primitive.material.baseColorTexture, part.material.albedoMapTransform);
+            part.material.metallicRoughnessTexture = applyTextureBinding(
+                    primitive.material.metallicRoughnessTexture,
+                    part.material.metallicRoughnessMapTransform);
+            part.material.normalTexture = applyTextureBinding(
+                    primitive.material.normalTexture, part.material.normalMapTransform);
+            part.material.occlusionTexture = applyTextureBinding(
+                    primitive.material.occlusionTexture, part.material.occlusionMapTransform);
+            part.material.emissiveTexture = applyTextureBinding(
+                    primitive.material.emissiveTexture, part.material.emissiveMapTransform);
+            if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
+                part.material.opacityTexture = part.material.albedoTexture;
+                part.material.opacityMapTransform = part.material.albedoMapTransform;
+                part.material.opacityMapChannel = ScalarTextureChannel::Matte;
+            }
+        }
+        part.mesh = pending.glbModel.skeletal ? uploadSkinnedMesh(primitive)
+                                              : uploadStaticGltfMesh(primitive);
+    }
+
+    gpuAssetUploadedThisFrame_ = true;
+    if (part.mesh.vao == 0 || (pending.isGlb
+            && (part.mesh.vbo == 0 || part.mesh.ebo == 0))) {
+        if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+        if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+        if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+        const std::string assetPath = pending.assetPath;
+        deleteImportedParts(pending.importedModel);
+        pendingGpuUploads_.pop_front();
+        pendingMeshAssets_.erase(assetPath);
+        failedMeshAssets_.insert(assetPath);
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                "GPU upload failed for model %s", assetPath.c_str());
+        loadSceneAssets();
+        return;
+    }
+
+    pending.importedModel.parts.push_back(std::move(part));
+    ++pending.nextPrimitive;
+    if (pending.nextPrimitive != primitiveCount) return;
+
+    const std::string assetPath = pending.assetPath;
+    const bool isGlb = pending.isGlb;
+    const bool skeletal = pending.glbModel.skeletal;
+    const std::size_t jointCount = pending.importedModel.skeleton.size();
+    const std::size_t clipCount = pending.importedModel.animations.size();
+    const std::size_t partCount = pending.importedModel.parts.size();
+    std::size_t vertexCount = 0;
+    if (!isGlb) {
+        for (const CpuObjPart& cpuPart : pending.objModel.parts) {
+            vertexCount += cpuPart.vertices.size();
+        }
+    }
+    importedMeshes_[assetPath] = std::move(pending.importedModel);
+    pendingGpuUploads_.pop_front();
+    pendingMeshAssets_.erase(assetPath);
+    if (!isGlb) {
+        __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                "Loaded OBJ %s (%zu triangle vertices, %zu material submeshes)",
+                assetPath.c_str(), vertexCount, partCount);
+    } else if (skeletal) {
+        __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                "Loaded skeletal GLB %s (%zu joints, %zu clips, %zu primitives)",
+                assetPath.c_str(), jointCount, clipCount, partCount);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                "Loaded static GLB %s (%zu mesh instances)", assetPath.c_str(), partCount);
+    }
+    loadSceneAssets();
 }
 
 Renderer::Mesh Renderer::makeSphere(int latitudeSegments, int longitudeSegments) {
@@ -1937,6 +1972,14 @@ void Renderer::releaseSceneAssets() {
     pendingTextureAssets_.clear();
     failedTextureAssets_.clear();
     embeddedImageData_.clear();
+    for (PendingGpuAsset& pending : pendingGpuUploads_) {
+        for (ImportedPart& part : pending.importedModel.parts) {
+            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+        }
+    }
+    pendingGpuUploads_.clear();
     for (auto& entry : importedMeshes_) {
         for (ImportedPart& part : entry.second.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -2019,12 +2062,26 @@ void Renderer::loadSceneAssets() {
         mesh = importedMeshes_.erase(mesh);
     }
 
+    for (auto upload = pendingGpuUploads_.begin(); upload != pendingGpuUploads_.end();) {
+        if (requiredMeshes.find(upload->assetPath) != requiredMeshes.end()) {
+            ++upload;
+            continue;
+        }
+        for (ImportedPart& part : upload->importedModel.parts) {
+            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+        }
+        pendingMeshAssets_.erase(upload->assetPath);
+        upload = pendingGpuUploads_.erase(upload);
+    }
+
     for (auto pending = pendingMeshAssets_.begin(); pending != pendingMeshAssets_.end();) {
         if (requiredMeshes.find(*pending) != requiredMeshes.end()) {
             ++pending;
             continue;
         }
-        asyncAssetTasks_.cancel("obj:" + *pending);
+        asyncAssetTasks_.cancel("model:" + *pending);
         pending = pendingMeshAssets_.erase(pending);
     }
     for (auto failed = failedMeshAssets_.begin(); failed != failedMeshAssets_.end();) {
@@ -2037,37 +2094,34 @@ void Renderer::loadSceneAssets() {
                 || failedMeshAssets_.find(meshPath) != failedMeshAssets_.end()) continue;
         const bool isGlb = meshPath.size() >= 4U
                 && meshPath.compare(meshPath.size() - 4U, 4U, ".glb") == 0;
-        if (isGlb) {
-            ImportedModel model{};
-            if (loadGlbAsset(meshPath, model)) importedMeshes_.emplace(meshPath, std::move(model));
-            else failedMeshAssets_.insert(meshPath);
-            continue;
-        }
         if (!pendingMeshAssets_.insert(meshPath).second) continue;
         AAssetManager* manager = assetManager_;
-        const bool queued = asyncAssetTasks_.submit("obj:" + meshPath,
-                [this, manager, meshPath]() {
-            CpuObjModel model;
+        const bool queued = asyncAssetTasks_.submit("model:" + meshPath,
+                [this, manager, meshPath, isGlb]() {
+            CpuObjModel objModel;
+            CpuGlbModel glbModel;
             std::string error;
             bool success = false;
             try {
-                success = prepareObjAsset(manager, meshPath, model, error);
+                success = isGlb ? prepareGlbAsset(manager, meshPath, glbModel, error)
+                                : prepareObjAsset(manager, meshPath, objModel, error);
             } catch (const std::exception& exception) {
                 error = exception.what();
             } catch (...) {
-                error = "unknown exception while preparing OBJ";
+                error = "unknown exception while preparing model";
             }
-            return [this, meshPath, success, error = std::move(error),
-                    model = std::move(model)]() mutable {
-                pendingMeshAssets_.erase(meshPath);
+            return [this, meshPath, isGlb, success, error = std::move(error),
+                    objModel = std::move(objModel), glbModel = std::move(glbModel)]() mutable {
                 if (!success) {
+                    pendingMeshAssets_.erase(meshPath);
                     failedMeshAssets_.insert(meshPath);
                     __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                            "Could not prepare OBJ %s: %s", meshPath.c_str(), error.c_str());
+                            "Could not prepare model %s: %s", meshPath.c_str(), error.c_str());
                     loadSceneAssets();
                     return;
                 }
-                uploadPreparedObjAsset(meshPath, std::move(model));
+                if (isGlb) uploadPreparedGlbAsset(meshPath, std::move(glbModel));
+                else uploadPreparedObjAsset(meshPath, std::move(objModel));
             };
         });
         if (!queued) pendingMeshAssets_.erase(meshPath);
@@ -2616,6 +2670,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
     asyncAssetTasks_.waitUntilIdle(std::chrono::seconds(10));
     pendingMeshAssets_.clear();
     failedMeshAssets_.clear();
+    pendingGpuUploads_.clear();
+    gpuAssetUploadedThisFrame_ = false;
     pendingTextureAssets_.clear();
     failedTextureAssets_.clear();
     adventureGame_.setZoneSceneReader({});
