@@ -1,6 +1,8 @@
 #include "nuby/image_loader.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace nuby {
@@ -34,6 +36,104 @@ bool readPixel(std::string_view source, std::size_t& offset,
 }
 
 }  // namespace
+
+bool planRgba8UploadRows(std::uint32_t width, std::uint32_t height,
+                         std::uint32_t firstRow, std::uint64_t byteBudget,
+                         ImageUploadChunk& chunk) {
+    chunk = {};
+    const std::uint64_t rowBytes = static_cast<std::uint64_t>(width) * 4U;
+    if (width == 0U || height == 0U || firstRow >= height || rowBytes > byteBudget) {
+        return false;
+    }
+    const std::uint64_t rows = std::min<std::uint64_t>(height - firstRow,
+                                                        byteBudget / rowBytes);
+    if (rows == 0U || rows > std::numeric_limits<std::uint32_t>::max()) return false;
+    chunk.rowCount = static_cast<std::uint32_t>(rows);
+    chunk.byteCount = rows * rowBytes;
+    return true;
+}
+
+bool generateMipChain(ImageRgba8 base, std::vector<ImageRgba8>& levels,
+                      std::string& error) {
+    error.clear();
+    if (base.width == 0U || base.height == 0U
+            || static_cast<std::uint64_t>(base.width) * base.height > kMaximumPixels
+            || base.pixels.size() != static_cast<std::size_t>(base.width)
+                    * base.height * 4U) {
+        return fail(error, "mipmap source dimensions or pixel storage are invalid");
+    }
+
+    std::vector<ImageRgba8> candidate;
+    candidate.push_back(std::move(base));
+    while (candidate.back().width > 1U || candidate.back().height > 1U) {
+        const ImageRgba8& source = candidate.back();
+        ImageRgba8 destination;
+        destination.width = std::max(1U, source.width / 2U);
+        destination.height = std::max(1U, source.height / 2U);
+        const std::uint64_t pixelCount = static_cast<std::uint64_t>(destination.width)
+                * destination.height;
+        if (pixelCount > std::numeric_limits<std::size_t>::max() / 4U) {
+            return fail(error, "mipmap level byte size overflows addressable memory");
+        }
+        destination.pixels.resize(static_cast<std::size_t>(pixelCount) * 4U);
+        for (std::uint32_t y = 0; y < destination.height; ++y) {
+            const std::uint32_t yBegin = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(y) * source.height / destination.height);
+            const std::uint32_t yEnd = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(y + 1U) * source.height / destination.height);
+            for (std::uint32_t x = 0; x < destination.width; ++x) {
+                const std::uint32_t xBegin = static_cast<std::uint32_t>(
+                        static_cast<std::uint64_t>(x) * source.width / destination.width);
+                const std::uint32_t xEnd = static_cast<std::uint32_t>(
+                        static_cast<std::uint64_t>(x + 1U) * source.width / destination.width);
+                std::uint64_t channels[4]{};
+                std::uint64_t samples = 0U;
+                for (std::uint32_t sy = yBegin; sy < yEnd; ++sy) {
+                    for (std::uint32_t sx = xBegin; sx < xEnd; ++sx) {
+                        const std::size_t sourceOffset =
+                                (static_cast<std::size_t>(sy) * source.width + sx) * 4U;
+                        for (std::size_t channel = 0; channel < 4U; ++channel) {
+                            channels[channel] += source.pixels[sourceOffset + channel];
+                        }
+                        ++samples;
+                    }
+                }
+                const std::size_t destinationOffset =
+                        (static_cast<std::size_t>(y) * destination.width + x) * 4U;
+                for (std::size_t channel = 0; channel < 4U; ++channel) {
+                    destination.pixels[destinationOffset + channel] =
+                            static_cast<std::uint8_t>((channels[channel] + samples / 2U) / samples);
+                }
+            }
+        }
+        candidate.push_back(std::move(destination));
+    }
+    levels = std::move(candidate);
+    return true;
+}
+
+bool imageMipChainByteSize(const std::vector<ImageRgba8>& levels,
+                           std::uint64_t& byteSize) {
+    byteSize = 0U;
+    if (levels.empty()) return false;
+    for (const ImageRgba8& level : levels) {
+        const std::uint64_t pixelCount = static_cast<std::uint64_t>(level.width)
+                * level.height;
+        if (level.width == 0U || level.height == 0U
+                || pixelCount > std::numeric_limits<std::uint64_t>::max() / 4U) {
+            byteSize = 0U;
+            return false;
+        }
+        const std::uint64_t expected = pixelCount * 4U;
+        if (expected != level.pixels.size()
+                || expected > std::numeric_limits<std::uint64_t>::max() - byteSize) {
+            byteSize = 0U;
+            return false;
+        }
+        byteSize += expected;
+    }
+    return true;
+}
 
 bool decodeTga(std::string_view source, ImageRgba8& image, std::string& error) {
     error.clear();

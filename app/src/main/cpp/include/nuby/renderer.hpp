@@ -131,6 +131,15 @@ private:
         std::size_t nextPrimitive = 0;
     };
 
+    struct PendingTextureUpload {
+        std::string assetPath;
+        GLuint texture = 0;
+        std::vector<ImageRgba8> levels;
+        std::size_t levelIndex = 0U;
+        std::uint32_t rowOffset = 0U;
+        std::uint64_t byteSize = 0U;
+    };
+
     struct DrawItem {
         const Mesh* mesh = nullptr;
         std::array<float, 16> model{};
@@ -223,9 +232,10 @@ private:
                                 CpuGlbModel& model, std::string& error);
     void uploadPreparedGlbAsset(const std::string& assetPath, CpuGlbModel model);
     void uploadSkinPalette(const SkeletalPose* pose);
-    bool uploadImageAsset(const std::string& assetPath, const ImageRgba8& image,
-                          GLuint& texture);
+    bool beginTextureUpload(const std::string& assetPath,
+                            std::vector<ImageRgba8> levels);
     void processAssetTasks();
+    void processPendingTextureUploads();
     void processPendingGpuUpload();
     void releaseEmbeddedImagesForModel(const std::string& meshPath);
     void requestTextureDecode(const std::string& assetPath);
@@ -263,7 +273,8 @@ private:
     AsyncAssetTaskQueue asyncAssetTasks_{2U};
     std::vector<AsyncAssetTaskQueue::Completion> assetCompletionsScratch_;
     std::deque<PendingGpuAsset> pendingGpuUploads_;
-    bool gpuAssetUploadedThisFrame_ = false;
+    std::deque<PendingTextureUpload> pendingTextureUploads_;
+    bool textureUploadTurn_ = true;
     std::unordered_set<std::string> pendingMeshAssets_;
     std::unordered_set<std::string> failedMeshAssets_;
     std::unordered_set<std::string> pendingTextureAssets_;

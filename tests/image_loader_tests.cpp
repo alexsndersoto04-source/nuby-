@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -445,6 +446,78 @@ void testPackagedOpacityMaskContainsVariableMatteAlpha() {
            "opacity mask provides transparent edges and an opaque center in its matte channel");
 }
 
+void testBudgetedRgbaUploadRowPlanning() {
+    nuby::ImageUploadChunk chunk;
+    expect(nuby::planRgba8UploadRows(64U, 20U, 2U, 1024U, chunk)
+                   && chunk.rowCount == 4U && chunk.byteCount == 1024U,
+           "upload planner fills the byte budget with complete RGBA rows");
+    expect(nuby::planRgba8UploadRows(64U, 20U, 18U, 4096U, chunk)
+                   && chunk.rowCount == 2U && chunk.byteCount == 512U,
+           "final texture chunk stops at the remaining image rows");
+    expect(!nuby::planRgba8UploadRows(64U, 20U, 0U, 255U, chunk)
+                   && chunk.rowCount == 0U && chunk.byteCount == 0U,
+           "upload planner refuses a budget that cannot hold one RGBA row");
+    expect(!nuby::planRgba8UploadRows(64U, 20U, 20U, 4096U, chunk)
+                   && !nuby::planRgba8UploadRows(0U, 20U, 0U, 4096U, chunk),
+           "upload planner rejects exhausted rows and invalid dimensions");
+}
+
+void testMipChainDimensionsAveragingAndAccounting() {
+    nuby::ImageRgba8 base;
+    base.width = 4;
+    base.height = 2;
+    for (std::uint8_t value = 0; value < 8; ++value) {
+        base.pixels.insert(base.pixels.end(), {value, static_cast<std::uint8_t>(value * 2U),
+                                               200U, static_cast<std::uint8_t>(255U - value)});
+    }
+    const std::vector<std::uint8_t> original = base.pixels;
+    std::vector<nuby::ImageRgba8> levels;
+    std::string error;
+    expect(nuby::generateMipChain(std::move(base), levels, error),
+           "valid RGBA image generates a complete mip chain");
+    expect(error.empty() && levels.size() == 3U,
+           "mip chain includes base, half-resolution and terminal levels");
+    expect(levels[0].width == 4U && levels[0].height == 2U
+                   && levels[0].pixels == original
+                   && levels[1].width == 2U && levels[1].height == 1U
+                   && levels[2].width == 1U && levels[2].height == 1U,
+           "mip levels retain the base image and follow OpenGL floor-halving dimensions");
+    expect(levels[1].pixels == std::vector<std::uint8_t>({3, 5, 200, 253, 5, 9, 200, 251})
+                   && levels[2].pixels == std::vector<std::uint8_t>({4, 7, 200, 252}),
+           "box filter averages color and alpha across every source sample");
+    std::uint64_t byteSize = 0U;
+    expect(nuby::imageMipChainByteSize(levels, byteSize) && byteSize == 44U,
+           "mip byte accounting sums all RGBA8 levels exactly");
+
+    nuby::ImageRgba8 odd;
+    odd.width = 3;
+    odd.height = 1;
+    odd.pixels = {0, 10, 20, 30, 60, 70, 80, 90, 120, 130, 140, 150};
+    expect(nuby::generateMipChain(std::move(odd), levels, error)
+                   && levels.size() == 2U
+                   && levels.back().pixels == std::vector<std::uint8_t>({60, 70, 80, 90}),
+           "odd-width terminal mip includes all source pixels");
+}
+
+void testInvalidMipSourcesAreRejectedWithoutReplacingOutput() {
+    nuby::ImageRgba8 invalid;
+    invalid.width = 2U;
+    invalid.height = 2U;
+    invalid.pixels = {1, 2, 3, 4};
+    std::vector<nuby::ImageRgba8> levels(1U);
+    levels.front().width = 1U;
+    levels.front().height = 1U;
+    levels.front().pixels = {9, 8, 7, 6};
+    std::string error;
+    expect(!nuby::generateMipChain(std::move(invalid), levels, error)
+                   && !error.empty() && levels.size() == 1U
+                   && levels.front().pixels == std::vector<std::uint8_t>({9, 8, 7, 6}),
+           "invalid source storage is rejected transactionally");
+    std::uint64_t byteSize = 123U;
+    expect(!nuby::imageMipChainByteSize({}, byteSize) && byteSize == 0U,
+           "empty mip chain has no valid storage size");
+}
+
 void testMalformedAndUnsupportedImagesAreRejectedTransactionally() {
     nuby::ImageRgba8 image;
     image.width = 1;
@@ -486,6 +559,9 @@ int main() {
     testPackagedAdventureMaterialMapsDecode();
     testPackagedWayfarerFaceTextureDecodes();
     testPackagedOpacityMaskContainsVariableMatteAlpha();
+    testBudgetedRgbaUploadRowPlanning();
+    testMipChainDimensionsAveragingAndAccounting();
+    testInvalidMipSourcesAreRejectedWithoutReplacingOutput();
     testMalformedAndUnsupportedImagesAreRejectedTransactionally();
     if (failures != 0) {
         std::cerr << failures << " image loader test(s) failed\n";

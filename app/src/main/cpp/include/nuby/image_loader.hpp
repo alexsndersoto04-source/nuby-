@@ -15,6 +15,25 @@ struct ImageRgba8 {
     std::vector<std::uint8_t> pixels;
 };
 
+struct ImageUploadChunk {
+    std::uint32_t rowCount = 0U;
+    std::uint64_t byteCount = 0U;
+};
+
+// Plans a whole-row RGBA8 transfer that fits within byteBudget.
+bool planRgba8UploadRows(std::uint32_t width, std::uint32_t height,
+                         std::uint32_t firstRow, std::uint64_t byteBudget,
+                         ImageUploadChunk& chunk);
+
+// Builds a complete box-filtered mip chain on a CPU worker. The input base
+// level is moved into levels; dimensions follow OpenGL's floor-halving rule.
+bool generateMipChain(ImageRgba8 base, std::vector<ImageRgba8>& levels,
+                      std::string& error);
+
+// Computes RGBA8 storage across all mip levels without overflowing.
+bool imageMipChainByteSize(const std::vector<ImageRgba8>& levels,
+                           std::uint64_t& byteSize);
+
 // Dependency-free TGA decoder for uncompressed and RLE true-color images.
 // Color-mapped and grayscale TGA files are intentionally rejected.
 bool decodeTga(std::string_view source, ImageRgba8& image, std::string& error);

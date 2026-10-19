@@ -1220,39 +1220,46 @@ void Renderer::uploadPreparedGlbAsset(const std::string& assetPath, CpuGlbModel 
     pendingGpuUploads_.push_back(std::move(pending));
 }
 
-bool Renderer::uploadImageAsset(const std::string& assetPath, const ImageRgba8& image,
-                                GLuint& texture) {
-    texture = 0;
+bool Renderer::beginTextureUpload(const std::string& assetPath,
+                                  std::vector<ImageRgba8> levels) {
+    std::uint64_t byteSize = 0U;
+    if (!imageMipChainByteSize(levels, byteSize) || levels.size() > 32U) return false;
     GLint maximumTextureSize = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumTextureSize);
-    if (maximumTextureSize <= 0 || image.width == 0U || image.height == 0U
-            || image.width > static_cast<std::uint32_t>(maximumTextureSize)
-            || image.height > static_cast<std::uint32_t>(maximumTextureSize)) {
+    if (maximumTextureSize <= 0 || levels.front().width
+                    > static_cast<std::uint32_t>(maximumTextureSize)
+            || levels.front().height > static_cast<std::uint32_t>(maximumTextureSize)) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
                 "Texture %s exceeds device texture limits", assetPath.c_str());
         return false;
     }
+    for (std::size_t index = 1U; index < levels.size(); ++index) {
+        if (levels[index].width != std::max(1U, levels[index - 1U].width / 2U)
+                || levels[index].height != std::max(1U, levels[index - 1U].height / 2U)) {
+            return false;
+        }
+    }
 
-    gpuAssetUploadedThisFrame_ = true;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
-            static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), 0,
-            GL_RGBA, GL_UNSIGNED_BYTE, image.pixels.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
+    PendingTextureUpload upload;
+    upload.assetPath = assetPath;
+    upload.levels = std::move(levels);
+    upload.byteSize = byteSize;
+    glGenTextures(1, &upload.texture);
+    if (upload.texture == 0U) return false;
+    glBindTexture(GL_TEXTURE_2D, upload.texture);
+    glTexStorage2D(GL_TEXTURE_2D, static_cast<GLsizei>(upload.levels.size()), GL_RGBA8,
+            static_cast<GLsizei>(upload.levels.front().width),
+            static_cast<GLsizei>(upload.levels.front().height));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
     if (glGetError() != GL_NO_ERROR) {
-        glDeleteTextures(1, &texture);
-        texture = 0;
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "GPU upload failed for texture %s", assetPath.c_str());
+        glDeleteTextures(1, &upload.texture);
         return false;
     }
-    __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Loaded image %s (%u x %u)", assetPath.c_str(), image.width, image.height);
+    pendingTextureUploads_.push_back(std::move(upload));
     return true;
 }
 
@@ -1270,6 +1277,7 @@ void Renderer::requestTextureDecode(const std::string& assetPath) {
     const bool queued = asyncAssetTasks_.submit(key,
             [this, manager, assetPath, encoded = std::move(embeddedBytes)]() mutable {
         ImageRgba8 image;
+        std::vector<ImageRgba8> mipLevels;
         std::string error;
         bool success = false;
         std::string bytes = std::move(encoded);
@@ -1303,30 +1311,32 @@ void Renderer::requestTextureDecode(const std::string& assetPath) {
                 }
             }
             if (error.empty()) success = decodeImage(bytes, image, error);
+            std::string().swap(bytes);
+            if (success) {
+                success = generateMipChain(std::move(image), mipLevels, error);
+            }
         } catch (const std::exception& exception) {
             error = exception.what();
         } catch (...) {
             error = "unknown exception while decoding image";
         }
         return [this, assetPath, success, error = std::move(error),
-                image = std::move(image)]() mutable {
-            pendingTextureAssets_.erase(assetPath);
+                mipLevels = std::move(mipLevels)]() mutable {
             if (!success) {
+                pendingTextureAssets_.erase(assetPath);
                 failedTextureAssets_.insert(assetPath);
                 __android_log_print(ANDROID_LOG_ERROR, kLogTag,
                         "Image decode failed for %s: %s", assetPath.c_str(), error.c_str());
                 loadSceneAssets();
                 return;
             }
-            GLuint texture = 0;
-            if (uploadImageAsset(assetPath, image, texture)) {
-                textures_[assetPath] = texture;
-                const std::uint64_t pixelBytes = static_cast<std::uint64_t>(image.pixels.size());
-                textureGpuBytes_[assetPath] = pixelBytes + pixelBytes / 3U;
-            } else {
+            if (!beginTextureUpload(assetPath, std::move(mipLevels))) {
+                pendingTextureAssets_.erase(assetPath);
                 failedTextureAssets_.insert(assetPath);
+                __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                        "Could not allocate GPU mip levels for texture %s", assetPath.c_str());
+                loadSceneAssets();
             }
-            loadSceneAssets();
         };
     });
     if (!queued) {
@@ -1335,14 +1345,86 @@ void Renderer::requestTextureDecode(const std::string& assetPath) {
 }
 
 void Renderer::processAssetTasks() {
-    gpuAssetUploadedThisFrame_ = false;
     assetCompletionsScratch_.clear();
     asyncAssetTasks_.poll(assetCompletionsScratch_, 1U);
     for (AsyncAssetTaskQueue::Completion& completion : assetCompletionsScratch_) {
         if (completion) completion();
     }
     assetCompletionsScratch_.clear();
-    if (!gpuAssetUploadedThisFrame_) processPendingGpuUpload();
+
+    if (pendingTextureUploads_.empty()) {
+        processPendingGpuUpload();
+    } else if (pendingGpuUploads_.empty()) {
+        processPendingTextureUploads();
+    } else if (textureUploadTurn_) {
+        processPendingTextureUploads();
+        textureUploadTurn_ = false;
+    } else {
+        processPendingGpuUpload();
+        textureUploadTurn_ = true;
+    }
+}
+
+void Renderer::processPendingTextureUploads() {
+    constexpr std::uint64_t kUploadBudgetBytesPerFrame = 512U * 1024U;
+    std::uint64_t remainingBytes = kUploadBudgetBytesPerFrame;
+    while (!pendingTextureUploads_.empty() && remainingBytes > 0U) {
+        PendingTextureUpload& upload = pendingTextureUploads_.front();
+        if (upload.levelIndex >= upload.levels.size()) {
+            const std::string assetPath = upload.assetPath;
+            const GLuint texture = upload.texture;
+            const std::uint64_t byteSize = upload.byteSize;
+            const std::size_t levelCount = upload.levels.size();
+            pendingTextureUploads_.pop_front();
+            textures_[assetPath] = texture;
+            textureGpuBytes_[assetPath] = byteSize;
+            pendingTextureAssets_.erase(assetPath);
+            __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                    "Loaded image %s with %zu mip levels (%llu bytes)", assetPath.c_str(),
+                    levelCount, static_cast<unsigned long long>(byteSize));
+            loadSceneAssets();
+            continue;
+        }
+
+        const ImageRgba8& level = upload.levels[upload.levelIndex];
+        ImageUploadChunk chunk;
+        if (!planRgba8UploadRows(level.width, level.height, upload.rowOffset,
+                                 remainingBytes, chunk)) {
+            glDeleteTextures(1, &upload.texture);
+            const std::string assetPath = upload.assetPath;
+            pendingTextureUploads_.pop_front();
+            pendingTextureAssets_.erase(assetPath);
+            failedTextureAssets_.insert(assetPath);
+            loadSceneAssets();
+            continue;
+        }
+        glBindTexture(GL_TEXTURE_2D, upload.texture);
+        glTexSubImage2D(GL_TEXTURE_2D, static_cast<GLint>(upload.levelIndex), 0,
+                static_cast<GLint>(upload.rowOffset), static_cast<GLsizei>(level.width),
+                static_cast<GLsizei>(chunk.rowCount), GL_RGBA, GL_UNSIGNED_BYTE,
+                level.pixels.data() + static_cast<std::size_t>(upload.rowOffset)
+                        * level.width * 4U);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        const GLenum error = glGetError();
+        if (error != GL_NO_ERROR) {
+            const std::string assetPath = upload.assetPath;
+            glDeleteTextures(1, &upload.texture);
+            pendingTextureUploads_.pop_front();
+            pendingTextureAssets_.erase(assetPath);
+            failedTextureAssets_.insert(assetPath);
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "GPU mip upload failed for %s (0x%x)", assetPath.c_str(), error);
+            loadSceneAssets();
+            continue;
+        }
+        remainingBytes = chunk.byteCount >= remainingBytes
+                ? 0U : remainingBytes - chunk.byteCount;
+        upload.rowOffset += chunk.rowCount;
+        if (upload.rowOffset == level.height) {
+            ++upload.levelIndex;
+            upload.rowOffset = 0U;
+        }
+    }
 }
 
 void Renderer::processPendingGpuUpload() {
@@ -1436,7 +1518,6 @@ void Renderer::processPendingGpuUpload() {
                                               : uploadStaticGltfMesh(primitive);
     }
 
-    gpuAssetUploadedThisFrame_ = true;
     if (part.mesh.vao == 0 || (pending.isGlb
             && (part.mesh.vbo == 0 || part.mesh.ebo == 0))) {
         if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -2012,6 +2093,10 @@ void Renderer::releaseSceneAssets() {
         }
     }
     pendingGpuUploads_.clear();
+    for (PendingTextureUpload& upload : pendingTextureUploads_) {
+        if (upload.texture != 0U) glDeleteTextures(1, &upload.texture);
+    }
+    pendingTextureUploads_.clear();
     for (auto& entry : importedMeshes_) {
         for (ImportedPart& part : entry.second.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -2220,6 +2305,15 @@ void Renderer::loadSceneAssets() {
         }
     }
 
+    for (auto upload = pendingTextureUploads_.begin(); upload != pendingTextureUploads_.end();) {
+        if (requiredTextures.find(upload->assetPath) != requiredTextures.end()) {
+            ++upload;
+            continue;
+        }
+        if (upload->texture != 0U) glDeleteTextures(1, &upload->texture);
+        pendingTextureAssets_.erase(upload->assetPath);
+        upload = pendingTextureUploads_.erase(upload);
+    }
     for (auto pending = pendingTextureAssets_.begin(); pending != pendingTextureAssets_.end();) {
         if (requiredTextures.find(*pending) != requiredTextures.end()) {
             ++pending;
@@ -2744,7 +2838,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     pendingMeshAssets_.clear();
     failedMeshAssets_.clear();
     pendingGpuUploads_.clear();
-    gpuAssetUploadedThisFrame_ = false;
+    textureUploadTurn_ = true;
     pendingTextureAssets_.clear();
     failedTextureAssets_.clear();
     assetMemoryCache_.clear();
