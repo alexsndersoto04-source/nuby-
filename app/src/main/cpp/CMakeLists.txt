@@ -3,6 +3,7 @@ project(nuby_engine LANGUAGES CXX)
 
 add_library(nuby-engine SHARED
     native_engine.cpp
+    src/async_asset_task_queue.cpp
     src/async_scene_asset_loader.cpp
     src/adventure_game.cpp
     src/game_project.cpp

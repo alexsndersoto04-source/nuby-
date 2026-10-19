@@ -4,12 +4,14 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <GLES3/gl3.h>
 #include <android/asset_manager.h>
 
 #include "nuby/adventure_game.hpp"
+#include "nuby/async_asset_task_queue.hpp"
 #include "nuby/frustum.hpp"
 #include "nuby/game_project_runtime.hpp"
 #include "nuby/gltf_loader.hpp"
@@ -92,6 +94,18 @@ private:
         std::vector<ImportedPart> parts;
         std::vector<SkeletalJoint> skeleton;
         std::vector<GltfAnimation> animations;
+    };
+
+    struct CpuObjPart {
+        std::vector<MeshVertex> vertices;
+        std::string objectName;
+        std::string groupName;
+        Material material;
+        bool hasMaterial = false;
+    };
+
+    struct CpuObjModel {
+        std::vector<CpuObjPart> parts;
     };
 
     struct DrawItem {
@@ -179,10 +193,15 @@ private:
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
     Mesh uploadSkinnedMesh(const GltfPrimitive& primitive);
     Mesh uploadStaticGltfMesh(const GltfPrimitive& primitive);
-    bool loadObjAsset(const std::string& assetPath, ImportedModel& model);
+    static bool prepareObjAsset(AAssetManager* manager, const std::string& assetPath,
+                                CpuObjModel& model, std::string& error);
+    void uploadPreparedObjAsset(const std::string& assetPath, CpuObjModel model);
     bool loadGlbAsset(const std::string& assetPath, ImportedModel& model);
     void uploadSkinPalette(const SkeletalPose* pose);
-    bool loadImageAsset(const std::string& assetPath, GLuint& texture);
+    bool uploadImageAsset(const std::string& assetPath, const ImageRgba8& image,
+                          GLuint& texture);
+    void processAssetTasks();
+    void requestTextureDecode(const std::string& assetPath);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
     Mesh makeGround();
@@ -210,6 +229,12 @@ private:
     void drawFullscreen();
 
     AAssetManager* assetManager_ = nullptr;
+    AsyncAssetTaskQueue asyncAssetTasks_{2U};
+    std::vector<AsyncAssetTaskQueue::Completion> assetCompletionsScratch_;
+    std::unordered_set<std::string> pendingMeshAssets_;
+    std::unordered_set<std::string> failedMeshAssets_;
+    std::unordered_set<std::string> pendingTextureAssets_;
+    std::unordered_set<std::string> failedTextureAssets_;
     std::unordered_map<std::string, ImportedModel> importedMeshes_;
     std::unordered_map<std::uint32_t, SkeletalPose> evaluatedSkeletalPoses_;
     std::unordered_map<std::string, GLuint> textures_;

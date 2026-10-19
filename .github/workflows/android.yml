@@ -77,6 +77,15 @@ jobs:
           tests/sample_game_tests.cpp -o /tmp/nuby-sample-game-tests
           && /tmp/nuby-sample-game-tests
 
+      - name: Compile and run asynchronous CPU asset queue tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/async_asset_task_queue.cpp
+          tests/async_asset_task_queue_tests.cpp
+          -o /tmp/nuby-async-asset-queue-tests
+          && /tmp/nuby-async-asset-queue-tests
+
       - name: Compile and run asynchronous scene asset loader tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread

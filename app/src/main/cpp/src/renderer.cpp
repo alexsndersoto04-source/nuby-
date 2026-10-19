@@ -2,9 +2,11 @@
 #include "nuby/scene_io.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -1223,20 +1225,18 @@ bool Renderer::loadGlbAsset(const std::string& assetPath, ImportedModel& model) 
     return true;
 }
 
-bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) {
+bool Renderer::prepareObjAsset(AAssetManager* manager, const std::string& assetPath,
+                               CpuObjModel& model, std::string& error) {
     std::string source;
     constexpr std::size_t kMaximumObjBytes = 16U * 1024U * 1024U;
-    if (!readTextAsset(assetManager_, assetPath, kMaximumObjBytes, source)) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "OBJ asset is unavailable or exceeds limits: %s", assetPath.c_str());
+    if (!readTextAsset(manager, assetPath, kMaximumObjBytes, source)) {
+        error = "OBJ asset is unavailable or exceeds limits: " + assetPath;
         return false;
     }
 
     ObjModel parsedObj;
-    std::string error;
     if (!parseObjModel(source, parsedObj, error)) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "OBJ parse failed for %s: %s", assetPath.c_str(), error.c_str());
+        error = "OBJ parse failed for " + assetPath + ": " + error;
         return false;
     }
 
@@ -1250,16 +1250,16 @@ bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) 
             continue;
         }
         std::string librarySource;
-        if (!readTextAsset(assetManager_, libraryPath, 4U * 1024U * 1024U,
-                           librarySource)) {
+        if (!readTextAsset(manager, libraryPath, 4U * 1024U * 1024U, librarySource)) {
             __android_log_print(ANDROID_LOG_WARN, kLogTag,
                     "MTL asset unavailable: %s", libraryPath.c_str());
             continue;
         }
         std::vector<WavefrontMaterial> parsedMaterials;
-        if (!parseMtl(librarySource, libraryPath, parsedMaterials, error)) {
+        std::string materialError;
+        if (!parseMtl(librarySource, libraryPath, parsedMaterials, materialError)) {
             __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                    "MTL parse failed for %s: %s", libraryPath.c_str(), error.c_str());
+                    "MTL parse failed for %s: %s", libraryPath.c_str(), materialError.c_str());
             continue;
         }
         for (WavefrontMaterial& material : parsedMaterials) {
@@ -1267,79 +1267,68 @@ bool Renderer::loadObjAsset(const std::string& assetPath, ImportedModel& model) 
         }
     }
 
-    ImportedModel candidate;
+    CpuObjModel candidate;
     candidate.parts.reserve(parsedObj.submeshes.size());
-    std::size_t totalVertices = 0;
-    for (const ObjSubmesh& submesh : parsedObj.submeshes) {
-        ImportedPart part{};
+    for (ObjSubmesh& submesh : parsedObj.submeshes) {
+        CpuObjPart part{};
+        part.vertices = std::move(submesh.vertices);
         part.objectName = submesh.objectName;
         part.groupName = submesh.groupName;
-        part.mesh = uploadMesh(submesh.vertices);
-        if (part.mesh.vao == 0) {
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                    "Could not upload OBJ submesh from %s", assetPath.c_str());
-            return false;
-        }
         const auto material = materialsByName.find(submesh.materialName);
         if (!submesh.materialName.empty() && material != materialsByName.end()) {
             part.material = material->second;
             part.hasMaterial = true;
         }
-        totalVertices += submesh.vertices.size();
         candidate.parts.push_back(std::move(part));
     }
-    if (candidate.parts.empty()) return false;
+    if (candidate.parts.empty()) {
+        error = "OBJ contains no renderable submeshes: " + assetPath;
+        return false;
+    }
     model = std::move(candidate);
-    __android_log_print(ANDROID_LOG_INFO, kLogTag,
-            "Loaded OBJ %s (%zu triangle vertices, %zu material submeshes)",
-            assetPath.c_str(), totalVertices, model.parts.size());
+    error.clear();
     return true;
 }
 
-bool Renderer::loadImageAsset(const std::string& assetPath, GLuint& texture) {
-    texture = 0;
-    std::string encoded;
-    const auto embedded = embeddedImageData_.find(assetPath);
-    if (embedded != embeddedImageData_.end()) {
-        encoded = embedded->second;
-    } else {
-        if (assetManager_ == nullptr) return false;
-        AAsset* asset = AAssetManager_open(assetManager_, assetPath.c_str(), AASSET_MODE_BUFFER);
-        if (asset == nullptr) {
+void Renderer::uploadPreparedObjAsset(const std::string& assetPath, CpuObjModel cpuModel) {
+    ImportedModel model{};
+    model.parts.reserve(cpuModel.parts.size());
+    std::size_t totalVertices = 0;
+    for (CpuObjPart& cpuPart : cpuModel.parts) {
+        ImportedPart part{};
+        part.objectName = std::move(cpuPart.objectName);
+        part.groupName = std::move(cpuPart.groupName);
+        part.material = std::move(cpuPart.material);
+        part.hasMaterial = cpuPart.hasMaterial;
+        part.mesh = uploadMesh(cpuPart.vertices);
+        if (part.mesh.vao == 0) {
+            for (ImportedPart& uploaded : model.parts) {
+                if (uploaded.mesh.vao != 0) glDeleteVertexArrays(1, &uploaded.mesh.vao);
+                if (uploaded.mesh.vbo != 0) glDeleteBuffers(1, &uploaded.mesh.vbo);
+            }
+            failedMeshAssets_.insert(assetPath);
             __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                    "Texture asset not found: %s", assetPath.c_str());
-            return false;
+                    "Could not upload OBJ submesh from %s", assetPath.c_str());
+            loadSceneAssets();
+            return;
         }
-        constexpr off_t kMaximumAssetBytes = 64 * 1024 * 1024;
-        const off_t length = AAsset_getLength(asset);
-        if (length <= 0 || length > kMaximumAssetBytes) {
-            AAsset_close(asset);
-            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                    "Texture asset has invalid size: %s", assetPath.c_str());
-            return false;
-        }
-        encoded.resize(static_cast<std::size_t>(length));
-        std::size_t bytesRead = 0;
-        while (bytesRead < encoded.size()) {
-            const int count = AAsset_read(asset, encoded.data() + bytesRead,
-                                          encoded.size() - bytesRead);
-            if (count <= 0) break;
-            bytesRead += static_cast<std::size_t>(count);
-        }
-        AAsset_close(asset);
-        if (bytesRead != encoded.size()) return false;
+        totalVertices += cpuPart.vertices.size();
+        model.parts.push_back(std::move(part));
     }
+    importedMeshes_[assetPath] = std::move(model);
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+            "Loaded OBJ %s (%zu triangle vertices, %zu material submeshes)",
+            assetPath.c_str(), totalVertices, importedMeshes_[assetPath].parts.size());
+    loadSceneAssets();
+}
 
-    ImageRgba8 image;
-    std::string error;
-    if (!decodeImage(encoded, image, error)) {
-        __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "Image decode failed for %s: %s", assetPath.c_str(), error.c_str());
-        return false;
-    }
+bool Renderer::uploadImageAsset(const std::string& assetPath, const ImageRgba8& image,
+                                GLuint& texture) {
+    texture = 0;
     GLint maximumTextureSize = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximumTextureSize);
-    if (maximumTextureSize <= 0 || image.width > static_cast<std::uint32_t>(maximumTextureSize)
+    if (maximumTextureSize <= 0 || image.width == 0U || image.height == 0U
+            || image.width > static_cast<std::uint32_t>(maximumTextureSize)
             || image.height > static_cast<std::uint32_t>(maximumTextureSize)) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
                 "Texture %s exceeds device texture limits", assetPath.c_str());
@@ -1366,6 +1355,91 @@ bool Renderer::loadImageAsset(const std::string& assetPath, GLuint& texture) {
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
             "Loaded image %s (%u x %u)", assetPath.c_str(), image.width, image.height);
     return true;
+}
+
+void Renderer::requestTextureDecode(const std::string& assetPath) {
+    if (assetPath.empty() || pendingTextureAssets_.find(assetPath) != pendingTextureAssets_.end()
+            || failedTextureAssets_.find(assetPath) != failedTextureAssets_.end()
+            || textures_.find(assetPath) != textures_.end()) return;
+
+    std::string embeddedBytes;
+    const auto embedded = embeddedImageData_.find(assetPath);
+    if (embedded != embeddedImageData_.end()) embeddedBytes = embedded->second;
+    AAssetManager* manager = assetManager_;
+    if (!pendingTextureAssets_.insert(assetPath).second) return;
+    const std::string key = "image:" + assetPath;
+    const bool queued = asyncAssetTasks_.submit(key,
+            [this, manager, assetPath, encoded = std::move(embeddedBytes)]() mutable {
+        ImageRgba8 image;
+        std::string error;
+        bool success = false;
+        std::string bytes = std::move(encoded);
+        try {
+            if (bytes.empty()) {
+                if (manager == nullptr || !safeRelativeAssetPath(assetPath)) {
+                    error = "invalid texture asset path or manager";
+                } else {
+                    AAsset* asset = AAssetManager_open(manager, assetPath.c_str(),
+                                                       AASSET_MODE_BUFFER);
+                    if (asset == nullptr) {
+                        error = "texture asset not found";
+                    } else {
+                        constexpr off_t kMaximumAssetBytes = 64 * 1024 * 1024;
+                        const off_t length = AAsset_getLength(asset);
+                        if (length <= 0 || length > kMaximumAssetBytes) {
+                            error = "texture asset has invalid size";
+                        } else {
+                            bytes.resize(static_cast<std::size_t>(length));
+                            std::size_t bytesRead = 0;
+                            while (bytesRead < bytes.size()) {
+                                const int count = AAsset_read(asset, bytes.data() + bytesRead,
+                                                              bytes.size() - bytesRead);
+                                if (count <= 0) break;
+                                bytesRead += static_cast<std::size_t>(count);
+                            }
+                            if (bytesRead != bytes.size()) error = "incomplete texture read";
+                        }
+                        AAsset_close(asset);
+                    }
+                }
+            }
+            if (error.empty()) success = decodeImage(bytes, image, error);
+        } catch (const std::exception& exception) {
+            error = exception.what();
+        } catch (...) {
+            error = "unknown exception while decoding image";
+        }
+        return [this, assetPath, success, error = std::move(error),
+                image = std::move(image)]() mutable {
+            pendingTextureAssets_.erase(assetPath);
+            if (!success) {
+                failedTextureAssets_.insert(assetPath);
+                __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                        "Image decode failed for %s: %s", assetPath.c_str(), error.c_str());
+                loadSceneAssets();
+                return;
+            }
+            GLuint texture = 0;
+            if (uploadImageAsset(assetPath, image, texture)) {
+                textures_[assetPath] = texture;
+            } else {
+                failedTextureAssets_.insert(assetPath);
+            }
+            loadSceneAssets();
+        };
+    });
+    if (!queued) {
+        pendingTextureAssets_.erase(assetPath);
+    }
+}
+
+void Renderer::processAssetTasks() {
+    assetCompletionsScratch_.clear();
+    asyncAssetTasks_.poll(assetCompletionsScratch_, 1U);
+    for (AsyncAssetTaskQueue::Completion& completion : assetCompletionsScratch_) {
+        if (completion) completion();
+    }
+    assetCompletionsScratch_.clear();
 }
 
 Renderer::Mesh Renderer::makeSphere(int latitudeSegments, int longitudeSegments) {
@@ -1857,6 +1931,12 @@ std::string Renderer::gameStatusText() const {
 }
 
 void Renderer::releaseSceneAssets() {
+    asyncAssetTasks_.cancelAll();
+    pendingMeshAssets_.clear();
+    failedMeshAssets_.clear();
+    pendingTextureAssets_.clear();
+    failedTextureAssets_.clear();
+    embeddedImageData_.clear();
     for (auto& entry : importedMeshes_) {
         for (ImportedPart& part : entry.second.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -1939,14 +2019,58 @@ void Renderer::loadSceneAssets() {
         mesh = importedMeshes_.erase(mesh);
     }
 
+    for (auto pending = pendingMeshAssets_.begin(); pending != pendingMeshAssets_.end();) {
+        if (requiredMeshes.find(*pending) != requiredMeshes.end()) {
+            ++pending;
+            continue;
+        }
+        asyncAssetTasks_.cancel("obj:" + *pending);
+        pending = pendingMeshAssets_.erase(pending);
+    }
+    for (auto failed = failedMeshAssets_.begin(); failed != failedMeshAssets_.end();) {
+        if (requiredMeshes.find(*failed) != requiredMeshes.end()) ++failed;
+        else failed = failedMeshAssets_.erase(failed);
+    }
     for (const std::string& meshPath : requiredMeshes) {
-        if (importedMeshes_.find(meshPath) != importedMeshes_.end()) continue;
-        ImportedModel model{};
+        if (importedMeshes_.find(meshPath) != importedMeshes_.end()
+                || pendingMeshAssets_.find(meshPath) != pendingMeshAssets_.end()
+                || failedMeshAssets_.find(meshPath) != failedMeshAssets_.end()) continue;
         const bool isGlb = meshPath.size() >= 4U
                 && meshPath.compare(meshPath.size() - 4U, 4U, ".glb") == 0;
-        const bool loaded = isGlb ? loadGlbAsset(meshPath, model)
-                                  : loadObjAsset(meshPath, model);
-        if (loaded) importedMeshes_.emplace(meshPath, std::move(model));
+        if (isGlb) {
+            ImportedModel model{};
+            if (loadGlbAsset(meshPath, model)) importedMeshes_.emplace(meshPath, std::move(model));
+            else failedMeshAssets_.insert(meshPath);
+            continue;
+        }
+        if (!pendingMeshAssets_.insert(meshPath).second) continue;
+        AAssetManager* manager = assetManager_;
+        const bool queued = asyncAssetTasks_.submit("obj:" + meshPath,
+                [this, manager, meshPath]() {
+            CpuObjModel model;
+            std::string error;
+            bool success = false;
+            try {
+                success = prepareObjAsset(manager, meshPath, model, error);
+            } catch (const std::exception& exception) {
+                error = exception.what();
+            } catch (...) {
+                error = "unknown exception while preparing OBJ";
+            }
+            return [this, meshPath, success, error = std::move(error),
+                    model = std::move(model)]() mutable {
+                pendingMeshAssets_.erase(meshPath);
+                if (!success) {
+                    failedMeshAssets_.insert(meshPath);
+                    __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                            "Could not prepare OBJ %s: %s", meshPath.c_str(), error.c_str());
+                    loadSceneAssets();
+                    return;
+                }
+                uploadPreparedObjAsset(meshPath, std::move(model));
+            };
+        });
+        if (!queued) pendingMeshAssets_.erase(meshPath);
     }
 
     for (Entity& entity : activeScene().entities()) {
@@ -1978,6 +2102,18 @@ void Renderer::loadSceneAssets() {
             embedded = embeddedImageData_.erase(embedded);
         }
     }
+    for (auto pending = pendingTextureAssets_.begin(); pending != pendingTextureAssets_.end();) {
+        if (requiredTextures.find(*pending) != requiredTextures.end()) {
+            ++pending;
+            continue;
+        }
+        asyncAssetTasks_.cancel("image:" + *pending);
+        pending = pendingTextureAssets_.erase(pending);
+    }
+    for (auto failed = failedTextureAssets_.begin(); failed != failedTextureAssets_.end();) {
+        if (requiredTextures.find(*failed) != requiredTextures.end()) ++failed;
+        else failed = failedTextureAssets_.erase(failed);
+    }
     for (auto texture = textures_.begin(); texture != textures_.end();) {
         if (requiredTextures.find(texture->first) != requiredTextures.end()) {
             ++texture;
@@ -1986,11 +2122,7 @@ void Renderer::loadSceneAssets() {
         if (texture->second != 0) glDeleteTextures(1, &texture->second);
         texture = textures_.erase(texture);
     }
-    for (const std::string& assetPath : requiredTextures) {
-        if (textures_.find(assetPath) != textures_.end()) continue;
-        GLuint texture = 0;
-        if (loadImageAsset(assetPath, texture)) textures_.emplace(assetPath, texture);
-    }
+    for (const std::string& assetPath : requiredTextures) requestTextureDecode(assetPath);
 }
 
 int Renderer::sampleAssetStatus() const {
@@ -2475,10 +2607,17 @@ void Renderer::renderBloom() {
 
 Renderer::~Renderer() {
     adventureGame_.setZoneSceneReader({});
+    asyncAssetTasks_.cancelAll();
 }
 
 void Renderer::initialize(AAssetManager* assetManager) {
-    // Join any previous asset worker before changing its captured manager source.
+    // Join previous CPU asset work before changing its captured manager source.
+    asyncAssetTasks_.cancelAll();
+    asyncAssetTasks_.waitUntilIdle(std::chrono::seconds(10));
+    pendingMeshAssets_.clear();
+    failedMeshAssets_.clear();
+    pendingTextureAssets_.clear();
+    failedTextureAssets_.clear();
     adventureGame_.setZoneSceneReader({});
     assetManager_ = assetManager;
     adventureGame_.setZoneSceneReader([this](const std::string& assetPath,
@@ -2841,6 +2980,9 @@ void Renderer::render(float deltaSeconds) {
         return;
     }
 
+    // Consume at most one CPU result per frame. Completion callbacks own all
+    // OpenGL work and therefore always run on the renderer thread.
+    processAssetTasks();
     const float dt = std::clamp(deltaSeconds, 0.0f, 0.05f);
     synchronizeSkeletalClipDurations(activeScene());
     if (projectRuntime_.loaded()) projectRuntime_.update(dt);
