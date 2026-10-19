@@ -64,9 +64,9 @@ public:
     int rendererTier() const {
         return fallbackRenderer_ ? 0 : csmShaderSupported_ ? 2 : 1;
     }
-    // 0 = sample OBJ is not referenced by the active scene, 1 = fallback,
-    // 2 = mesh loaded, 3 = mesh, MTL material and referenced maps loaded.
-    int sampleAssetStatus() const;
+    // 0 = no imported assets, 1 = mesh pending/fallback, 2 = mesh ready but
+    // texture maps pending, 3 = all referenced assets ready, 4 = asset failure.
+    int sceneAssetStatus() const;
 
 private:
     struct Mesh {

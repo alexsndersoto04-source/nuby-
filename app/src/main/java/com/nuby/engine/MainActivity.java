@@ -61,7 +61,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
     private static native int nativeRendererTier();
-    private static native int nativeSampleAssetStatus();
+    private static native int nativeSceneAssetStatus();
     private static native String nativeLoadProject(String descriptorAssetPath);
     private static native boolean nativeUnloadProject();
     private static native String[] nativeSaveEditorProject();
@@ -552,12 +552,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 : rendererTier == 1 ? "PBR NO CSM"
                 : nativeShadowsEnabled() ? "SHADOWS ON" : "SHADOWS OFF";
         postStatus = nativePostProcessingEnabled() ? "BLOOM ON" : "BLOOM OFF";
-        switch (nativeSampleAssetStatus()) {
-            case 1: meshStatus = "MESH FALLBACK"; break;
-            case 2: meshStatus = "MESH ON"; break;
-            case 3: meshStatus = "OBJ+MTL ON"; break;
-            default: meshStatus = "OBJ N/A"; break;
-        }
+
     }
 
     @Override
@@ -579,7 +574,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
             final String currentGameStatus = nativeGameStatus();
             final String currentEditorSelection = activeDemoMode == 3
                     ? nativeEditorSelectionStatus() : "";
+            final String currentMeshStatus = assetStatusLabel(nativeSceneAssetStatus());
             runOnUiThread(() -> {
+                meshStatus = currentMeshStatus;
                 if (telemetry != null) telemetry.setText(
                         String.format(Locale.US, "%d FPS  ·  %s  ·  %s  ·  %s  ·  %s",
                                 fps, gpuName, shadowStatus, postStatus, meshStatus));
@@ -612,6 +609,16 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     protected void onPause() {
         if (surface != null) surface.onPause();
         super.onPause();
+    }
+
+    private static String assetStatusLabel(int status) {
+        switch (status) {
+            case 1: return "MESH LOADING";
+            case 2: return "TEXTURE LOADING";
+            case 3: return "ASSETS READY";
+            case 4: return "ASSET ERROR";
+            default: return "ASSETS N/A";
+        }
     }
 
     private void applyImmersiveMode() {

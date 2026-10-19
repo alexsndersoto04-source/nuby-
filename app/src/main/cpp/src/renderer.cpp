@@ -2179,42 +2179,51 @@ void Renderer::loadSceneAssets() {
     for (const std::string& assetPath : requiredTextures) requestTextureDecode(assetPath);
 }
 
-int Renderer::sampleAssetStatus() const {
-    if (projectRuntime_.loaded()) return 0;
-    bool sampleReferenced = false;
-    for (const Entity& entity : activeScene().entities()) {
-        if (entity.visible && entity.primitive == Primitive::ImportedMesh
-                && projectAssetPath(entity.meshAsset) == "meshes/orbital_shard.obj") {
-            sampleReferenced = true;
-            break;
-        }
-    }
-    if (!sampleReferenced) return 0;
-
-    const auto imported = importedMeshes_.find(projectAssetPath("meshes/orbital_shard.obj"));
-    if (imported == importedMeshes_.end() || imported->second.parts.empty()) return 1;
-    for (const ImportedPart& part : imported->second.parts) {
-        if (!part.hasMaterial) continue;
+int Renderer::sceneAssetStatus() const {
+    bool hasImportedAssets = false;
+    bool missingMesh = false;
+    bool missingTexture = false;
+    bool failed = false;
+    const auto inspectMaterial = [this, &missingTexture, &failed](const Material& material) {
         const std::array<const std::string*, 8> paths{{
-                &part.material.albedoTexture,
-                &part.material.normalTexture,
-                &part.material.metallicRoughnessTexture,
-                &part.material.occlusionTexture,
-                &part.material.metallicTexture,
-                &part.material.roughnessTexture,
-                &part.material.opacityTexture,
-                &part.material.emissiveTexture
+                &material.albedoTexture,
+                &material.normalTexture,
+                &material.metallicRoughnessTexture,
+                &material.occlusionTexture,
+                &material.metallicTexture,
+                &material.roughnessTexture,
+                &material.opacityTexture,
+                &material.emissiveTexture
         }};
-        bool texturesAvailable = true;
         for (const std::string* path : paths) {
-            if (!path->empty() && textures_.find(*path) == textures_.end()) {
-                texturesAvailable = false;
-                break;
-            }
+            if (path->empty()) continue;
+            const std::string assetPath = projectAssetPath(*path);
+            if (assetPath.empty() || textures_.find(assetPath) != textures_.end()) continue;
+            missingTexture = true;
+            if (failedTextureAssets_.find(assetPath) != failedTextureAssets_.end()) failed = true;
         }
-        if (texturesAvailable) return 3;
+    };
+
+    for (const Entity& entity : activeScene().entities()) {
+        inspectMaterial(entity.material);
+        if (entity.primitive != Primitive::ImportedMesh || entity.meshAsset.empty()) continue;
+        hasImportedAssets = true;
+        const std::string meshPath = projectAssetPath(entity.meshAsset);
+        const auto imported = importedMeshes_.find(meshPath);
+        if (imported == importedMeshes_.end() || imported->second.parts.empty()) {
+            missingMesh = true;
+            if (failedMeshAssets_.find(meshPath) != failedMeshAssets_.end()) failed = true;
+            continue;
+        }
+        for (const ImportedPart& part : imported->second.parts) {
+            if (part.hasMaterial) inspectMaterial(part.material);
+        }
     }
-    return 2;
+    if (failed) return 4;
+    if (!hasImportedAssets) return 0;
+    if (missingMesh) return 1;
+    if (missingTexture) return 2;
+    return 3;
 }
 
 const Renderer::Mesh* Renderer::meshFor(const Entity& entity) const {
