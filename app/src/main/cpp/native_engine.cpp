@@ -197,6 +197,31 @@ Java_com_nuby_engine_MainActivity_nativeRestartGame(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeSaveAdventureProgress(JNIEnv* env, jclass) {
+    if (!gRenderer) return nullptr;
+    std::string serialized;
+    std::string error;
+    if (!gRenderer->saveAdventureProgress(serialized, error)) return nullptr;
+    return env->NewStringUTF(serialized.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeLoadAdventureProgress(
+        JNIEnv* env, jclass, jstring serializedValue) {
+    if (!gRenderer || serializedValue == nullptr) {
+        return env->NewStringUTF("SAVE UNAVAILABLE");
+    }
+    const char* serializedChars = env->GetStringUTFChars(serializedValue, nullptr);
+    if (serializedChars == nullptr) return nullptr;
+    const std::string serialized(serializedChars);
+    env->ReleaseStringUTFChars(serializedValue, serializedChars);
+    std::string error;
+    const bool loaded = gRenderer->loadAdventureProgress(serialized, error);
+    const std::string status = loaded ? "PROGRESS RESTORED" : "SAVE REJECTED · " + error;
+    return env->NewStringUTF(status.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_nuby_engine_MainActivity_nativeGameStatus(JNIEnv* env, jclass) {
     const std::string status = gRenderer ? gRenderer->gameStatusText() : std::string{};
     return env->NewStringUTF(status.c_str());

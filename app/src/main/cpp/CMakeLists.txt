@@ -7,6 +7,7 @@ add_library(nuby-engine SHARED
     src/async_asset_task_queue.cpp
     src/async_scene_asset_loader.cpp
     src/adventure_game.cpp
+    src/adventure_save.cpp
     src/game_project.cpp
     src/game_project_runtime.cpp
     src/frame_timing.cpp

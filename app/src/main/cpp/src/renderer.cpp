@@ -2125,6 +2125,26 @@ void Renderer::restartGame() {
     else if (adventureMode_) adventureGame_.start(scene_);
 }
 
+bool Renderer::saveAdventureProgress(std::string& serialized, std::string& error) const {
+    if (!adventureMode_) {
+        error = "adventure mode is not active";
+        return false;
+    }
+    AdventureSaveData data;
+    return adventureGame_.saveData(scene_, data, error)
+            && serializeAdventureSave(data, serialized, error);
+}
+
+bool Renderer::loadAdventureProgress(const std::string& serialized, std::string& error) {
+    if (!adventureMode_) {
+        error = "adventure mode is not active";
+        return false;
+    }
+    AdventureSaveData data;
+    if (!parseAdventureSave(serialized, data, error)) return false;
+    return adventureGame_.loadData(scene_, data, error);
+}
+
 std::string Renderer::gameStatusText() const {
     if (gameMode_) return sampleGame_.statusText();
     if (adventureMode_) return adventureGame_.statusText();

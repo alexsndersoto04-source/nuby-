@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nuby/adventure_save.hpp"
 #include "nuby/async_scene_asset_loader.hpp"
 #include "nuby/scene.hpp"
 #include "nuby/world_streaming.hpp"
@@ -43,6 +44,8 @@ public:
     int relicsCollected() const { return relicsCollected_; }
     std::uint32_t playerId() const { return playerId_; }
     std::string statusText() const;
+    bool saveData(const Scene& scene, AdventureSaveData& output, std::string& error) const;
+    bool loadData(Scene& scene, const AdventureSaveData& data, std::string& error);
 
 private:
     void buildScene(Scene& scene);
@@ -56,6 +59,7 @@ private:
     std::uint32_t cameraId_ = 0;
     std::uint32_t gateTriggerId_ = 0;
     std::vector<std::uint32_t> relicIds_;
+    std::array<std::uint32_t, static_cast<std::size_t>(kRelicGoal)> relicEntityIds_{};
     std::array<float, 2> moveInput_{0.0f, 0.0f};
     std::vector<std::vector<std::uint32_t>> streamedZoneEntityIds_;
     std::vector<WorldZoneDefinition> zoneDefinitions_;
@@ -70,6 +74,7 @@ private:
     std::size_t zoneLoadFailureCount_ = 0;
     WorldZoneStreamer worldZoneStreamer_;
     int relicsCollected_ = 0;
+    std::uint8_t collectedRelicMask_ = 0U;
     bool completed_ = false;
 };
 

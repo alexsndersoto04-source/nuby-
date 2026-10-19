@@ -468,6 +468,45 @@ void testMovementJumpAndCameraFollow() {
            "jump input raises the player above the courtyard floor");
 }
 
+void testAdventureProgressCanBeSavedAndRestoredIntoANewSession() {
+    nuby::AdventureGame original;
+    nuby::Scene originalScene;
+    original.start(originalScene);
+    movePlayerTo(originalScene, original.playerId(), -2.15f, -3.0f);
+    advance(original, originalScene, 1);
+
+    nuby::AdventureSaveData save;
+    std::string error;
+    expect(original.relicsCollected() == 1
+                   && original.saveData(originalScene, save, error)
+                   && save.collectedRelicMask == 0x01U,
+           "adventure snapshot captures the collected relic and player progress");
+
+    nuby::AdventureGame resumed;
+    nuby::Scene resumedScene;
+    resumed.start(resumedScene);
+    const std::uint32_t resumedFirstRelic = findEntityId(resumedScene, "Sun Relic 1");
+    expect(resumed.loadData(resumedScene, save, error),
+           "valid saved progress restores into a freshly built adventure");
+    const nuby::Entity* player = resumedScene.find(resumed.playerId());
+    expect(resumed.relicsCollected() == 1
+                   && resumedScene.find(resumedFirstRelic) == nullptr
+                   && player != nullptr && std::fabs(player->transform.position[0] + 2.15f) < 0.001f
+                   && std::fabs(player->transform.position[2] + 3.0f) < 0.001f,
+           "restored session positions the player and keeps collected relics removed");
+
+    movePlayerTo(resumedScene, resumed.playerId(), 2.05f, -5.8f);
+    advance(resumed, resumedScene, 1);
+    expect(resumed.relicsCollected() == 2,
+           "resumed session continues collecting remaining relics normally");
+
+    resumed.start(resumedScene);
+    nuby::AdventureSaveData resetSave;
+    expect(resumed.saveData(resumedScene, resetSave, error)
+                   && resetSave.collectedRelicMask == 0U && !resetSave.completed,
+           "explicit restart clears every persisted objective flag");
+}
+
 void testRelicsUnlockTheGateAndRestartResetsProgress() {
     nuby::AdventureGame game;
     nuby::Scene scene;
@@ -524,6 +563,7 @@ int main() {
     testAdventureCancelsZoneReadAfterLeavingItsResidencyRange();
     testMissingZoneSceneFallsBackWithoutBreakingAdventure();
     testMovementJumpAndCameraFollow();
+    testAdventureProgressCanBeSavedAndRestoredIntoANewSession();
     testRelicsUnlockTheGateAndRestartResetsProgress();
     if (failures != 0) {
         std::cerr << failures << " adventure game test(s) failed\n";

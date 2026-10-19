@@ -43,6 +43,8 @@ public:
     void setAdventureMoveInput(float horizontal, float forward);
     void jumpAdventureCharacter();
     void restartGame();
+    bool saveAdventureProgress(std::string& serialized, std::string& error) const;
+    bool loadAdventureProgress(const std::string& serialized, std::string& error);
     bool loadProject(const std::string& descriptorAssetPath);
     void unloadProject();
     bool saveEditorProject(std::string& descriptorText, std::string& sceneText,

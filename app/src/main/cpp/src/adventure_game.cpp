@@ -69,6 +69,7 @@ void AdventureGame::buildScene(Scene& scene) {
     }};
     relicIds_.clear();
     relicIds_.reserve(relicPositions.size());
+    relicEntityIds_.fill(0U);
     for (std::size_t index = 0; index < relicPositions.size(); ++index) {
         Entity& relic = scene.create("Sun Relic " + std::to_string(index + 1),
                                      Primitive::Sphere);
@@ -90,6 +91,7 @@ void AdventureGame::buildScene(Scene& scene) {
         relic.material.normalTexture = "textures/sun_relic_normal.tga";
         relic.material.metallicRoughnessTexture = "textures/sun_relic_metal_rough.tga";
         relicIds_.push_back(relic.id);
+        relicEntityIds_[index] = relic.id;
     }
 
     Entity& gate = scene.create("Sun Gate", Primitive::Torus);
@@ -343,6 +345,7 @@ void AdventureGame::start(Scene& scene) {
     buildScene(scene);
     moveInput_ = {0.0f, 0.0f};
     relicsCollected_ = 0;
+    collectedRelicMask_ = 0U;
     completed_ = false;
 }
 
@@ -434,7 +437,15 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
         if (collectedCount < collected.size()) collected[collectedCount++] = otherId;
     }
     for (std::size_t index = 0; index < collectedCount; ++index) {
-        if (scene.destroyEntity(collected[index])) ++relicsCollected_;
+        if (!scene.destroyEntity(collected[index])) continue;
+        const auto relic = std::find(relicEntityIds_.begin(), relicEntityIds_.end(),
+                                     collected[index]);
+        if (relic == relicEntityIds_.end()) continue;
+        const std::size_t slot = static_cast<std::size_t>(
+                std::distance(relicEntityIds_.begin(), relic));
+        collectedRelicMask_ = static_cast<std::uint8_t>(
+                collectedRelicMask_ | static_cast<std::uint8_t>(1U << slot));
+        ++relicsCollected_;
     }
     relicIds_.erase(std::remove_if(relicIds_.begin(), relicIds_.end(),
             [&collected, collectedCount](std::uint32_t id) {
@@ -450,6 +461,76 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
         completed_ = dx * dx + dz * dz <= 1.8f * 1.8f;
         if (completed_) moveInput_ = {0.0f, 0.0f};
     }
+}
+
+bool AdventureGame::saveData(const Scene& scene, AdventureSaveData& output,
+                             std::string& error) const {
+    const Entity* player = scene.find(playerId_);
+    const Entity* camera = scene.find(cameraId_);
+    if (player == nullptr || camera == nullptr) {
+        error = "adventure player or camera is unavailable";
+        return false;
+    }
+    AdventureSaveData candidate;
+    candidate.playerX = player->transform.position[0];
+    candidate.playerZ = player->transform.position[2];
+    candidate.playerYaw = player->transform.rotation[1];
+    candidate.cameraYaw = camera->orbitCamera.yaw;
+    candidate.cameraPitch = camera->orbitCamera.pitch;
+    candidate.collectedRelicMask = collectedRelicMask_;
+    candidate.completed = completed_;
+    if (!validateAdventureSaveData(candidate, error)) return false;
+    output = candidate;
+    error.clear();
+    return true;
+}
+
+bool AdventureGame::loadData(Scene& scene, const AdventureSaveData& data,
+                             std::string& error) {
+    if (!validateAdventureSaveData(data, error)) return false;
+    Entity* player = scene.find(playerId_);
+    Entity* camera = scene.find(cameraId_);
+    if (player == nullptr || camera == nullptr) {
+        error = "adventure player or camera is unavailable";
+        return false;
+    }
+    for (std::size_t slot = 0U; slot < relicEntityIds_.size(); ++slot) {
+        if ((data.collectedRelicMask & static_cast<std::uint8_t>(1U << slot)) == 0U) {
+            continue;
+        }
+        if (relicEntityIds_[slot] == 0U || scene.find(relicEntityIds_[slot]) == nullptr) {
+            error = "adventure relic layout does not match the save";
+            return false;
+        }
+    }
+
+    player->transform.position[0] = data.playerX;
+    player->transform.position[1] = kPlayerCenterHeight;
+    player->transform.position[2] = data.playerZ;
+    player->transform.rotation[1] = std::remainder(data.playerYaw, 6.2831853071795864769f);
+    player->rigidbody.velocity = {0.0f, 0.0f, 0.0f};
+    camera->orbitCamera.yaw = std::remainder(data.cameraYaw, 6.2831853071795864769f);
+    camera->orbitCamera.pitch = data.cameraPitch;
+    camera->orbitCamera.target = {data.playerX, kPlayerCenterHeight + 0.36f,
+                                  data.playerZ};
+    collectedRelicMask_ = data.collectedRelicMask;
+    relicsCollected_ = 0;
+    for (std::size_t slot = 0U; slot < relicEntityIds_.size(); ++slot) {
+        if ((collectedRelicMask_ & static_cast<std::uint8_t>(1U << slot)) == 0U) continue;
+        ++relicsCollected_;
+        scene.destroyEntity(relicEntityIds_[slot]);
+    }
+    relicIds_.erase(std::remove_if(relicIds_.begin(), relicIds_.end(), [this](std::uint32_t id) {
+        const auto found = std::find(relicEntityIds_.begin(), relicEntityIds_.end(), id);
+        if (found == relicEntityIds_.end()) return true;
+        const std::size_t slot = static_cast<std::size_t>(
+                std::distance(relicEntityIds_.begin(), found));
+        return (collectedRelicMask_ & static_cast<std::uint8_t>(1U << slot)) != 0U;
+    }), relicIds_.end());
+    completed_ = data.completed;
+    moveInput_ = {0.0f, 0.0f};
+    error.clear();
+    return true;
 }
 
 std::string AdventureGame::statusText() const {

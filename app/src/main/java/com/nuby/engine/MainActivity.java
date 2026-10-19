@@ -48,6 +48,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private volatile boolean adventureMode = false;
     private volatile int activeDemoMode = 0;
     private volatile boolean gameFinished = false;
+    private volatile String savedAdventureProgress;
+    private long lastAdventureAutosaveNanos = 0L;
     private float density;
     private long lastFrameNanos = 0L;
     private long fpsWindowStartNanos = 0L;
@@ -81,6 +83,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native void nativeAdventureMove(float horizontal, float forward);
     private static native void nativeAdventureJump();
     private static native void nativeRestartGame();
+    private static native String nativeSaveAdventureProgress();
+    private static native String nativeLoadAdventureProgress(String serialized);
     private static native String nativeGameStatus();
     private static native void nativeResize(int width, int height);
     private static native void nativeFrame(float deltaSeconds);
@@ -91,6 +95,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         density = getResources().getDisplayMetrics().density;
+        savedAdventureProgress = readSavedAdventureProgress();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applyImmersiveMode();
 
@@ -312,21 +317,35 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     }
 
     private void setActiveDemoMode(int selectedMode) {
+        final int previousMode = activeDemoMode;
+        final String savedAdventure = selectedMode == 2 ? savedAdventureProgress : null;
         activeDemoMode = selectedMode;
         gameMode = selectedMode == 1 || selectedMode == 2;
         adventureMode = selectedMode == 2;
         gameFinished = false;
         final String[] savedProject = selectedMode == 3 ? readSavedEditorProject() : null;
         surface.queueEvent(() -> {
+            final String latestAdventure = previousMode == 2
+                    ? saveAdventureProgressFromGlThread() : null;
             nativeSetDemoMode(selectedMode);
+            String restore = latestAdventure != null ? latestAdventure : savedAdventure;
+            String restoreStatus = "";
+            if (selectedMode == 2 && restore != null) {
+                restoreStatus = nativeLoadAdventureProgress(restore);
+            }
             if (selectedMode == 3 && savedProject != null) {
                 nativeLoadEditorProject(savedProject[0], savedProject[1]);
             }
             final String selection = selectedMode == 3
                     ? nativeEditorSelectionStatus() : "";
+            final String finalRestoreStatus = restoreStatus;
             runOnUiThread(() -> {
                 if (editorSelection != null && selectedMode == 3) {
                     editorSelection.setText(selection);
+                }
+                if (selectedMode == 2 && (finalRestoreStatus.startsWith("PROGRESS RESTORED")
+                        || finalRestoreStatus.startsWith("SAVE REJECTED")) && hint != null) {
+                    hint.setText(finalRestoreStatus);
                 }
             });
         });
@@ -367,6 +386,35 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 if (editorSelection != null) editorSelection.setText(selection);
             });
         });
+    }
+
+    private File adventureSaveFile() {
+        return new File(getFilesDir(), "nuby-adventure/sun_ruins.save");
+    }
+
+    private String readSavedAdventureProgress() {
+        File save = adventureSaveFile();
+        if (!save.isFile()) return null;
+        try {
+            return readTextFile(save, 4096);
+        } catch (IOException exception) {
+            return null;
+        }
+    }
+
+    private String saveAdventureProgressFromGlThread() {
+        final String serialized = nativeSaveAdventureProgress();
+        if (serialized == null || serialized.isEmpty()
+                || serialized.equals(savedAdventureProgress)) return serialized;
+        runOnUiThread(() -> {
+            try {
+                writeTextFileAtomically(adventureSaveFile(), serialized);
+                savedAdventureProgress = serialized;
+            } catch (IOException exception) {
+                if (hint != null) hint.setText("AUTOSAVE FAILED · " + exception.getMessage());
+            }
+        });
+        return serialized;
     }
 
     private File editorProjectDirectory() {
@@ -536,7 +584,9 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
         nativeCreate(getAssets());
         if (activeDemoMode != 0) {
             nativeSetDemoMode(activeDemoMode);
-            if (activeDemoMode == 3) {
+            if (activeDemoMode == 2 && savedAdventureProgress != null) {
+                nativeLoadAdventureProgress(savedAdventureProgress);
+            } else if (activeDemoMode == 3) {
                 String[] savedProject = readSavedEditorProject();
                 if (savedProject != null) nativeLoadEditorProject(savedProject[0], savedProject[1]);
             }
@@ -565,6 +615,11 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 : Math.min((now - lastFrameNanos) / 1_000_000_000.0f, 0.05f);
         lastFrameNanos = now;
         nativeFrame(deltaSeconds);
+        if (adventureMode && (lastAdventureAutosaveNanos == 0L
+                || now - lastAdventureAutosaveNanos >= 3_000_000_000L)) {
+            lastAdventureAutosaveNanos = now;
+            saveAdventureProgressFromGlThread();
+        }
 
         framesInWindow++;
         if (fpsWindowStartNanos == 0L) fpsWindowStartNanos = now;
@@ -613,7 +668,10 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
 
     @Override
     protected void onPause() {
-        if (surface != null) surface.onPause();
+        if (surface != null) {
+            if (adventureMode) surface.queueEvent(this::saveAdventureProgressFromGlThread);
+            surface.onPause();
+        }
         super.onPause();
     }
 
