@@ -77,6 +77,15 @@ jobs:
           tests/sample_game_tests.cpp -o /tmp/nuby-sample-game-tests
           && /tmp/nuby-sample-game-tests
 
+      - name: Compile and run GPU asset memory cache tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/asset_memory_cache.cpp
+          tests/asset_memory_cache_tests.cpp
+          -o /tmp/nuby-asset-memory-cache-tests
+          && /tmp/nuby-asset-memory-cache-tests
+
       - name: Compile and run asynchronous CPU asset queue tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread

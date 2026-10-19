@@ -38,6 +38,13 @@ Java_com_nuby_engine_MainActivity_nativeSceneAssetStatus(JNIEnv*, jclass) {
     return gRenderer ? static_cast<jint>(gRenderer->sceneAssetStatus()) : 0;
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeAssetMemoryStatus(JNIEnv* env, jclass) {
+    const std::string status = gRenderer
+            ? gRenderer->assetMemoryStatusText() : std::string("CACHE ~0MB");
+    return env->NewStringUTF(status.c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeSetGameMode(JNIEnv*, jclass, jboolean enabled) {
     if (gRenderer) gRenderer->setGameMode(enabled == JNI_TRUE);

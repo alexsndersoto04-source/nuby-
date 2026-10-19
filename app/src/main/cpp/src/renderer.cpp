@@ -922,6 +922,7 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
                           reinterpret_cast<const void*>(offsetof(Vertex, uv)));
     glBindVertexArray(0);
     mesh.vertexCount = static_cast<GLsizei>(vertices.size());
+    mesh.gpuBytes = static_cast<std::uint64_t>(vertices.size()) * sizeof(Vertex);
     return mesh;
 }
 
@@ -1016,6 +1017,8 @@ Renderer::Mesh Renderer::uploadSkinnedMesh(const GltfPrimitive& primitive) {
     glBindVertexArray(0);
     mesh.vertexCount = static_cast<GLsizei>(vertices.size());
     mesh.indexCount = static_cast<GLsizei>(primitive.indices.size());
+    mesh.gpuBytes = static_cast<std::uint64_t>(vertices.size()) * sizeof(GpuVertex)
+            + static_cast<std::uint64_t>(primitive.indices.size()) * sizeof(std::uint32_t);
     return mesh;
 }
 
@@ -1091,6 +1094,8 @@ Renderer::Mesh Renderer::uploadStaticGltfMesh(const GltfPrimitive& primitive) {
     glBindVertexArray(0);
     mesh.vertexCount = static_cast<GLsizei>(vertices.size());
     mesh.indexCount = static_cast<GLsizei>(primitive.indices.size());
+    mesh.gpuBytes = static_cast<std::uint64_t>(vertices.size()) * sizeof(GpuVertex)
+            + static_cast<std::uint64_t>(primitive.indices.size()) * sizeof(std::uint32_t);
     return mesh;
 }
 
@@ -1316,6 +1321,8 @@ void Renderer::requestTextureDecode(const std::string& assetPath) {
             GLuint texture = 0;
             if (uploadImageAsset(assetPath, image, texture)) {
                 textures_[assetPath] = texture;
+                const std::uint64_t pixelBytes = static_cast<std::uint64_t>(image.pixels.size());
+                textureGpuBytes_[assetPath] = pixelBytes + pixelBytes / 3U;
             } else {
                 failedTextureAssets_.insert(assetPath);
             }
@@ -1354,6 +1361,7 @@ void Renderer::processPendingGpuUpload() {
     if (pending.nextPrimitive >= primitiveCount) {
         const std::string assetPath = pending.assetPath;
         deleteImportedParts(pending.importedModel);
+        releaseEmbeddedImagesForModel(assetPath);
         pendingGpuUploads_.pop_front();
         pendingMeshAssets_.erase(assetPath);
         failedMeshAssets_.insert(assetPath);
@@ -1392,9 +1400,11 @@ void Renderer::processPendingGpuUpload() {
                         + "/image_" + std::to_string(imageIndex) + ".png";
                 const std::string resolved = projectAssetPath(relative);
                 if (resolved.empty()) return std::string{};
-                if (embeddedImageData_.find(resolved) == embeddedImageData_.end()) {
-                    embeddedImageData_.emplace(resolved,
-                            pending.glbModel.images[static_cast<std::size_t>(imageIndex)].bytes);
+                embeddedImagesByModel_[pending.assetPath].insert(resolved);
+                const std::string& encodedImage =
+                        pending.glbModel.images[static_cast<std::size_t>(imageIndex)].bytes;
+                if (embeddedImageData_.emplace(resolved, encodedImage).second) {
+                    pending.importedModel.retainedCpuBytes += encodedImage.size();
                 }
                 return relative;
             };
@@ -1434,6 +1444,7 @@ void Renderer::processPendingGpuUpload() {
         if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
         const std::string assetPath = pending.assetPath;
         deleteImportedParts(pending.importedModel);
+        releaseEmbeddedImagesForModel(assetPath);
         pendingGpuUploads_.pop_front();
         pendingMeshAssets_.erase(assetPath);
         failedMeshAssets_.insert(assetPath);
@@ -1443,6 +1454,7 @@ void Renderer::processPendingGpuUpload() {
         return;
     }
 
+    pending.importedModel.gpuBytes += part.mesh.gpuBytes;
     pending.importedModel.parts.push_back(std::move(part));
     ++pending.nextPrimitive;
     if (pending.nextPrimitive != primitiveCount) return;
@@ -1475,6 +1487,23 @@ void Renderer::processPendingGpuUpload() {
                 "Loaded static GLB %s (%zu mesh instances)", assetPath.c_str(), partCount);
     }
     loadSceneAssets();
+}
+
+void Renderer::releaseEmbeddedImagesForModel(const std::string& meshPath) {
+    const auto owned = embeddedImagesByModel_.find(meshPath);
+    if (owned == embeddedImagesByModel_.end()) return;
+    for (const std::string& imagePath : owned->second) {
+        bool referencedByAnotherModel = false;
+        for (const auto& modelImages : embeddedImagesByModel_) {
+            if (modelImages.first != meshPath
+                    && modelImages.second.find(imagePath) != modelImages.second.end()) {
+                referencedByAnotherModel = true;
+                break;
+            }
+        }
+        if (!referencedByAnotherModel) embeddedImageData_.erase(imagePath);
+    }
+    embeddedImagesByModel_.erase(owned);
 }
 
 Renderer::Mesh Renderer::makeSphere(int latitudeSegments, int longitudeSegments) {
@@ -1972,6 +2001,9 @@ void Renderer::releaseSceneAssets() {
     pendingTextureAssets_.clear();
     failedTextureAssets_.clear();
     embeddedImageData_.clear();
+    embeddedImagesByModel_.clear();
+    textureGpuBytes_.clear();
+    assetMemoryCache_.clear();
     for (PendingGpuAsset& pending : pendingGpuUploads_) {
         for (ImportedPart& part : pending.importedModel.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
@@ -2049,19 +2081,6 @@ void Renderer::loadSceneAssets() {
         if (!meshPath.empty()) requiredMeshes.insert(meshPath);
     }
 
-    for (auto mesh = importedMeshes_.begin(); mesh != importedMeshes_.end();) {
-        if (requiredMeshes.find(mesh->first) != requiredMeshes.end()) {
-            ++mesh;
-            continue;
-        }
-        for (ImportedPart& part : mesh->second.parts) {
-            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
-            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
-            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
-        }
-        mesh = importedMeshes_.erase(mesh);
-    }
-
     for (auto upload = pendingGpuUploads_.begin(); upload != pendingGpuUploads_.end();) {
         if (requiredMeshes.find(upload->assetPath) != requiredMeshes.end()) {
             ++upload;
@@ -2072,6 +2091,7 @@ void Renderer::loadSceneAssets() {
             if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
             if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
         }
+        releaseEmbeddedImagesForModel(upload->assetPath);
         pendingMeshAssets_.erase(upload->assetPath);
         upload = pendingGpuUploads_.erase(upload);
     }
@@ -2149,13 +2169,57 @@ void Renderer::loadSceneAssets() {
         }
     }
 
-    for (auto embedded = embeddedImageData_.begin(); embedded != embeddedImageData_.end();) {
-        if (requiredTextures.find(embedded->first) != requiredTextures.end()) {
-            ++embedded;
-        } else {
-            embedded = embeddedImageData_.erase(embedded);
+    std::unordered_set<std::string> requiredCacheKeys;
+    requiredCacheKeys.reserve(requiredMeshes.size() + requiredTextures.size());
+    const std::uint64_t lastUse = ++assetUseSequence_;
+    for (const std::string& meshPath : requiredMeshes) {
+        const auto model = importedMeshes_.find(meshPath);
+        if (model == importedMeshes_.end()) continue;
+        const std::string cacheKey = "mesh:" + meshPath;
+        requiredCacheKeys.insert(cacheKey);
+        const std::uint64_t cpuBytes = model->second.retainedCpuBytes;
+        const std::uint64_t gpuBytes = model->second.gpuBytes;
+        const std::uint64_t estimatedBytes = cpuBytes > UINT64_MAX - gpuBytes
+                ? UINT64_MAX : cpuBytes + gpuBytes;
+        assetMemoryCache_.update(cacheKey, estimatedBytes, lastUse);
+    }
+    for (const std::string& texturePath : requiredTextures) {
+        const auto texture = textures_.find(texturePath);
+        if (texture == textures_.end()) continue;
+        const std::string cacheKey = "texture:" + texturePath;
+        requiredCacheKeys.insert(cacheKey);
+        const auto bytes = textureGpuBytes_.find(texturePath);
+        assetMemoryCache_.update(cacheKey,
+                bytes == textureGpuBytes_.end() ? 0U : bytes->second, lastUse);
+    }
+
+    constexpr AssetMemoryCache::ByteCount kUnusedAssetMemoryBudgetBytes = 16U * 1024U * 1024U;
+    const std::vector<std::string> evicted = assetMemoryCache_.evictUnused(
+            requiredCacheKeys, kUnusedAssetMemoryBudgetBytes);
+    for (const std::string& cacheKey : evicted) {
+        if (cacheKey.compare(0U, 5U, "mesh:") == 0) {
+            const std::string meshPath = cacheKey.substr(5U);
+            const auto model = importedMeshes_.find(meshPath);
+            if (model != importedMeshes_.end()) {
+                for (ImportedPart& part : model->second.parts) {
+                    if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
+                    if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
+                    if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+                }
+                importedMeshes_.erase(model);
+            }
+            releaseEmbeddedImagesForModel(meshPath);
+        } else if (cacheKey.compare(0U, 8U, "texture:") == 0) {
+            const std::string texturePath = cacheKey.substr(8U);
+            const auto texture = textures_.find(texturePath);
+            if (texture != textures_.end()) {
+                if (texture->second != 0) glDeleteTextures(1, &texture->second);
+                textures_.erase(texture);
+            }
+            textureGpuBytes_.erase(texturePath);
         }
     }
+
     for (auto pending = pendingTextureAssets_.begin(); pending != pendingTextureAssets_.end();) {
         if (requiredTextures.find(*pending) != requiredTextures.end()) {
             ++pending;
@@ -2168,15 +2232,15 @@ void Renderer::loadSceneAssets() {
         if (requiredTextures.find(*failed) != requiredTextures.end()) ++failed;
         else failed = failedTextureAssets_.erase(failed);
     }
-    for (auto texture = textures_.begin(); texture != textures_.end();) {
-        if (requiredTextures.find(texture->first) != requiredTextures.end()) {
-            ++texture;
-            continue;
-        }
-        if (texture->second != 0) glDeleteTextures(1, &texture->second);
-        texture = textures_.erase(texture);
-    }
     for (const std::string& assetPath : requiredTextures) requestTextureDecode(assetPath);
+}
+
+std::string Renderer::assetMemoryStatusText() const {
+    constexpr std::uint64_t kBytesPerMiB = 1024U * 1024U;
+    const std::uint64_t bytes = assetMemoryCache_.totalBytes();
+    std::uint64_t mebibytes = bytes / kBytesPerMiB;
+    if (bytes % kBytesPerMiB >= kBytesPerMiB / 2U) ++mebibytes;
+    return "CACHE ~" + std::to_string(mebibytes) + "MB";
 }
 
 int Renderer::sceneAssetStatus() const {
@@ -2683,6 +2747,11 @@ void Renderer::initialize(AAssetManager* assetManager) {
     gpuAssetUploadedThisFrame_ = false;
     pendingTextureAssets_.clear();
     failedTextureAssets_.clear();
+    assetMemoryCache_.clear();
+    textureGpuBytes_.clear();
+    embeddedImageData_.clear();
+    embeddedImagesByModel_.clear();
+    assetUseSequence_ = 0U;
     adventureGame_.setZoneSceneReader({});
     assetManager_ = assetManager;
     adventureGame_.setZoneSceneReader([this](const std::string& assetPath,

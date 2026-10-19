@@ -12,6 +12,7 @@
 #include <android/asset_manager.h>
 
 #include "nuby/adventure_game.hpp"
+#include "nuby/asset_memory_cache.hpp"
 #include "nuby/async_asset_task_queue.hpp"
 #include "nuby/frustum.hpp"
 #include "nuby/game_project_runtime.hpp"
@@ -67,6 +68,7 @@ public:
     // 0 = no imported assets, 1 = mesh pending/fallback, 2 = mesh ready but
     // texture maps pending, 3 = all referenced assets ready, 4 = asset failure.
     int sceneAssetStatus() const;
+    std::string assetMemoryStatusText() const;
 
 private:
     struct Mesh {
@@ -77,6 +79,7 @@ private:
         GLsizei indexCount = 0;
         std::array<float, 3> boundsCenter{0.0f, 0.0f, 0.0f};
         float boundsRadius = 0.0f;
+        std::uint64_t gpuBytes = 0U;
         bool boundsValid = false;
     };
 
@@ -93,6 +96,8 @@ private:
 
     struct ImportedModel {
         std::vector<ImportedPart> parts;
+        std::uint64_t gpuBytes = 0U;
+        std::uint64_t retainedCpuBytes = 0U;
         std::vector<SkeletalJoint> skeleton;
         std::vector<GltfAnimation> animations;
     };
@@ -222,6 +227,7 @@ private:
                           GLuint& texture);
     void processAssetTasks();
     void processPendingGpuUpload();
+    void releaseEmbeddedImagesForModel(const std::string& meshPath);
     void requestTextureDecode(const std::string& assetPath);
     Mesh makeSphere(int latitudeSegments, int longitudeSegments);
     Mesh makeTorus(int ringSegments, int tubeSegments, float majorRadius, float minorRadius);
@@ -250,6 +256,10 @@ private:
     void drawFullscreen();
 
     AAssetManager* assetManager_ = nullptr;
+    AssetMemoryCache assetMemoryCache_;
+    std::uint64_t assetUseSequence_ = 0U;
+    std::unordered_map<std::string, std::uint64_t> textureGpuBytes_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> embeddedImagesByModel_;
     AsyncAssetTaskQueue asyncAssetTasks_{2U};
     std::vector<AsyncAssetTaskQueue::Completion> assetCompletionsScratch_;
     std::deque<PendingGpuAsset> pendingGpuUploads_;

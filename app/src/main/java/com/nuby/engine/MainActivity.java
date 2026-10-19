@@ -62,6 +62,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativePostProcessingEnabled();
     private static native int nativeRendererTier();
     private static native int nativeSceneAssetStatus();
+    private static native String nativeAssetMemoryStatus();
     private static native String nativeLoadProject(String descriptorAssetPath);
     private static native boolean nativeUnloadProject();
     private static native String[] nativeSaveEditorProject();
@@ -575,11 +576,14 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
             final String currentEditorSelection = activeDemoMode == 3
                     ? nativeEditorSelectionStatus() : "";
             final String currentMeshStatus = assetStatusLabel(nativeSceneAssetStatus());
+            final String currentAssetMemoryStatus = nativeAssetMemoryStatus();
             runOnUiThread(() -> {
                 meshStatus = currentMeshStatus;
                 if (telemetry != null) telemetry.setText(
-                        String.format(Locale.US, "%d FPS  ·  %s  ·  %s  ·  %s  ·  %s",
-                                fps, gpuName, shadowStatus, postStatus, meshStatus));
+                        String.format(Locale.US,
+                                "%d FPS  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
+                                fps, gpuName, shadowStatus, postStatus, meshStatus,
+                                currentAssetMemoryStatus));
                 if (gameMode && gameStatus != null) {
                     gameStatus.setText(currentGameStatus);
                     gameStatus.setVisibility(View.VISIBLE);
