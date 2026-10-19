@@ -1367,7 +1367,11 @@ void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
     expect(!runner->characterController.grounded
                    && near(runner->rigidbody.velocity[1], 5.5f),
            "jump applies vertical impulse and clears grounded state");
-    expect(!scene.jumpCharacter(runnerId), "character cannot double-jump in this controller");
+    expect(scene.jumpCharacter(runnerId), "an airborne jump request is buffered for landing");
+    expect(runner->characterController.jumpBufferRemaining > 0.0f
+                   && !runner->characterController.grounded
+                   && near(runner->rigidbody.velocity[1], 5.5f),
+           "buffering a second press does not create an immediate double jump");
     const float jumpStartY = runner->transform.position[1];
     scene.update(1.0f / 60.0f);
     expect(runner->transform.position[1] > jumpStartY,
@@ -1381,6 +1385,56 @@ void testCharacterControllerAcceleratesMovesAndJumpsFromGround() {
                    && std::fabs(runner->rigidbody.velocity[2]) < 0.03f,
            "released movement input decelerates the grounded character to rest");
     expect(scene.jumpCharacter(runnerId), "landed character can jump again");
+}
+
+void testCharacterJumpUsesCoyoteTimeAndLandingBuffer() {
+    nuby::Scene coyoteScene;
+    coyoteScene.physicsSettings().floorEnabled = true;
+    coyoteScene.physicsSettings().floorHeight = 0.0f;
+    nuby::Entity& coyoteRunner = coyoteScene.create("coyote runner", nuby::Primitive::Sphere);
+    coyoteRunner.transform.position[1] = 0.5f;
+    coyoteRunner.transform.scale = {0.5f, 0.5f, 0.5f};
+    coyoteRunner.rigidbody.enabled = true;
+    coyoteRunner.rigidbody.linearDamping = 0.0f;
+    coyoteRunner.sphereCollider.enabled = true;
+    coyoteRunner.sphereCollider.radius = 1.0f;
+    coyoteRunner.characterController.enabled = true;
+    coyoteRunner.characterController.jumpSpeed = 5.5f;
+    const std::uint32_t coyoteId = coyoteRunner.id;
+    coyoteScene.update(1.0f / 60.0f);
+    nuby::Entity* coyoteBody = coyoteScene.find(coyoteId);
+    coyoteBody->characterController.grounded = false;
+    coyoteBody->characterController.coyoteTimeRemaining = 0.08f;
+    expect(coyoteScene.jumpCharacter(coyoteId)
+                   && near(coyoteBody->rigidbody.velocity[1], 5.5f),
+           "a jump press just after leaving ground uses the coyote-time grace window");
+    expect(coyoteBody->characterController.coyoteTimeRemaining == 0.0f,
+           "a coyote jump consumes its grace window exactly once");
+
+    nuby::Scene bufferScene;
+    bufferScene.physicsSettings().floorEnabled = true;
+    bufferScene.physicsSettings().floorHeight = 0.0f;
+    nuby::Entity& bufferedRunner = bufferScene.create("buffered runner", nuby::Primitive::Sphere);
+    bufferedRunner.transform.position[1] = 0.5f;
+    bufferedRunner.transform.scale = {0.5f, 0.5f, 0.5f};
+    bufferedRunner.rigidbody.enabled = true;
+    bufferedRunner.rigidbody.linearDamping = 0.0f;
+    bufferedRunner.sphereCollider.enabled = true;
+    bufferedRunner.sphereCollider.radius = 1.0f;
+    bufferedRunner.characterController.enabled = true;
+    bufferedRunner.characterController.jumpSpeed = 5.5f;
+    const std::uint32_t bufferedId = bufferedRunner.id;
+    expect(bufferScene.jumpCharacter(bufferedId),
+           "an airborne press is accepted into the jump buffer");
+    nuby::Entity* bufferedBody = bufferScene.find(bufferedId);
+    expect(bufferedBody != nullptr && bufferedBody->characterController.jumpBufferRemaining > 0.0f,
+           "airborne jump input remains buffered for a short landing window");
+    if (bufferedBody != nullptr) bufferedBody->characterController.grounded = true;
+    bufferScene.update(1.0f / 60.0f);
+    expect(bufferedBody != nullptr && !bufferedBody->characterController.grounded
+                   && bufferedBody->characterController.jumpBufferRemaining == 0.0f
+                   && bufferedBody->rigidbody.velocity[1] > 5.0f,
+           "the next grounded physics step consumes the buffered jump automatically");
 }
 
 void testPhysicsSubstepCapKeepsSimulationBounded() {
@@ -1444,6 +1498,7 @@ int main() {
     testCapsuleCastSweepsSphereAndOrientedBoxTargets();
     testBoxCastSweepsSphereAndOrientedBoxTargets();
     testCharacterControllerAcceleratesMovesAndJumpsFromGround();
+    testCharacterJumpUsesCoyoteTimeAndLandingBuffer();
     testPhysicsSubstepCapKeepsSimulationBounded();
     testPulseDoesNotAccumulateScaleError();
     if (failures != 0) {

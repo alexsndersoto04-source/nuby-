@@ -70,8 +70,21 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 19") {
+        if (line == "NUBY_SCENE 20") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("CHARACTER_CONTROLLER ", 0) == 0 && targetVersion < 20) {
+            std::istringstream record(line);
+            std::string tag;
+            std::vector<std::string> fields;
+            std::string field;
+            record >> tag;
+            while (record >> field) fields.push_back(field);
+            legacy << tag;
+            for (std::size_t index = 0U; index < fields.size(); ++index) {
+                if (index == fields.size() - 3U || index == fields.size() - 2U) continue;
+                legacy << ' ' << fields[index];
+            }
+            legacy << '\n';
         } else if (line.rfind("SKELETAL_LOCOMOTION ", 0) == 0) {
             if (targetVersion < 18) continue;
             legacy << (targetVersion < 19 ? withoutTrailingFields(line, 1) : line) << '\n';
@@ -325,6 +338,8 @@ nuby::Scene makeScene() {
     camera.characterController.maximumSpeed = 5.2f;
     camera.characterController.acceleration = 14.0f;
     camera.characterController.jumpSpeed = 6.1f;
+    camera.characterController.coyoteTimeSeconds = 0.12f;
+    camera.characterController.jumpBufferSeconds = 0.20f;
     camera.characterController.grounded = true;
     expect(scene.setParent(cameraId, rootId), "camera attaches to root");
     expect(scene.setActiveCamera(cameraId), "sample camera is activated");
@@ -489,6 +504,8 @@ void testRoundTripAllSceneData() {
                    && near(camera->characterController.maximumSpeed, 5.2f)
                    && near(camera->characterController.acceleration, 14.0f)
                    && near(camera->characterController.jumpSpeed, 6.1f)
+                   && near(camera->characterController.coyoteTimeSeconds, 0.12f)
+                   && near(camera->characterController.jumpBufferSeconds, 0.20f)
                    && camera->characterController.grounded,
            "character controller settings and grounded state are restored");
 
@@ -629,7 +646,7 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
 
     std::string invalidBlendDuration = valid.str();
     expect(replaceRecordField(invalidBlendDuration, "SKELETAL_LOCOMOTION", 8, "-0.1", 1),
-           "v19 scene stores a bounded locomotion crossfade duration");
+           "v20 scene stores a bounded locomotion crossfade duration");
     std::stringstream malformedBlendDuration(invalidBlendDuration);
     expect(!nuby::SceneSerializer::load(target, malformedBlendDuration, error),
            "negative locomotion crossfade durations are rejected");
@@ -638,12 +655,20 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
 
     std::string invalidBlendSource = valid.str();
     expect(replaceRecordField(invalidBlendSource, "SKELETAL_PLAYER", 9, "-0.1", 1),
-           "v19 scene stores the source clip's playback time");
+           "v20 scene stores the source clip's playback time");
     std::stringstream malformedBlendSource(invalidBlendSource);
     expect(!nuby::SceneSerializer::load(target, malformedBlendSource, error),
            "negative crossfade source times are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid crossfade source data cannot partially replace the target scene");
+
+    std::stringstream legacyV19(downgradeTextureSchema(valid.str(), 19, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV19, error),
+           "version-nineteen scenes remain readable before jump-assist settings");
+    expect(target.find(2) != nullptr
+                   && near(target.find(2)->characterController.coyoteTimeSeconds, 0.10f)
+                   && near(target.find(2)->characterController.jumpBufferSeconds, 0.16f),
+           "version-nineteen character controllers receive safe jump-assist defaults");
 
     std::stringstream legacyV18(downgradeTextureSchema(valid.str(), 18, 8));
     expect(nuby::SceneSerializer::load(target, legacyV18, error),

@@ -1,4 +1,5 @@
 #include "nuby/scene_editor.hpp"
+#include "nuby/scene_io.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -64,7 +65,8 @@ void testCreateEditSaveAndReloadProject() {
     std::string startupScene;
     expect(editor.saveProjectText(descriptor, startupScene, error)
                    && descriptor.find("NUBY_PROJECT 1") == 0U
-                   && startupScene.find("NUBY_SCENE 19") == 0U,
+                   && startupScene.find("NUBY_SCENE "
+                           + std::to_string(nuby::SceneSerializer::kCurrentVersion)) == 0U,
            "the project descriptor and versioned scene serialize separately for storage");
     nuby::SceneEditorSession reopened;
     expect(reopened.loadProjectText(descriptor, startupScene, error)

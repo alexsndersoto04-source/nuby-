@@ -225,6 +225,8 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.characterController.maximumSpeed)
             || !finite(entity.characterController.acceleration)
             || !finite(entity.characterController.jumpSpeed)
+            || !finite(entity.characterController.coyoteTimeSeconds)
+            || !finite(entity.characterController.jumpBufferSeconds)
             || !finite3(entity.pointLight.color) || !finite(entity.pointLight.intensity)
             || !finite(entity.pointLight.range) || !finite(entity.camera.verticalFovRadians)
             || !finite(entity.camera.nearPlane) || !finite(entity.camera.farPlane)
@@ -260,6 +262,10 @@ bool validEntity(const Entity& entity) {
             || entity.characterController.maximumSpeed < 0.0f
             || entity.characterController.acceleration < 0.0f
             || entity.characterController.jumpSpeed < 0.0f
+            || entity.characterController.coyoteTimeSeconds < 0.0f
+            || entity.characterController.coyoteTimeSeconds > 1.0f
+            || entity.characterController.jumpBufferSeconds < 0.0f
+            || entity.characterController.jumpBufferSeconds > 1.0f
             || std::fabs(entity.skeletalAnimation.playbackRate) > 1000.0f
             || entity.skeletalAnimation.timeSeconds < 0.0f
             || entity.skeletalAnimation.durationSeconds < 0.0f
@@ -534,6 +540,8 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << ' ' << entity.characterController.maximumSpeed
            << ' ' << entity.characterController.acceleration
            << ' ' << entity.characterController.jumpSpeed
+           << ' ' << entity.characterController.coyoteTimeSeconds
+           << ' ' << entity.characterController.jumpBufferSeconds
            << ' ' << (entity.characterController.grounded ? 1 : 0) << '\n';
 
     output << "END_ENTITY\n";
@@ -859,6 +867,15 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                             >> entity.characterController.maximumSpeed
                             >> entity.characterController.acceleration
                             >> entity.characterController.jumpSpeed)
+                || (version >= 20
+                    && (!(input >> entity.characterController.coyoteTimeSeconds
+                                  >> entity.characterController.jumpBufferSeconds)
+                        || !std::isfinite(entity.characterController.coyoteTimeSeconds)
+                        || !std::isfinite(entity.characterController.jumpBufferSeconds)
+                        || entity.characterController.coyoteTimeSeconds < 0.0f
+                        || entity.characterController.coyoteTimeSeconds > 1.0f
+                        || entity.characterController.jumpBufferSeconds < 0.0f
+                        || entity.characterController.jumpBufferSeconds > 1.0f))
                 || !readBool(input, entity.characterController.grounded)
                 || !std::isfinite(entity.characterController.moveInput[0])
                 || !std::isfinite(entity.characterController.moveInput[1])

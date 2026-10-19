@@ -9,7 +9,7 @@ class Scene;
 // Versioned, dependency-free text serialization for editor/game scene files.
 class SceneSerializer final {
 public:
-    static constexpr unsigned int kCurrentVersion = 19;
+    static constexpr unsigned int kCurrentVersion = 20;
 
     static bool save(const Scene& scene, std::ostream& output, std::string& error);
     static bool load(Scene& scene, std::istream& input, std::string& error);

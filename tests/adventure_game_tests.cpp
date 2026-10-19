@@ -461,7 +461,7 @@ void testMovementJumpAndCameraFollow() {
            "follow camera tracks the character position");
 
     expect(game.jump(scene), "grounded adventure character can jump");
-    expect(!game.jump(scene), "adventure character cannot jump twice before landing");
+    expect(game.jump(scene), "a second press is buffered instead of becoming a double jump");
     advance(game, scene, 1);
     player = scene.find(game.playerId());
     expect(player != nullptr && player->transform.position[1] > -0.74f,

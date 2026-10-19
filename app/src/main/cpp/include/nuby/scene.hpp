@@ -194,6 +194,10 @@ struct CharacterControllerComponent {
     float maximumSpeed = 4.0f;
     float acceleration = 24.0f;
     float jumpSpeed = 5.5f;
+    float coyoteTimeSeconds = 0.10f;
+    float jumpBufferSeconds = 0.16f;
+    float coyoteTimeRemaining = 0.0f;
+    float jumpBufferRemaining = 0.0f;
     bool grounded = false;
 };
 

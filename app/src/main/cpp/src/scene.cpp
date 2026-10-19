@@ -1650,13 +1650,24 @@ bool Scene::jumpCharacter(std::uint32_t id) {
     Entity* entity = find(id);
     if (entity == nullptr) return false;
     CharacterControllerComponent& controller = entity->characterController;
-    if (!controller.enabled || !controller.grounded || !entity->rigidbody.enabled
+    if (!controller.enabled || !entity->rigidbody.enabled
             || !std::isfinite(controller.jumpSpeed) || controller.jumpSpeed <= 0.0f) {
         return false;
     }
-    entity->rigidbody.velocity[1] = controller.jumpSpeed;
-    controller.grounded = false;
-    return true;
+    const bool insideCoyoteWindow = std::isfinite(controller.coyoteTimeRemaining)
+            && controller.coyoteTimeRemaining > 0.0f;
+    if (controller.grounded || insideCoyoteWindow) {
+        entity->rigidbody.velocity[1] = controller.jumpSpeed;
+        controller.grounded = false;
+        controller.coyoteTimeRemaining = 0.0f;
+        controller.jumpBufferRemaining = 0.0f;
+        return true;
+    }
+    if (!std::isfinite(controller.jumpBufferSeconds)
+            || controller.jumpBufferSeconds <= 0.0f) return false;
+    const float buffer = std::clamp(controller.jumpBufferSeconds, 0.0f, 1.0f);
+    controller.jumpBufferRemaining = std::max(controller.jumpBufferRemaining, buffer);
+    return controller.jumpBufferRemaining > 0.0f;
 }
 
 Entity* Scene::activeCamera() {
@@ -1811,6 +1822,27 @@ void Scene::simulatePhysics(float deltaSeconds) {
             CharacterControllerComponent& controller = entity.characterController;
             if (controller.enabled) {
                 const bool wasGrounded = controller.grounded;
+                const float coyoteDuration = std::isfinite(controller.coyoteTimeSeconds)
+                        ? std::clamp(controller.coyoteTimeSeconds, 0.0f, 1.0f) : 0.0f;
+                if (wasGrounded) {
+                    controller.coyoteTimeRemaining = coyoteDuration;
+                } else if (std::isfinite(controller.coyoteTimeRemaining)) {
+                    controller.coyoteTimeRemaining = std::max(
+                            0.0f, controller.coyoteTimeRemaining - dt);
+                } else {
+                    controller.coyoteTimeRemaining = 0.0f;
+                }
+                const float bufferedJump = std::isfinite(controller.jumpBufferRemaining)
+                        ? std::clamp(controller.jumpBufferRemaining, 0.0f, 1.0f) : 0.0f;
+                const bool consumeBufferedJump = wasGrounded && bufferedJump > 0.0f
+                        && std::isfinite(controller.jumpSpeed) && controller.jumpSpeed > 0.0f;
+                if (consumeBufferedJump) {
+                    body.velocity[1] = controller.jumpSpeed;
+                    controller.jumpBufferRemaining = 0.0f;
+                    controller.coyoteTimeRemaining = 0.0f;
+                } else {
+                    controller.jumpBufferRemaining = std::max(0.0f, bufferedJump - dt);
+                }
                 controller.grounded = false;
                 if (std::isfinite(controller.maximumSpeed) && controller.maximumSpeed > 0.0f
                         && std::isfinite(controller.acceleration) && controller.acceleration > 0.0f
