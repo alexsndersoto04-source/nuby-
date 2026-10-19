@@ -193,7 +193,7 @@ void AdventureGame::buildScene(Scene& scene) {
             const std::size_t index = row * kZoneGridSide + column;
             const std::uint32_t id = static_cast<std::uint32_t>(index + 1U);
             zones.push_back({id, {xCenters[column], 0.0f, zCenters[row]},
-                    7.5f, 9.2f, rowAssets[row]});
+                    7.5f, 9.2f, rowAssets[row], 10.5f});
             zoneDefinitions_.push_back(zones.back());
             streamedZoneOffsets_[index] = {xCenters[column], 0.0f, 0.0f};
         }
@@ -397,7 +397,9 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
     }
 
     if (player != nullptr
-            && worldZoneStreamer_.update(player->transform.position, zoneTransitionsScratch_)) {
+            && worldZoneStreamer_.update(player->transform.position,
+                    {player->rigidbody.velocity[0], 0.0f, player->rigidbody.velocity[2]},
+                    zoneTransitionsScratch_)) {
         applyZoneTransitions(scene);
     }
 

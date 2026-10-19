@@ -72,9 +72,9 @@ void testGridResidencyHonorsDeterministicBudget() {
                    && streamer.isLoaded(4U) && !streamer.isLoaded(6U)
                    && !streamer.isLoaded(8U),
            "the center cell wins, then equal-distance neighbors use manifest order");
-    expect(transitions.size() == 3U && transitions[0].zoneId == 2U
-                   && transitions[1].zoneId == 4U && transitions[2].zoneId == 5U,
-           "initial grid loads are emitted in stable manifest order under the cap");
+    expect(transitions.size() == 3U && transitions[0].zoneId == 5U
+                   && transitions[1].zoneId == 2U && transitions[2].zoneId == 4U,
+           "initial grid loads emit the nearest cell first, then stable distance ties");
 
     expect(streamer.update({6.0f, 0.0f, 0.0f}, transitions)
                    && streamer.loadedCount() == 3U
@@ -87,6 +87,34 @@ void testGridResidencyHonorsDeterministicBudget() {
     expect(!streamer.configure(zones, error, 0U) && streamer.zoneCount() == 9U
                    && streamer.loadedCount() == 3U,
            "a zero residency budget is rejected transactionally");
+}
+
+void testDirectionalPrefetchLoadsAheadAndCancelsBehind() {
+    nuby::WorldZoneStreamer streamer;
+    std::string error;
+    const std::vector<nuby::WorldZoneDefinition> zones{
+            {1U, {0.0f, 0.0f, 0.0f}, 5.0f, 7.0f, "center", 5.0f},
+            {2U, {8.0f, 0.0f, 0.0f}, 5.0f, 7.0f, "east", 10.0f},
+            {3U, {-8.0f, 0.0f, 0.0f}, 5.0f, 7.0f, "west", 10.0f}
+    };
+    expect(streamer.configure(zones, error, 2U),
+           "directional streaming accepts explicit forward prefetch radii");
+    std::vector<nuby::WorldZoneTransition> transitions;
+    expect(streamer.update({0.0f, 0.0f, 0.0f}, transitions)
+                   && transitions.size() == 1U && transitions[0].zoneId == 1U,
+           "stationary player loads only the normal resident zone");
+    expect(streamer.update({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, transitions)
+                   && transitions.size() == 1U && transitions[0].zoneId == 2U
+                   && transitions[0].load && streamer.isLoaded(1U),
+           "forward motion prefetches the east sector while retaining the current sector");
+    expect(streamer.update({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, transitions)
+                   && transitions.empty() && streamer.isLoaded(2U),
+           "a brief stop does not cancel a useful in-flight prefetched sector");
+    expect(streamer.update({0.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, transitions)
+                   && transitions.size() == 2U && transitions[0].zoneId == 3U
+                   && transitions[0].load && transitions[1].zoneId == 2U
+                   && !transitions[1].load && streamer.isLoaded(1U),
+           "reversing direction prioritizes the west sector and releases stale east prefetch");
 }
 
 void testLargeManifestKeepsDeterministicResidencyBounded() {
@@ -150,6 +178,7 @@ void testInvalidInputDoesNotMutateResidency() {
 int main() {
     testZoneLoadingUsesHorizontalDistanceAndStableOrdering();
     testGridResidencyHonorsDeterministicBudget();
+    testDirectionalPrefetchLoadsAheadAndCancelsBehind();
     testLargeManifestKeepsDeterministicResidencyBounded();
     testInvalidInputDoesNotMutateResidency();
     if (failures != 0) {

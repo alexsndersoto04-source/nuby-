@@ -15,6 +15,7 @@
 #include "nuby/asset_memory_cache.hpp"
 #include "nuby/async_asset_task_queue.hpp"
 #include "nuby/frustum.hpp"
+#include "nuby/gpu_upload_planner.hpp"
 #include "nuby/game_project_runtime.hpp"
 #include "nuby/gltf_loader.hpp"
 #include "nuby/image_loader.hpp"
@@ -102,8 +103,26 @@ private:
         std::vector<GltfAnimation> animations;
     };
 
-    struct CpuObjPart {
+    struct CpuSkinnedVertex {
+        float position[3]{};
+        float normal[3]{};
+        float uv[2]{};
+        std::uint16_t jointIndices[4]{};
+        float weights[4]{};
+    };
+
+    struct CpuGpuPrimitive {
         std::vector<MeshVertex> vertices;
+        std::vector<CpuSkinnedVertex> skinnedVertices;
+        std::vector<std::uint32_t> indices;
+        std::array<float, 3> boundsCenter{0.0f, 0.0f, 0.0f};
+        float boundsRadius = 0.0f;
+        bool skinned = false;
+        bool boundsValid = false;
+    };
+
+    struct CpuObjPart {
+        CpuGpuPrimitive geometry;
         std::string objectName;
         std::string groupName;
         Material material;
@@ -117,6 +136,7 @@ private:
     struct CpuGlbModel {
         bool skeletal = false;
         std::vector<GltfPrimitive> primitives;
+        std::vector<CpuGpuPrimitive> gpuPrimitives;
         std::vector<GltfEmbeddedImage> images;
         std::vector<SkeletalJoint> skeleton;
         std::vector<GltfAnimation> animations;
@@ -128,7 +148,12 @@ private:
         CpuObjModel objModel;
         CpuGlbModel glbModel;
         ImportedModel importedModel;
-        std::size_t nextPrimitive = 0;
+        ImportedPart activePart;
+        std::size_t nextPrimitive = 0U;
+        std::uint64_t vertexBytesUploaded = 0U;
+        std::uint64_t indexBytesUploaded = 0U;
+        std::size_t totalVertexCount = 0U;
+        bool activePrimitiveInitialized = false;
     };
 
     struct PendingTextureUpload {
@@ -223,8 +248,12 @@ private:
     GLuint compileShader(GLenum type, const char* source);
     GLuint createProgram(const char* vertexSource, const char* fragmentSource);
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
-    Mesh uploadSkinnedMesh(const GltfPrimitive& primitive);
-    Mesh uploadStaticGltfMesh(const GltfPrimitive& primitive);
+    static bool prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
+                                       std::vector<std::uint32_t> indices,
+                                       std::vector<SkeletalVertexInfluence> influences,
+                                       bool skinned, CpuGpuPrimitive& output,
+                                       std::string& error);
+    bool initializePendingGpuPrimitive(CpuGpuPrimitive& geometry, Mesh& mesh);
     static bool prepareObjAsset(AAssetManager* manager, const std::string& assetPath,
                                 CpuObjModel& model, std::string& error);
     void uploadPreparedObjAsset(const std::string& assetPath, CpuObjModel model);

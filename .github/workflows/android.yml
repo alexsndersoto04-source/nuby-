@@ -53,6 +53,15 @@ jobs:
           tests/image_loader_tests.cpp -o /tmp/nuby-image-tests
           && /tmp/nuby-image-tests
 
+      - name: Compile and run GPU upload planner tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/gpu_upload_planner.cpp
+          tests/gpu_upload_planner_tests.cpp
+          -o /tmp/nuby-gpu-upload-planner-tests
+          && /tmp/nuby-gpu-upload-planner-tests
+
       - name: Compile and run Wavefront material tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic

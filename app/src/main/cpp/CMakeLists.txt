@@ -10,6 +10,7 @@ add_library(nuby-engine SHARED
     src/game_project.cpp
     src/game_project_runtime.cpp
     src/gltf_loader.cpp
+    src/gpu_upload_planner.cpp
     src/image_loader.cpp
     src/png_loader.cpp
     src/mtl_loader.cpp

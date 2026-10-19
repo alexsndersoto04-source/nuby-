@@ -24,6 +24,7 @@ namespace {
 
 constexpr const char* kLogTag = "NubyEngine";
 constexpr float kPi = 3.14159265358979323846f;
+constexpr std::uint64_t kMaxGpuAssetUploadBytesPerTurn = 512U * 1024U;
 
 using Mat4 = std::array<float, 16>;
 using Vec3 = std::array<float, 3>;
@@ -926,177 +927,87 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
     return mesh;
 }
 
-Renderer::Mesh Renderer::uploadSkinnedMesh(const GltfPrimitive& primitive) {
-    Mesh mesh{};
-    if (!primitive.hasSkinAttributes || primitive.vertices.empty() || primitive.indices.empty()
-            || primitive.vertices.size() > static_cast<std::size_t>(
+bool Renderer::prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
+                                      std::vector<std::uint32_t> indices,
+                                      std::vector<SkeletalVertexInfluence> influences,
+                                      bool skinned, CpuGpuPrimitive& output,
+                                      std::string& error) {
+    error.clear();
+    if (vertices.empty() || vertices.size() > static_cast<std::size_t>(
                     std::numeric_limits<GLsizei>::max())
-            || primitive.indices.size() > static_cast<std::size_t>(
+            || indices.size() > static_cast<std::size_t>(
                     std::numeric_limits<GLsizei>::max())
-            || primitive.influences.size() != primitive.vertices.size()) return mesh;
-    struct GpuVertex {
-        float position[3];
-        float normal[3];
-        float uv[2];
-        std::uint16_t jointIndices[4];
-        float weights[4];
-    };
-    std::vector<GpuVertex> vertices(primitive.vertices.size());
-    for (std::size_t index = 0; index < primitive.vertices.size(); ++index) {
-        const MeshVertex& source = primitive.vertices[index];
-        const SkeletalVertexInfluence& influence = primitive.influences[index];
-        GpuVertex& vertex = vertices[index];
-        std::copy(std::begin(source.position), std::end(source.position), vertex.position);
-        std::copy(std::begin(source.normal), std::end(source.normal), vertex.normal);
-        std::copy(std::begin(source.uv), std::end(source.uv), vertex.uv);
-        for (std::size_t slot = 0; slot < 4U; ++slot) {
-            vertex.jointIndices[slot] = influence.jointIndices[slot];
-            vertex.weights[slot] = influence.weights[slot];
-        }
+            || (skinned && (indices.empty() || influences.size() != vertices.size()))) {
+        error = "mesh primitive has invalid vertex, index, or skin counts";
+        return false;
     }
 
+    CpuGpuPrimitive candidate;
+    candidate.skinned = skinned;
     Vec3 minimum{vertices.front().position[0], vertices.front().position[1],
             vertices.front().position[2]};
     Vec3 maximum = minimum;
-    for (const GpuVertex& vertex : vertices) {
+    if (skinned) candidate.skinnedVertices.resize(vertices.size());
+    for (std::size_t index = 0; index < vertices.size(); ++index) {
+        const MeshVertex& source = vertices[index];
         for (std::size_t axis = 0; axis < 3U; ++axis) {
-            if (!std::isfinite(vertex.position[axis]) || !std::isfinite(vertex.normal[axis])) {
-                return {};
+            if (!std::isfinite(source.position[axis]) || !std::isfinite(source.normal[axis])) {
+                error = "mesh primitive contains non-finite positions or normals";
+                return false;
             }
-            minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
-            maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
+            minimum[axis] = std::min(minimum[axis], source.position[axis]);
+            maximum[axis] = std::max(maximum[axis], source.position[axis]);
         }
+        for (float uv : source.uv) {
+            if (!std::isfinite(uv)) {
+                error = "mesh primitive contains non-finite texture coordinates";
+                return false;
+            }
+        }
+        if (!skinned) continue;
+
+        const SkeletalVertexInfluence& influence = influences[index];
+        CpuSkinnedVertex& destination = candidate.skinnedVertices[index];
+        std::copy(std::begin(source.position), std::end(source.position), destination.position);
+        std::copy(std::begin(source.normal), std::end(source.normal), destination.normal);
+        std::copy(std::begin(source.uv), std::end(source.uv), destination.uv);
         for (std::size_t slot = 0; slot < 4U; ++slot) {
-            if (!std::isfinite(vertex.weights[slot]) || vertex.weights[slot] < 0.0f
-                    || vertex.jointIndices[slot] >= kMaximumGpuJoints) return {};
-        }
-    }
-    for (std::uint32_t index : primitive.indices) {
-        if (index >= vertices.size()) return {};
-    }
-    for (std::size_t axis = 0; axis < 3U; ++axis) {
-        mesh.boundsCenter[axis] = (minimum[axis] + maximum[axis]) * 0.5f;
-    }
-    float radiusSquared = 0.0f;
-    for (const GpuVertex& vertex : vertices) {
-        const float dx = vertex.position[0] - mesh.boundsCenter[0];
-        const float dy = vertex.position[1] - mesh.boundsCenter[1];
-        const float dz = vertex.position[2] - mesh.boundsCenter[2];
-        radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
-    }
-    if (!std::isfinite(radiusSquared)) return {};
-    mesh.boundsRadius = std::sqrt(radiusSquared);
-    mesh.boundsValid = std::isfinite(mesh.boundsRadius);
-
-    glGenVertexArrays(1, &mesh.vao);
-    glGenBuffers(1, &mesh.vbo);
-    glGenBuffers(1, &mesh.ebo);
-    glBindVertexArray(mesh.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(GpuVertex)),
-                 vertices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(primitive.indices.size() * sizeof(std::uint32_t)),
-                 primitive.indices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, position)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, normal)));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, uv)));
-    glEnableVertexAttribArray(7);
-    glVertexAttribIPointer(7, 4, GL_UNSIGNED_SHORT, sizeof(GpuVertex),
-                           reinterpret_cast<const void*>(offsetof(GpuVertex, jointIndices)));
-    glEnableVertexAttribArray(8);
-    glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, weights)));
-    glBindVertexArray(0);
-    mesh.vertexCount = static_cast<GLsizei>(vertices.size());
-    mesh.indexCount = static_cast<GLsizei>(primitive.indices.size());
-    mesh.gpuBytes = static_cast<std::uint64_t>(vertices.size()) * sizeof(GpuVertex)
-            + static_cast<std::uint64_t>(primitive.indices.size()) * sizeof(std::uint32_t);
-    return mesh;
-}
-
-Renderer::Mesh Renderer::uploadStaticGltfMesh(const GltfPrimitive& primitive) {
-    Mesh mesh{};
-    if (primitive.vertices.empty() || primitive.indices.empty()
-            || primitive.vertices.size() > static_cast<std::size_t>(
-                    std::numeric_limits<GLsizei>::max())
-            || primitive.indices.size() > static_cast<std::size_t>(
-                    std::numeric_limits<GLsizei>::max())) return mesh;
-    struct GpuVertex {
-        float position[3];
-        float normal[3];
-        float uv[2];
-    };
-    std::vector<GpuVertex> vertices(primitive.vertices.size());
-    for (std::size_t index = 0; index < primitive.vertices.size(); ++index) {
-        const MeshVertex& source = primitive.vertices[index];
-        GpuVertex& vertex = vertices[index];
-        std::copy(std::begin(source.position), std::end(source.position), vertex.position);
-        std::copy(std::begin(source.normal), std::end(source.normal), vertex.normal);
-        std::copy(std::begin(source.uv), std::end(source.uv), vertex.uv);
-    }
-    Vec3 minimum{vertices.front().position[0], vertices.front().position[1],
-                 vertices.front().position[2]};
-    Vec3 maximum = minimum;
-    for (const GpuVertex& vertex : vertices) {
-        for (std::size_t axis = 0; axis < 3U; ++axis) {
-            if (!std::isfinite(vertex.position[axis]) || !std::isfinite(vertex.normal[axis])) {
-                return {};
+            if (!std::isfinite(influence.weights[slot]) || influence.weights[slot] < 0.0f
+                    || influence.jointIndices[slot] >= kMaximumGpuJoints) {
+                error = "mesh primitive contains invalid skin weights or joints";
+                return false;
             }
-            minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
-            maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
+            destination.jointIndices[slot] = influence.jointIndices[slot];
+            destination.weights[slot] = influence.weights[slot];
         }
     }
-    for (std::uint32_t index : primitive.indices) {
-        if (index >= vertices.size()) return {};
+    for (std::uint32_t index : indices) {
+        if (index >= vertices.size()) {
+            error = "mesh primitive index lies outside its vertex range";
+            return false;
+        }
     }
-    for (std::size_t axis = 0; axis < 3U; ++axis) {
-        mesh.boundsCenter[axis] = (minimum[axis] + maximum[axis]) * 0.5f;
-    }
+
+    candidate.boundsCenter = {(minimum[0] + maximum[0]) * 0.5f,
+                              (minimum[1] + maximum[1]) * 0.5f,
+                              (minimum[2] + maximum[2]) * 0.5f};
     float radiusSquared = 0.0f;
-    for (const GpuVertex& vertex : vertices) {
-        const float dx = vertex.position[0] - mesh.boundsCenter[0];
-        const float dy = vertex.position[1] - mesh.boundsCenter[1];
-        const float dz = vertex.position[2] - mesh.boundsCenter[2];
+    for (const MeshVertex& vertex : vertices) {
+        const float dx = vertex.position[0] - candidate.boundsCenter[0];
+        const float dy = vertex.position[1] - candidate.boundsCenter[1];
+        const float dz = vertex.position[2] - candidate.boundsCenter[2];
         radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
     }
-    if (!std::isfinite(radiusSquared)) return {};
-    mesh.boundsRadius = std::sqrt(radiusSquared);
-    mesh.boundsValid = std::isfinite(mesh.boundsRadius);
-
-    glGenVertexArrays(1, &mesh.vao);
-    glGenBuffers(1, &mesh.vbo);
-    glGenBuffers(1, &mesh.ebo);
-    glBindVertexArray(mesh.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(GpuVertex)),
-                 vertices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(primitive.indices.size() * sizeof(std::uint32_t)),
-                 primitive.indices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, position)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, normal)));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(GpuVertex),
-                          reinterpret_cast<const void*>(offsetof(GpuVertex, uv)));
-    glBindVertexArray(0);
-    mesh.vertexCount = static_cast<GLsizei>(vertices.size());
-    mesh.indexCount = static_cast<GLsizei>(primitive.indices.size());
-    mesh.gpuBytes = static_cast<std::uint64_t>(vertices.size()) * sizeof(GpuVertex)
-            + static_cast<std::uint64_t>(primitive.indices.size()) * sizeof(std::uint32_t);
-    return mesh;
+    if (!std::isfinite(radiusSquared)) {
+        error = "mesh primitive bounds are not finite";
+        return false;
+    }
+    candidate.boundsRadius = std::sqrt(radiusSquared);
+    candidate.boundsValid = std::isfinite(candidate.boundsRadius);
+    if (!skinned) candidate.vertices = std::move(vertices);
+    candidate.indices = std::move(indices);
+    output = std::move(candidate);
+    return true;
 }
 
 bool Renderer::prepareGlbAsset(AAssetManager* manager, const std::string& assetPath,
@@ -1108,29 +1019,37 @@ bool Renderer::prepareGlbAsset(AAssetManager* manager, const std::string& assetP
         return false;
     }
 
+    CpuGlbModel candidate{};
     GltfSkeletalAsset skeletal;
     if (parseGlbSkeletalAsset(bytes, skeletal, error)) {
-        CpuGlbModel candidate{};
         candidate.skeletal = true;
         candidate.primitives = std::move(skeletal.primitives);
         candidate.images = std::move(skeletal.images);
         candidate.skeleton = std::move(skeletal.skeleton);
         candidate.animations = std::move(skeletal.animations);
-        model = std::move(candidate);
-        error.clear();
-        return true;
+    } else {
+        const std::string skeletalError = error;
+        GltfStaticAsset staticAsset;
+        if (!parseGlbStaticAsset(bytes, staticAsset, error)) {
+            error = "GLB import failed for " + assetPath + " (skeletal: "
+                    + skeletalError + "; static: " + error + ")";
+            return false;
+        }
+        candidate.primitives = std::move(staticAsset.primitives);
+        candidate.images = std::move(staticAsset.images);
     }
 
-    const std::string skeletalError = error;
-    GltfStaticAsset staticAsset;
-    if (!parseGlbStaticAsset(bytes, staticAsset, error)) {
-        error = "GLB import failed for " + assetPath + " (skeletal: "
-                + skeletalError + "; static: " + error + ")";
-        return false;
+    candidate.gpuPrimitives.reserve(candidate.primitives.size());
+    for (GltfPrimitive& primitive : candidate.primitives) {
+        CpuGpuPrimitive geometry;
+        if (!prepareCpuGpuPrimitive(std::move(primitive.vertices),
+                std::move(primitive.indices), std::move(primitive.influences),
+                candidate.skeletal, geometry, error)) {
+            error = "GLB GPU preparation failed for " + assetPath + ": " + error;
+            return false;
+        }
+        candidate.gpuPrimitives.push_back(std::move(geometry));
     }
-    CpuGlbModel candidate{};
-    candidate.primitives = std::move(staticAsset.primitives);
-    candidate.images = std::move(staticAsset.images);
     model = std::move(candidate);
     error.clear();
     return true;
@@ -1182,7 +1101,11 @@ bool Renderer::prepareObjAsset(AAssetManager* manager, const std::string& assetP
     candidate.parts.reserve(parsedObj.submeshes.size());
     for (ObjSubmesh& submesh : parsedObj.submeshes) {
         CpuObjPart part{};
-        part.vertices = std::move(submesh.vertices);
+        if (!prepareCpuGpuPrimitive(std::move(submesh.vertices), {}, {}, false,
+                                    part.geometry, error)) {
+            error = "OBJ GPU preparation failed for " + assetPath + ": " + error;
+            return false;
+        }
         part.objectName = submesh.objectName;
         part.groupName = submesh.groupName;
         const auto material = materialsByName.find(submesh.materialName);
@@ -1205,6 +1128,9 @@ void Renderer::uploadPreparedObjAsset(const std::string& assetPath, CpuObjModel 
     PendingGpuAsset pending{};
     pending.assetPath = assetPath;
     pending.objModel = std::move(cpuModel);
+    for (const CpuObjPart& part : pending.objModel.parts) {
+        pending.totalVertexCount += part.geometry.vertices.size();
+    }
     pending.importedModel.parts.reserve(pending.objModel.parts.size());
     pendingGpuUploads_.push_back(std::move(pending));
 }
@@ -1218,6 +1144,77 @@ void Renderer::uploadPreparedGlbAsset(const std::string& assetPath, CpuGlbModel 
     pending.importedModel.parts.reserve(cpuModel.primitives.size());
     pending.glbModel = std::move(cpuModel);
     pendingGpuUploads_.push_back(std::move(pending));
+}
+
+bool Renderer::initializePendingGpuPrimitive(CpuGpuPrimitive& geometry, Mesh& mesh) {
+    const std::size_t vertexCount = geometry.skinned
+            ? geometry.skinnedVertices.size() : geometry.vertices.size();
+    const std::size_t vertexStride = geometry.skinned
+            ? sizeof(CpuSkinnedVertex) : sizeof(MeshVertex);
+    const std::size_t maximumBufferBytes = static_cast<std::size_t>(
+            std::numeric_limits<GLsizeiptr>::max());
+    if (vertexCount == 0U || vertexCount > static_cast<std::size_t>(
+                    std::numeric_limits<GLsizei>::max())
+            || geometry.indices.size() > static_cast<std::size_t>(
+                    std::numeric_limits<GLsizei>::max())
+            || vertexCount > maximumBufferBytes / vertexStride
+            || geometry.indices.size() > maximumBufferBytes / sizeof(std::uint32_t)) {
+        return false;
+    }
+    const std::size_t vertexBytes = vertexCount * vertexStride;
+    const std::size_t indexBytes = geometry.indices.size() * sizeof(std::uint32_t);
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    if (!geometry.indices.empty()) glGenBuffers(1, &mesh.ebo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertexBytes), nullptr, GL_STATIC_DRAW);
+    if (!geometry.indices.empty()) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indexBytes),
+                     nullptr, GL_STATIC_DRAW);
+    }
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride),
+            reinterpret_cast<const void*>(geometry.skinned
+                    ? offsetof(CpuSkinnedVertex, position) : offsetof(MeshVertex, position)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride),
+            reinterpret_cast<const void*>(geometry.skinned
+                    ? offsetof(CpuSkinnedVertex, normal) : offsetof(MeshVertex, normal)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride),
+            reinterpret_cast<const void*>(geometry.skinned
+                    ? offsetof(CpuSkinnedVertex, uv) : offsetof(MeshVertex, uv)));
+    if (geometry.skinned) {
+        glEnableVertexAttribArray(7);
+        glVertexAttribIPointer(7, 4, GL_UNSIGNED_SHORT,
+                static_cast<GLsizei>(vertexStride),
+                reinterpret_cast<const void*>(offsetof(CpuSkinnedVertex, jointIndices)));
+        glEnableVertexAttribArray(8);
+        glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE,
+                static_cast<GLsizei>(vertexStride),
+                reinterpret_cast<const void*>(offsetof(CpuSkinnedVertex, weights)));
+    }
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    mesh.vertexCount = static_cast<GLsizei>(vertexCount);
+    mesh.indexCount = static_cast<GLsizei>(geometry.indices.size());
+    mesh.boundsCenter = geometry.boundsCenter;
+    mesh.boundsRadius = geometry.boundsRadius;
+    mesh.boundsValid = geometry.boundsValid;
+    mesh.gpuBytes = static_cast<std::uint64_t>(vertexBytes) + indexBytes;
+    if (glGetError() == GL_NO_ERROR && mesh.vao != 0U && mesh.vbo != 0U
+            && (geometry.indices.empty() || mesh.ebo != 0U)) {
+        return true;
+    }
+    if (mesh.vao != 0U) glDeleteVertexArrays(1, &mesh.vao);
+    if (mesh.vbo != 0U) glDeleteBuffers(1, &mesh.vbo);
+    if (mesh.ebo != 0U) glDeleteBuffers(1, &mesh.ebo);
+    mesh = {};
+    return false;
 }
 
 bool Renderer::beginTextureUpload(const std::string& assetPath,
@@ -1366,8 +1363,7 @@ void Renderer::processAssetTasks() {
 }
 
 void Renderer::processPendingTextureUploads() {
-    constexpr std::uint64_t kUploadBudgetBytesPerFrame = 512U * 1024U;
-    std::uint64_t remainingBytes = kUploadBudgetBytesPerFrame;
+    std::uint64_t remainingBytes = kMaxGpuAssetUploadBytesPerTurn;
     while (!pendingTextureUploads_.empty() && remainingBytes > 0U) {
         PendingTextureUpload& upload = pendingTextureUploads_.front();
         if (upload.levelIndex >= upload.levels.size()) {
@@ -1432,16 +1428,19 @@ void Renderer::processPendingGpuUpload() {
     PendingGpuAsset& pending = pendingGpuUploads_.front();
     const std::size_t primitiveCount = pending.isGlb
             ? pending.glbModel.primitives.size() : pending.objModel.parts.size();
-    const auto deleteImportedParts = [](ImportedModel& model) {
-        for (ImportedPart& part : model.parts) {
-            if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
-            if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
-            if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
-        }
+    const auto deleteMesh = [](Mesh& mesh) {
+        if (mesh.vao != 0U) glDeleteVertexArrays(1, &mesh.vao);
+        if (mesh.vbo != 0U) glDeleteBuffers(1, &mesh.vbo);
+        if (mesh.ebo != 0U) glDeleteBuffers(1, &mesh.ebo);
+        mesh = {};
+    };
+    const auto deleteImportedParts = [&deleteMesh](ImportedModel& model) {
+        for (ImportedPart& part : model.parts) deleteMesh(part.mesh);
         model.parts.clear();
     };
     if (pending.nextPrimitive >= primitiveCount) {
         const std::string assetPath = pending.assetPath;
+        deleteMesh(pending.activePart.mesh);
         deleteImportedParts(pending.importedModel);
         releaseEmbeddedImagesForModel(assetPath);
         pendingGpuUploads_.pop_front();
@@ -1451,92 +1450,153 @@ void Renderer::processPendingGpuUpload() {
         return;
     }
 
-    ImportedPart part{};
-    if (!pending.isGlb) {
-        CpuObjPart& cpuPart = pending.objModel.parts[pending.nextPrimitive];
-        part.objectName = cpuPart.objectName;
-        part.groupName = cpuPart.groupName;
-        part.material = cpuPart.material;
-        part.hasMaterial = cpuPart.hasMaterial;
-        part.mesh = uploadMesh(cpuPart.vertices);
-    } else {
-        GltfPrimitive& primitive = pending.glbModel.primitives[pending.nextPrimitive];
-        part.skinned = pending.glbModel.skeletal;
-        part.hasMaterial = primitive.hasMaterial;
-        if (primitive.hasMaterial) {
-            part.material.color = {primitive.material.baseColorFactor[0],
-                                   primitive.material.baseColorFactor[1],
-                                   primitive.material.baseColorFactor[2]};
-            part.material.opacity = primitive.material.alphaBlend || primitive.material.alphaMask
-                    ? primitive.material.baseColorFactor[3] : 1.0f;
-            part.alphaMask = primitive.material.alphaMask;
-            part.alphaCutoff = primitive.material.alphaCutoff;
-            part.material.emission = primitive.material.emissiveFactor;
-            part.material.metallic = primitive.material.metallicFactor;
-            part.material.roughness = primitive.material.roughnessFactor;
-            part.material.ambientOcclusion = primitive.material.occlusionStrength;
-            const auto texturePath = [this, &pending](std::int32_t imageIndex) {
-                if (imageIndex < 0 || static_cast<std::size_t>(imageIndex)
-                        >= pending.glbModel.images.size()) return std::string{};
-                const std::string relative = "__nuby_internal/gltf/" + pending.assetPath
-                        + "/image_" + std::to_string(imageIndex) + ".png";
-                const std::string resolved = projectAssetPath(relative);
-                if (resolved.empty()) return std::string{};
-                embeddedImagesByModel_[pending.assetPath].insert(resolved);
-                const std::string& encodedImage =
-                        pending.glbModel.images[static_cast<std::size_t>(imageIndex)].bytes;
-                if (embeddedImageData_.emplace(resolved, encodedImage).second) {
-                    pending.importedModel.retainedCpuBytes += encodedImage.size();
+    if (!pending.activePrimitiveInitialized) {
+        ImportedPart part{};
+        CpuGpuPrimitive* geometry = nullptr;
+        if (!pending.isGlb) {
+            CpuObjPart& cpuPart = pending.objModel.parts[pending.nextPrimitive];
+            part.objectName = cpuPart.objectName;
+            part.groupName = cpuPart.groupName;
+            part.material = cpuPart.material;
+            part.hasMaterial = cpuPart.hasMaterial;
+            geometry = &cpuPart.geometry;
+        } else {
+            GltfPrimitive& primitive = pending.glbModel.primitives[pending.nextPrimitive];
+            part.skinned = pending.glbModel.skeletal;
+            part.hasMaterial = primitive.hasMaterial;
+            geometry = &pending.glbModel.gpuPrimitives[pending.nextPrimitive];
+            if (primitive.hasMaterial) {
+                part.material.color = {primitive.material.baseColorFactor[0],
+                                       primitive.material.baseColorFactor[1],
+                                       primitive.material.baseColorFactor[2]};
+                part.material.opacity = primitive.material.alphaBlend || primitive.material.alphaMask
+                        ? primitive.material.baseColorFactor[3] : 1.0f;
+                part.alphaMask = primitive.material.alphaMask;
+                part.alphaCutoff = primitive.material.alphaCutoff;
+                part.material.emission = primitive.material.emissiveFactor;
+                part.material.metallic = primitive.material.metallicFactor;
+                part.material.roughness = primitive.material.roughnessFactor;
+                part.material.ambientOcclusion = primitive.material.occlusionStrength;
+                const auto texturePath = [this, &pending](std::int32_t imageIndex) {
+                    if (imageIndex < 0 || static_cast<std::size_t>(imageIndex)
+                            >= pending.glbModel.images.size()) return std::string{};
+                    const std::string relative = "__nuby_internal/gltf/" + pending.assetPath
+                            + "/image_" + std::to_string(imageIndex) + ".png";
+                    const std::string resolved = projectAssetPath(relative);
+                    if (resolved.empty()) return std::string{};
+                    embeddedImagesByModel_[pending.assetPath].insert(resolved);
+                    const std::string& encodedImage =
+                            pending.glbModel.images[static_cast<std::size_t>(imageIndex)].bytes;
+                    if (embeddedImageData_.emplace(resolved, encodedImage).second) {
+                        pending.importedModel.retainedCpuBytes += encodedImage.size();
+                    }
+                    return relative;
+                };
+                const auto applyTextureBinding = [&](const GltfTextureBinding& binding,
+                                                     TextureMapTransform& transform) {
+                    transform.uvScale = binding.uvScale;
+                    transform.uvOffset = binding.uvOffset;
+                    transform.clampToEdge = binding.clampToEdge;
+                    return texturePath(binding.imageIndex);
+                };
+                part.material.albedoTexture = applyTextureBinding(
+                        primitive.material.baseColorTexture, part.material.albedoMapTransform);
+                part.material.metallicRoughnessTexture = applyTextureBinding(
+                        primitive.material.metallicRoughnessTexture,
+                        part.material.metallicRoughnessMapTransform);
+                part.material.normalTexture = applyTextureBinding(
+                        primitive.material.normalTexture, part.material.normalMapTransform);
+                part.material.occlusionTexture = applyTextureBinding(
+                        primitive.material.occlusionTexture, part.material.occlusionMapTransform);
+                part.material.emissiveTexture = applyTextureBinding(
+                        primitive.material.emissiveTexture, part.material.emissiveMapTransform);
+                if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
+                    part.material.opacityTexture = part.material.albedoTexture;
+                    part.material.opacityMapTransform = part.material.albedoMapTransform;
+                    part.material.opacityMapChannel = ScalarTextureChannel::Matte;
                 }
-                return relative;
-            };
-            const auto applyTextureBinding = [&](const GltfTextureBinding& binding,
-                                                 TextureMapTransform& transform) {
-                transform.uvScale = binding.uvScale;
-                transform.uvOffset = binding.uvOffset;
-                transform.clampToEdge = binding.clampToEdge;
-                return texturePath(binding.imageIndex);
-            };
-            part.material.albedoTexture = applyTextureBinding(
-                    primitive.material.baseColorTexture, part.material.albedoMapTransform);
-            part.material.metallicRoughnessTexture = applyTextureBinding(
-                    primitive.material.metallicRoughnessTexture,
-                    part.material.metallicRoughnessMapTransform);
-            part.material.normalTexture = applyTextureBinding(
-                    primitive.material.normalTexture, part.material.normalMapTransform);
-            part.material.occlusionTexture = applyTextureBinding(
-                    primitive.material.occlusionTexture, part.material.occlusionMapTransform);
-            part.material.emissiveTexture = applyTextureBinding(
-                    primitive.material.emissiveTexture, part.material.emissiveMapTransform);
-            if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
-                part.material.opacityTexture = part.material.albedoTexture;
-                part.material.opacityMapTransform = part.material.albedoMapTransform;
-                part.material.opacityMapChannel = ScalarTextureChannel::Matte;
             }
         }
-        part.mesh = pending.glbModel.skeletal ? uploadSkinnedMesh(primitive)
-                                              : uploadStaticGltfMesh(primitive);
+        if (geometry == nullptr || !initializePendingGpuPrimitive(*geometry, part.mesh)) {
+            const std::string assetPath = pending.assetPath;
+            deleteMesh(part.mesh);
+            deleteMesh(pending.activePart.mesh);
+            deleteImportedParts(pending.importedModel);
+            releaseEmbeddedImagesForModel(assetPath);
+            pendingGpuUploads_.pop_front();
+            pendingMeshAssets_.erase(assetPath);
+            failedMeshAssets_.insert(assetPath);
+            __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                    "GPU buffer allocation failed for model %s", assetPath.c_str());
+            loadSceneAssets();
+            return;
+        }
+        pending.activePart = std::move(part);
+        pending.activePrimitiveInitialized = true;
+        pending.vertexBytesUploaded = 0U;
+        pending.indexBytesUploaded = 0U;
     }
 
-    if (part.mesh.vao == 0 || (pending.isGlb
-            && (part.mesh.vbo == 0 || part.mesh.ebo == 0))) {
-        if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
-        if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
-        if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+    CpuGpuPrimitive& geometry = pending.isGlb
+            ? pending.glbModel.gpuPrimitives[pending.nextPrimitive]
+            : pending.objModel.parts[pending.nextPrimitive].geometry;
+    const std::uint8_t* vertexData = geometry.skinned
+            ? reinterpret_cast<const std::uint8_t*>(geometry.skinnedVertices.data())
+            : reinterpret_cast<const std::uint8_t*>(geometry.vertices.data());
+    const std::uint64_t vertexBytes = geometry.skinned
+            ? static_cast<std::uint64_t>(geometry.skinnedVertices.size())
+                    * sizeof(CpuSkinnedVertex)
+            : static_cast<std::uint64_t>(geometry.vertices.size()) * sizeof(MeshVertex);
+    const std::uint64_t indexBytes = static_cast<std::uint64_t>(geometry.indices.size())
+            * sizeof(std::uint32_t);
+    std::uint64_t remainingBytes = kMaxGpuAssetUploadBytesPerTurn;
+    BufferUploadChunk chunk;
+    while (planBufferUploadChunk(vertexBytes, pending.vertexBytesUploaded,
+                                 remainingBytes, chunk)) {
+        glBindBuffer(GL_ARRAY_BUFFER, pending.activePart.mesh.vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(chunk.offset),
+                static_cast<GLsizeiptr>(chunk.byteCount), vertexData + chunk.offset);
+        pending.vertexBytesUploaded += chunk.byteCount;
+        remainingBytes -= chunk.byteCount;
+    }
+    while (pending.vertexBytesUploaded == vertexBytes
+            && planBufferUploadChunk(indexBytes, pending.indexBytesUploaded,
+                                     remainingBytes, chunk)) {
+        glBindBuffer(GL_ARRAY_BUFFER, pending.activePart.mesh.ebo);
+        glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(chunk.offset),
+                static_cast<GLsizeiptr>(chunk.byteCount),
+                reinterpret_cast<const std::uint8_t*>(geometry.indices.data())
+                        + chunk.offset);
+        pending.indexBytesUploaded += chunk.byteCount;
+        remainingBytes -= chunk.byteCount;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    if (glGetError() != GL_NO_ERROR) {
         const std::string assetPath = pending.assetPath;
+        deleteMesh(pending.activePart.mesh);
         deleteImportedParts(pending.importedModel);
         releaseEmbeddedImagesForModel(assetPath);
         pendingGpuUploads_.pop_front();
         pendingMeshAssets_.erase(assetPath);
         failedMeshAssets_.insert(assetPath);
         __android_log_print(ANDROID_LOG_ERROR, kLogTag,
-                "GPU upload failed for model %s", assetPath.c_str());
+                "Budgeted GPU upload failed for model %s", assetPath.c_str());
         loadSceneAssets();
         return;
     }
+    if (pending.vertexBytesUploaded != vertexBytes || pending.indexBytesUploaded != indexBytes) {
+        return;
+    }
 
-    pending.importedModel.gpuBytes += part.mesh.gpuBytes;
-    pending.importedModel.parts.push_back(std::move(part));
+    pending.importedModel.gpuBytes += pending.activePart.mesh.gpuBytes;
+    std::vector<MeshVertex>().swap(geometry.vertices);
+    std::vector<CpuSkinnedVertex>().swap(geometry.skinnedVertices);
+    std::vector<std::uint32_t>().swap(geometry.indices);
+    pending.importedModel.parts.push_back(std::move(pending.activePart));
+    pending.activePart = {};
+    pending.activePrimitiveInitialized = false;
+    pending.vertexBytesUploaded = 0U;
+    pending.indexBytesUploaded = 0U;
     ++pending.nextPrimitive;
     if (pending.nextPrimitive != primitiveCount) return;
 
@@ -1546,12 +1606,7 @@ void Renderer::processPendingGpuUpload() {
     const std::size_t jointCount = pending.importedModel.skeleton.size();
     const std::size_t clipCount = pending.importedModel.animations.size();
     const std::size_t partCount = pending.importedModel.parts.size();
-    std::size_t vertexCount = 0;
-    if (!isGlb) {
-        for (const CpuObjPart& cpuPart : pending.objModel.parts) {
-            vertexCount += cpuPart.vertices.size();
-        }
-    }
+    const std::size_t vertexCount = isGlb ? 0U : pending.totalVertexCount;
     importedMeshes_[assetPath] = std::move(pending.importedModel);
     pendingGpuUploads_.pop_front();
     pendingMeshAssets_.erase(assetPath);
@@ -2086,6 +2141,11 @@ void Renderer::releaseSceneAssets() {
     textureGpuBytes_.clear();
     assetMemoryCache_.clear();
     for (PendingGpuAsset& pending : pendingGpuUploads_) {
+        if (pending.activePart.mesh.vao != 0U) {
+            glDeleteVertexArrays(1, &pending.activePart.mesh.vao);
+        }
+        if (pending.activePart.mesh.vbo != 0U) glDeleteBuffers(1, &pending.activePart.mesh.vbo);
+        if (pending.activePart.mesh.ebo != 0U) glDeleteBuffers(1, &pending.activePart.mesh.ebo);
         for (ImportedPart& part : pending.importedModel.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
             if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
@@ -2170,6 +2230,15 @@ void Renderer::loadSceneAssets() {
         if (requiredMeshes.find(upload->assetPath) != requiredMeshes.end()) {
             ++upload;
             continue;
+        }
+        if (upload->activePart.mesh.vao != 0U) {
+            glDeleteVertexArrays(1, &upload->activePart.mesh.vao);
+        }
+        if (upload->activePart.mesh.vbo != 0U) {
+            glDeleteBuffers(1, &upload->activePart.mesh.vbo);
+        }
+        if (upload->activePart.mesh.ebo != 0U) {
+            glDeleteBuffers(1, &upload->activePart.mesh.ebo);
         }
         for (ImportedPart& part : upload->importedModel.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
