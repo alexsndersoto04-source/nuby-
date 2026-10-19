@@ -192,6 +192,16 @@ Java_com_nuby_engine_MainActivity_nativeAdventureJump(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativePauseAudio(JNIEnv*, jclass) {
+    if (gRenderer) gRenderer->pauseAudio();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_nuby_engine_MainActivity_nativeResumeAudio(JNIEnv*, jclass) {
+    if (gRenderer) gRenderer->resumeAudio();
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeRestartGame(JNIEnv*, jclass) {
     if (gRenderer) gRenderer->restartGame();
 }

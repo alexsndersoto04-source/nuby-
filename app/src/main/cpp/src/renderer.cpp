@@ -2116,13 +2116,26 @@ void Renderer::setAdventureMoveInput(float horizontal, float forward) {
 }
 
 void Renderer::jumpAdventureCharacter() {
-    if (adventureMode_) adventureGame_.jump(scene_);
+    if (adventureMode_ && adventureGame_.jump(scene_)) {
+        playAudioClip(jumpAudioClip_, 0.78f, 96U);
+    }
 }
 
 void Renderer::restartGame() {
     gameSwipeDistance_ = 0.0f;
+    audioEngine_.stopAll(0.045f);
     if (gameMode_) sampleGame_.start(scene_);
     else if (adventureMode_) adventureGame_.start(scene_);
+}
+
+void Renderer::pauseAudio() {
+    audioEngine_.pauseAll(true);
+    androidAudioOutput_.pause();
+}
+
+void Renderer::resumeAudio() {
+    audioEngine_.pauseAll(false);
+    androidAudioOutput_.resume();
 }
 
 bool Renderer::saveAdventureProgress(std::string& serialized, std::string& error) const {
@@ -2927,11 +2940,57 @@ void Renderer::renderBloom() {
 }
 
 Renderer::~Renderer() {
+    androidAudioOutput_.stop();
     adventureGame_.setZoneSceneReader({});
     asyncAssetTasks_.cancelAll();
 }
 
+void Renderer::loadAudioAssets() {
+    const auto load = [this](const char* path, std::shared_ptr<const AudioClip>& target) {
+        std::string bytes;
+        if (!readTextAsset(assetManager_, path, 2U * 1024U * 1024U, bytes)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "Audio clip unavailable: %s", path);
+            target.reset();
+            return;
+        }
+        std::vector<std::uint8_t> encoded(bytes.begin(), bytes.end());
+        std::shared_ptr<AudioClip> decoded;
+        std::string error;
+        if (!AudioEngine::decodeWav(encoded, decoded, error)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "Audio clip rejected (%s): %s", path, error.c_str());
+            target.reset();
+            return;
+        }
+        target = std::move(decoded);
+    };
+    load("audio/relic.wav", relicAudioClip_);
+    load("audio/jump.wav", jumpAudioClip_);
+    load("audio/gate.wav", gateAudioClip_);
+}
+
+void Renderer::playAudioClip(const std::shared_ptr<const AudioClip>& clip,
+                             float gain, std::uint8_t priority) {
+    if (!clip) return;
+    AudioPlayOptions options;
+    options.bus = AudioBus::Effects;
+    options.gain = gain;
+    options.priority = priority;
+    const AudioVoiceHandle handle = audioEngine_.play(clip, options);
+    if (handle.valid() && !androidAudioOutput_.running()
+            && !androidAudioOutput_.start(audioEngine_)) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "OpenSL ES output unavailable; game continues silently");
+    }
+}
+
 void Renderer::initialize(AAssetManager* assetManager) {
+    androidAudioOutput_.stop();
+    audioEngine_.stopAll();
+    relicAudioClip_.reset();
+    jumpAudioClip_.reset();
+    gateAudioClip_.reset();
     // Join previous CPU asset work before changing its captured manager source.
     asyncAssetTasks_.cancelAll();
     asyncAssetTasks_.waitUntilIdle(std::chrono::seconds(10));
@@ -3125,6 +3184,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
     glClearColor(0.025f, 0.035f, 0.085f, 1.0f);
+    loadAudioAssets();
     __android_log_print(ANDROID_LOG_INFO, kLogTag, "Nuby GLES 3 renderer initialized");
 }
 
@@ -3332,8 +3392,28 @@ void Renderer::render(float deltaSeconds) {
     if (projectRuntime_.loaded()) projectRuntime_.update(dt);
     else if (editorSession_.active()) editorSession_.update(dt);
     else if (gameMode_) sampleGame_.update(scene_, dt);
-    else if (adventureMode_) adventureGame_.update(scene_, dt);
-    else scene_.update(dt);
+    else if (adventureMode_) {
+        const int relicsBefore = adventureGame_.relicsCollected();
+        const bool completedBefore = adventureGame_.completed();
+        adventureGame_.update(scene_, dt);
+        for (int relic = relicsBefore; relic < adventureGame_.relicsCollected(); ++relic) {
+            playAudioClip(relicAudioClip_, 0.8f, 112U);
+        }
+        if (!completedBefore && adventureGame_.completed()) {
+            playAudioClip(gateAudioClip_, 0.86f, 120U);
+        }
+    } else scene_.update(dt);
+    if (androidAudioOutput_.running()) {
+        if (audioEngine_.activeVoiceCount() == 0U) {
+            audioIdleSeconds_ += dt;
+            if (audioIdleSeconds_ >= 2.0f) {
+                androidAudioOutput_.stop();
+                audioIdleSeconds_ = 0.0f;
+            }
+        } else {
+            audioIdleSeconds_ = 0.0f;
+        }
+    }
     Scene& frameScene = activeScene();
     evaluatedSkeletalPoses_.clear();
     evaluatedSkeletalPoses_.reserve(frameScene.entities().size());
@@ -3431,6 +3511,10 @@ void Renderer::render(float deltaSeconds) {
                            std::cos(fallback.yaw) * horizontal};
         view = lookAt(cameraPosition_, fallback.target, {0.0f, 1.0f, 0.0f});
     }
+    AudioListener listener;
+    listener.position = cameraPosition_;
+    listener.right = {view[0], view[4], view[8]};
+    audioEngine_.setListener(listener);
     const float nearPlane = std::max(camera.nearPlane, 0.01f);
     const float farPlane = std::max(camera.farPlane, nearPlane + 0.01f);
     const float aspectRatio = static_cast<float>(width_)

@@ -27,6 +27,18 @@ jobs:
           python3 tools/generate_alpha_mask_sample.py
           git diff --exit-code -- app/src/main/assets/engine-tests/alpha_mask_card.glb
 
+      - name: Verify deterministic adventure audio assets
+        run: |
+          python3 tools/generate_adventure_audio.py
+          git diff --exit-code -- app/src/main/assets/audio
+
+      - name: Compile and run audio engine tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/audio_engine.cpp tests/audio_engine_tests.cpp
+          -o /tmp/nuby-audio-tests && /tmp/nuby-audio-tests
+
       - name: Compile scene tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic

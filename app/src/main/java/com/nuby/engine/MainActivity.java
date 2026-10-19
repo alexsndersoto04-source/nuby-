@@ -83,6 +83,8 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native void nativeAdventureMove(float horizontal, float forward);
     private static native void nativeAdventureJump();
     private static native void nativeRestartGame();
+    private static native void nativePauseAudio();
+    private static native void nativeResumeAudio();
     private static native String nativeSaveAdventureProgress();
     private static native String nativeLoadAdventureProgress(String serialized);
     private static native String nativeGameStatus();
@@ -663,11 +665,13 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     protected void onResume() {
         super.onResume();
         applyImmersiveMode();
+        nativeResumeAudio();
         if (surface != null) surface.onResume();
     }
 
     @Override
     protected void onPause() {
+        nativePauseAudio();
         if (surface != null) {
             if (adventureMode) surface.queueEvent(this::saveAdventureProgressFromGlThread);
             surface.onPause();

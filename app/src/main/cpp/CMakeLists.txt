@@ -4,6 +4,8 @@ project(nuby_engine LANGUAGES CXX)
 add_library(nuby-engine SHARED
     native_engine.cpp
     src/asset_memory_cache.cpp
+    src/audio_engine.cpp
+    src/audio_output_android.cpp
     src/async_asset_task_queue.cpp
     src/async_scene_asset_loader.cpp
     src/adventure_game.cpp
@@ -41,9 +43,11 @@ target_compile_options(nuby-engine PRIVATE
 find_library(android-lib android)
 find_library(android-log log)
 find_library(opengles-v3 GLESv3)
+find_library(opensles-lib OpenSLES)
 
 target_link_libraries(nuby-engine PRIVATE
     ${opengles-v3}
+    ${opensles-lib}
     ${android-log}
     ${android-lib}
 )

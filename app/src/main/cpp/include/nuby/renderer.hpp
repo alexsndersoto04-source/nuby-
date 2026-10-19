@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,6 +13,8 @@
 #include <android/asset_manager.h>
 
 #include "nuby/adventure_game.hpp"
+#include "nuby/audio_engine.hpp"
+#include "nuby/audio_output_android.hpp"
 #include "nuby/asset_memory_cache.hpp"
 #include "nuby/async_asset_task_queue.hpp"
 #include "nuby/frustum.hpp"
@@ -43,6 +46,8 @@ public:
     void setAdventureMoveInput(float horizontal, float forward);
     void jumpAdventureCharacter();
     void restartGame();
+    void pauseAudio();
+    void resumeAudio();
     bool saveAdventureProgress(std::string& serialized, std::string& error) const;
     bool loadAdventureProgress(const std::string& serialized, std::string& error);
     bool loadProject(const std::string& descriptorAssetPath);
@@ -285,6 +290,9 @@ private:
                                const ViewFrustum& frustum) const;
     void buildScene();
     void loadSceneAssets();
+    void loadAudioAssets();
+    void playAudioClip(const std::shared_ptr<const AudioClip>& clip,
+                       float gain = 1.0f, std::uint8_t priority = 64U);
     void synchronizeSkeletalClipDurations(Scene& scene);
     void releaseSceneAssets();
     Scene& activeScene();
@@ -379,6 +387,11 @@ private:
     std::string projectLoadError_;
     SampleGame sampleGame_;
     AdventureGame adventureGame_;
+    AudioEngine audioEngine_;
+    AndroidAudioOutput androidAudioOutput_;
+    std::shared_ptr<const AudioClip> relicAudioClip_;
+    std::shared_ptr<const AudioClip> jumpAudioClip_;
+    std::shared_ptr<const AudioClip> gateAudioClip_;
     int demoMode_ = 0;
     bool gameMode_ = false;
     bool adventureMode_ = false;
@@ -389,6 +402,7 @@ private:
     float lastTouchY_ = 0.0f;
     float lastPinchDistance_ = 0.0f;
     float gameSwipeDistance_ = 0.0f;
+    float audioIdleSeconds_ = 0.0f;
     std::array<float, 16> viewProjection_{};
     std::array<float, 16> view_{};
     std::array<ShadowMatrix4, kDirectionalShadowCascadeCount> shadowViewProjections_{};
