@@ -1,6 +1,7 @@
 #include "nuby/scene_io.hpp"
 #include "nuby/scene.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -1032,7 +1033,7 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "scene serialization rejects unbounded texture map base/gain values");
 }
 
-void testAdventureZonePillarsHaveCameraOnlyColliders() {
+void testAdventureZonePillarsBlockActorsAndCamera() {
     for (int zone = 1; zone <= 3; ++zone) {
         const std::string path = "app/src/main/assets/scenes/zones/ruins_0"
                 + std::to_string(zone) + ".scene";
@@ -1042,15 +1043,39 @@ void testAdventureZonePillarsHaveCameraOnlyColliders() {
         expect(input.good() && nuby::SceneSerializer::load(scene, input, error),
                "packaged adventure zone scene remains loadable");
         std::size_t pillars = 0U;
+        std::uint32_t firstPillarId = 0U;
         for (const nuby::Entity& entity : scene.entities()) {
             if (entity.primitive != nuby::Primitive::ImportedMesh) continue;
             ++pillars;
+            if (firstPillarId == 0U) firstPillarId = entity.id;
             expect(entity.boxCollider.enabled
                            && entity.boxCollider.collisionLayer == 4U
-                           && entity.boxCollider.collisionMask == 4U,
-                   "ruin pillar collider is isolated to camera-query interactions");
+                           && entity.boxCollider.collisionMask == 6U,
+                   "ruin pillar collider is queryable by camera and solid to actor layer 2");
         }
         expect(pillars == 4U, "each zone keeps its four authored pillar meshes");
+        if (zone == 1 && firstPillarId != 0U) {
+            const nuby::Entity* pillar = scene.find(firstPillarId);
+            const std::array<float, 3> start = pillar->transform.position;
+            scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
+            nuby::Entity& actor = scene.create("layer-2 actor probe", nuby::Primitive::Sphere);
+            const std::uint32_t actorId = actor.id;
+            actor.transform.position = start;
+            actor.rigidbody.enabled = true;
+            actor.rigidbody.linearDamping = 0.0f;
+            actor.sphereCollider.enabled = true;
+            actor.sphereCollider.radius = 0.25f;
+            actor.sphereCollider.collisionLayer = 2U;
+            actor.sphereCollider.collisionMask = 0xFFFFFFFFU;
+            scene.update(1.0f / 60.0f);
+            const nuby::Entity* displaced = scene.find(actorId);
+            expect(displaced != nullptr
+                           && std::fabs(displaced->transform.position[0] - start[0])
+                                      + std::fabs(displaced->transform.position[1] - start[1])
+                                      + std::fabs(displaced->transform.position[2] - start[2])
+                                      > 0.01f,
+                   "pillar collider physically blocks layer-2 actors that enter its bounds");
+        }
     }
 }
 
@@ -1095,7 +1120,7 @@ void testAppendingSceneFragmentsRemapsHierarchyTransactionally() {
 
 int main() {
     testRoundTripAllSceneData();
-    testAdventureZonePillarsHaveCameraOnlyColliders();
+    testAdventureZonePillarsBlockActorsAndCamera();
     testAppendingSceneFragmentsRemapsHierarchyTransactionally();
     testMalformedFilesDoNotPartiallyReplaceScene();
     if (failures != 0) {
