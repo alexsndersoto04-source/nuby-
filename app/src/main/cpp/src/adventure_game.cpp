@@ -111,6 +111,17 @@ void AdventureGame::buildScene(Scene& scene) {
     gate.material.emission = {0.035f, 0.18f, 0.12f};
     gate.material.metallic = 0.28f;
     gate.material.roughness = 0.31f;
+    gate.audioSource.enabled = true;
+    gate.audioSource.assetPath = "audio/gate_hum.wav";
+    gate.audioSource.bus = AudioBus::Music;
+    gate.audioSource.gain = 1.4f;
+    gate.audioSource.priority = 32U;
+    gate.audioSource.looping = true;
+    gate.audioSource.positional = true;
+    gate.audioSource.playOnAwake = true;
+    gate.audioSource.referenceDistance = 4.0f;
+    gate.audioSource.maximumDistance = 28.0f;
+    gate.audioSource.rolloff = 0.7f;
 
     Entity& gateTrigger = scene.create("Sun Gate Trigger", Primitive::Sphere);
     gateTriggerId_ = gateTrigger.id;

@@ -56,7 +56,16 @@ def gate(t: float, duration: float) -> float:
     return envelope * (0.38 + 0.62 * swell) * carrier
 
 
+def gate_hum(t: float, duration: float) -> float:
+    modulation = 0.78 + 0.22 * math.sin(2.0 * math.pi * 2.0 * t)
+    chord = (0.48 * math.sin(2.0 * math.pi * 110.0 * t)
+             + 0.31 * math.sin(2.0 * math.pi * 165.0 * t + 0.18)
+             + 0.21 * math.sin(2.0 * math.pi * 220.0 * t + 0.42))
+    return 0.105 * modulation * chord
+
+
 if __name__ == "__main__":
     write_clip("relic.wav", 0.72, relic)
     write_clip("jump.wav", 0.34, jump)
     write_clip("gate.wav", 1.25, gate)
+    write_clip("gate_hum.wav", 2.0, gate_hum)

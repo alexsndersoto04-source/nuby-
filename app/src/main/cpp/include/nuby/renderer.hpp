@@ -81,6 +81,11 @@ public:
     std::string frameTimingStatusText() const;
 
 private:
+    struct ActiveAudioSourceVoice {
+        AudioVoiceHandle handle;
+        std::string assetPath;
+    };
+
     struct Mesh {
         GLuint vao = 0;
         GLuint vbo = 0;
@@ -291,6 +296,10 @@ private:
     void buildScene();
     void loadSceneAssets();
     void loadAudioAssets();
+    std::shared_ptr<const AudioClip> loadAudioClip(const std::string& relativePath);
+    void syncSceneAudioSources(Scene& scene, float deltaSeconds);
+    void clearSceneAudioSources();
+    void ensureAudioOutput(float deltaSeconds);
     void playAudioClip(const std::shared_ptr<const AudioClip>& clip,
                        float gain = 1.0f, std::uint8_t priority = 64U);
     void synchronizeSkeletalClipDurations(Scene& scene);
@@ -392,6 +401,12 @@ private:
     std::shared_ptr<const AudioClip> relicAudioClip_;
     std::shared_ptr<const AudioClip> jumpAudioClip_;
     std::shared_ptr<const AudioClip> gateAudioClip_;
+    std::unordered_map<std::string, std::shared_ptr<const AudioClip>> audioClipCache_;
+    std::unordered_set<std::string> failedAudioClipAssets_;
+    std::unordered_map<std::uint32_t, ActiveAudioSourceVoice> activeAudioSourceVoices_;
+    std::unordered_set<std::uint32_t> startedAudioSources_;
+    std::unordered_set<std::uint32_t> seenAudioSourcesScratch_;
+    const Scene* audioSourceScene_ = nullptr;
     int demoMode_ = 0;
     bool gameMode_ = false;
     bool adventureMode_ = false;
@@ -403,6 +418,8 @@ private:
     float lastPinchDistance_ = 0.0f;
     float gameSwipeDistance_ = 0.0f;
     float audioIdleSeconds_ = 0.0f;
+    float audioOutputRetrySeconds_ = 0.0f;
+    bool audioOutputFailureLogged_ = false;
     std::array<float, 16> viewProjection_{};
     std::array<float, 16> view_{};
     std::array<ShadowMatrix4, kDirectionalShadowCascadeCount> shadowViewProjections_{};

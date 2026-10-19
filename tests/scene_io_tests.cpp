@@ -71,8 +71,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 21") {
+        if (line == "NUBY_SCENE 22") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("AUDIO_SOURCE ", 0) == 0 && targetVersion < 22) {
+            continue;
         } else if (line.rfind("ORBIT_CAMERA_COLLISION ", 0) == 0 && targetVersion < 21) {
             continue;
         } else if (line.rfind("CHARACTER_CONTROLLER ", 0) == 0 && targetVersion < 20) {
@@ -343,6 +345,17 @@ nuby::Scene makeScene() {
     camera.orbitCamera.collisionRecoverySpeed = 6.5f;
     camera.orbitCamera.collisionLayer = 8U;
     camera.orbitCamera.collisionMask = 0x00000014U;
+    camera.audioSource.enabled = true;
+    camera.audioSource.assetPath = "audio/looped cue.wav";
+    camera.audioSource.bus = nuby::AudioBus::Music;
+    camera.audioSource.gain = 0.55f;
+    camera.audioSource.priority = 201U;
+    camera.audioSource.looping = true;
+    camera.audioSource.positional = false;
+    camera.audioSource.playOnAwake = false;
+    camera.audioSource.referenceDistance = 2.0f;
+    camera.audioSource.maximumDistance = 18.0f;
+    camera.audioSource.rolloff = 0.8f;
     camera.characterController.enabled = true;
     camera.characterController.moveInput = {0.6f, -0.8f};
     camera.characterController.maximumSpeed = 5.2f;
@@ -394,6 +407,19 @@ void testRoundTripAllSceneData() {
                    && loaded.activeCamera()->orbitCamera.collisionLayer == 8U
                    && loaded.activeCamera()->orbitCamera.collisionMask == 0x00000014U,
            "round-trip preserves spring-arm collision controls and filtering");
+    expect(loaded.activeCamera() != nullptr
+                   && loaded.activeCamera()->audioSource.enabled
+                   && loaded.activeCamera()->audioSource.assetPath == "audio/looped cue.wav"
+                   && loaded.activeCamera()->audioSource.bus == nuby::AudioBus::Music
+                   && near(loaded.activeCamera()->audioSource.gain, 0.55f)
+                   && loaded.activeCamera()->audioSource.priority == 201U
+                   && loaded.activeCamera()->audioSource.looping
+                   && !loaded.activeCamera()->audioSource.positional
+                   && !loaded.activeCamera()->audioSource.playOnAwake
+                   && near(loaded.activeCamera()->audioSource.referenceDistance, 2.0f)
+                   && near(loaded.activeCamera()->audioSource.maximumDistance, 18.0f)
+                   && near(loaded.activeCamera()->audioSource.rolloff, 0.8f),
+           "round-trip preserves serialized audio emitter and spatial mix settings");
     expect(near(loaded.physicsSettings().gravity[1], -12.0f)
                    && near(loaded.physicsSettings().fixedTimeStep, 1.0f / 120.0f)
                    && loaded.physicsSettings().maximumSubsteps == 8
@@ -681,6 +707,34 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid crossfade source data cannot partially replace the target scene");
 
+    std::string invalidAudioGain = valid.str();
+    expect(replaceRecordField(invalidAudioGain, "AUDIO_SOURCE", 4, "4.1", 2),
+           "v22 scene stores bounded audio-source gain");
+    std::stringstream malformedAudioGain(invalidAudioGain);
+    expect(!nuby::SceneSerializer::load(target, malformedAudioGain, error),
+           "audio-source gains above the supported bound are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid audio settings cannot partially replace the target scene");
+
+    std::string invalidAudioPath = valid.str();
+    expect(replaceRecordField(invalidAudioPath, "AUDIO_SOURCE", 2,
+                              "\"../escape.wav\"", 2),
+           "v22 scene stores a confined audio asset path");
+    std::stringstream malformedAudioPath(invalidAudioPath);
+    expect(!nuby::SceneSerializer::load(target, malformedAudioPath, error),
+           "audio-source paths escaping the asset root are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV21(downgradeTextureSchema(valid.str(), 21, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV21, error),
+           "version-twenty-one scenes remain readable before audio emitters");
+    expect(target.activeCamera() != nullptr
+                   && target.activeCamera()->orbitCamera.collisionEnabled
+                   && !target.activeCamera()->audioSource.enabled
+                   && target.activeCamera()->audioSource.assetPath.empty(),
+           "version-twenty-one camera data is preserved and audio defaults stay disabled");
+
     std::stringstream legacyV20(downgradeTextureSchema(valid.str(), 20, 8));
     expect(nuby::SceneSerializer::load(target, legacyV20, error),
            "version-twenty scenes remain readable without spring-arm data");
@@ -918,6 +972,14 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream invalidTextureOutput;
     expect(!nuby::SceneSerializer::save(invalidTexture, invalidTextureOutput, error),
            "scene serialization rejects texture paths that escape the project assets");
+
+    nuby::Scene invalidAudioSource;
+    nuby::Entity& invalidAudio = invalidAudioSource.create("invalid audio", nuby::Primitive::None);
+    invalidAudio.audioSource.enabled = true;
+    invalidAudio.audioSource.assetPath = "../outside.wav";
+    std::stringstream invalidAudioOutput;
+    expect(!nuby::SceneSerializer::save(invalidAudioSource, invalidAudioOutput, error),
+           "scene serialization rejects audio source paths outside the asset root");
 
     nuby::Scene invalidPhysics;
     invalidPhysics.physicsSettings().fixedTimeStep = 0.0f;

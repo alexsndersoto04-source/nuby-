@@ -278,6 +278,23 @@ bool AudioEngine::pause(AudioVoiceHandle handle, bool paused) {
     return true;
 }
 
+bool AudioEngine::setVoicePosition(AudioVoiceHandle handle,
+                                   const std::array<float, 3>& position) {
+    if (!std::all_of(position.begin(), position.end(), [](float value) {
+            return std::isfinite(value);
+        })) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    Voice* voice = findVoice(handle);
+    if (voice == nullptr) return false;
+    voice->options.position = position;
+    return true;
+}
+
+bool AudioEngine::isVoiceActive(AudioVoiceHandle handle) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return findVoice(handle) != nullptr;
+}
+
 void AudioEngine::pauseAll(bool paused) {
     std::lock_guard<std::mutex> lock(mutex_);
     globallyPaused_ = paused;

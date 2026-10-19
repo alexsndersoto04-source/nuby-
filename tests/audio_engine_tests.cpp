@@ -176,8 +176,14 @@ void testMixingResamplingLoopingPauseAndStaleHandles() {
            "loop resumes at its preserved cursor");
     expect(engine.pause(looping, true) && engine.pause(looping, false),
            "individual voice pause can be toggled");
-    expect(engine.stop(looping) && engine.activeVoiceCount() == 0U,
-           "voice can be stopped immediately");
+    expect(engine.isVoiceActive(looping)
+                   && engine.setVoicePosition(looping, {2.0f, 1.0f, -3.0f})
+                   && !engine.setVoicePosition(looping,
+                           {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}),
+           "live voice position updates accept finite coordinates only");
+    expect(engine.stop(looping) && !engine.isVoiceActive(looping)
+                   && engine.activeVoiceCount() == 0U,
+           "voice can be stopped immediately and its handle becomes inactive");
 }
 
 void testSpatialPanAttenuationAndBuses() {
@@ -195,6 +201,11 @@ void testSpatialPanAttenuationAndBuses() {
     engine.renderPcm16(output, 4U);
     expect(handle.valid() && std::abs(output[0]) < 5 && output[1] > 16000,
            "3D panning places a right-side source in the right channel");
+    expect(engine.setVoicePosition(handle, {-1.0f, 0.0f, 0.0f}),
+           "moving source can update its world position while playing");
+    engine.renderPcm16(output, 1U);
+    expect(output[0] > 16000 && std::abs(output[1]) < 5,
+           "live source movement updates spatial panning on the next mixer block");
 
     engine.stopAll();
     engine.setBusGain(nuby::AudioBus::Effects, 0.25f);
@@ -248,7 +259,8 @@ void testVoiceLimitsPriorityStealingAndFade() {
 void testPackagedAdventureAudioClipsDecode() {
     for (const char* path : {"app/src/main/assets/audio/jump.wav",
                              "app/src/main/assets/audio/relic.wav",
-                             "app/src/main/assets/audio/gate.wav"}) {
+                             "app/src/main/assets/audio/gate.wav",
+                             "app/src/main/assets/audio/gate_hum.wav"}) {
         std::ifstream input(path, std::ios::binary);
         std::vector<std::uint8_t> bytes;
         char sample = 0;

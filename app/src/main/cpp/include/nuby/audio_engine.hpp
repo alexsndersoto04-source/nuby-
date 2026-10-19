@@ -60,6 +60,8 @@ public:
                           const AudioPlayOptions& options = {});
     bool stop(AudioVoiceHandle handle, float fadeSeconds = 0.0f);
     bool pause(AudioVoiceHandle handle, bool paused);
+    bool setVoicePosition(AudioVoiceHandle handle, const std::array<float, 3>& position);
+    bool isVoiceActive(AudioVoiceHandle handle) const;
     void pauseAll(bool paused);
     void stopAll(float fadeSeconds = 0.0f);
     void setListener(const AudioListener& listener);

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "nuby/audio_engine.hpp"
+
 namespace nuby {
 
 enum class Primitive : std::uint8_t {
@@ -321,6 +323,21 @@ struct OrbitCameraController {
     float lastRequestedDistance = -1.0f;  // Runtime-only; distinguishes zoom from recovery.
 };
 
+// Serialized audio emitter settings; playback handles remain renderer/runtime state.
+struct AudioSourceComponent {
+    bool enabled = false;
+    std::string assetPath;
+    AudioBus bus = AudioBus::Effects;
+    float gain = 1.0f;
+    std::uint8_t priority = 64U;
+    bool looping = false;
+    bool positional = true;
+    bool playOnAwake = true;
+    float referenceDistance = 1.0f;
+    float maximumDistance = 24.0f;
+    float rolloff = 1.0f;
+};
+
 struct Entity {
     std::uint32_t id = 0;
     std::uint32_t parentId = 0;
@@ -342,6 +359,7 @@ struct Entity {
     PointLightComponent pointLight;
     CameraComponent camera;
     OrbitCameraController orbitCamera;
+    AudioSourceComponent audioSource;
     bool visible = true;
     bool overrideMtlMaterials = false;
 };

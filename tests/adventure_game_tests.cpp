@@ -96,6 +96,13 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
            "wayfarer has a reusable idle/walk/run/jump skeletal locomotion controller");
     expect(camera != nullptr && camera->orbitCamera.enabled,
            "adventure has an orbit-follow camera");
+    const nuby::Entity* gate = scene.find(findEntityId(scene, "Sun Gate"));
+    expect(gate != nullptr && gate->audioSource.enabled
+                   && gate->audioSource.assetPath == "audio/gate_hum.wav"
+                   && gate->audioSource.bus == nuby::AudioBus::Music
+                   && gate->audioSource.looping && gate->audioSource.positional
+                   && gate->audioSource.playOnAwake,
+           "sun gate uses a serialized looping positional ambience emitter");
     const nuby::Entity* head = scene.find(findEntityId(scene, "Wayfarer Head"));
     expect(head != nullptr && head->parentId == game.playerId()
                    && head->material.albedoTexture == "textures/wayfarer_face.tga",

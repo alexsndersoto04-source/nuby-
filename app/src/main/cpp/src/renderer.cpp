@@ -1937,6 +1937,7 @@ bool Renderer::loadProject(const std::string& descriptorAssetPath) {
         return false;
     }
 
+    clearSceneAudioSources();
     editorSession_.close();
     projectAssetPrefix_ = candidatePrefix;
     projectLoadError_.clear();
@@ -1954,6 +1955,7 @@ void Renderer::unloadProject() {
         projectLoadError_.clear();
         return;
     }
+    clearSceneAudioSources();
     projectRuntime_.unload();
     projectAssetPrefix_.clear();
     projectLoadError_.clear();
@@ -1986,6 +1988,7 @@ bool Renderer::loadEditorProject(const std::string& descriptorText,
         return false;
     }
     if (!editorSession_.loadProjectText(descriptorText, sceneText, error)) return false;
+    clearSceneAudioSources();
     projectRuntime_.unload();
     projectAssetPrefix_.clear();
     projectLoadError_.clear();
@@ -2075,6 +2078,7 @@ void Renderer::setDemoMode(int mode) {
     if (safeMode != 3) editorSession_.close();
     if (demoMode_ == safeMode && !leavingProject && safeMode != 3) return;
 
+    clearSceneAudioSources();
     releaseSceneAssets();
     gameSwipeDistance_ = 0.0f;
     if (safeMode == 3) {
@@ -2945,29 +2949,140 @@ Renderer::~Renderer() {
     asyncAssetTasks_.cancelAll();
 }
 
+std::shared_ptr<const AudioClip> Renderer::loadAudioClip(const std::string& relativePath) {
+    const std::string assetPath = projectAssetPath(relativePath);
+    if (assetPath.empty()) return nullptr;
+    const auto cached = audioClipCache_.find(assetPath);
+    if (cached != audioClipCache_.end()) return cached->second;
+    if (failedAudioClipAssets_.find(assetPath) != failedAudioClipAssets_.end()) return nullptr;
+
+    std::string encodedText;
+    if (!readTextAsset(assetManager_, assetPath, 2U * 1024U * 1024U, encodedText)) {
+        failedAudioClipAssets_.insert(assetPath);
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "Audio clip unavailable: %s", assetPath.c_str());
+        return nullptr;
+    }
+    const std::vector<std::uint8_t> encoded(encodedText.begin(), encodedText.end());
+    std::shared_ptr<AudioClip> decoded;
+    std::string error;
+    if (!AudioEngine::decodeWav(encoded, decoded, error)) {
+        failedAudioClipAssets_.insert(assetPath);
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "Audio clip rejected (%s): %s", assetPath.c_str(), error.c_str());
+        return nullptr;
+    }
+    audioClipCache_.emplace(assetPath, decoded);
+    return decoded;
+}
+
 void Renderer::loadAudioAssets() {
-    const auto load = [this](const char* path, std::shared_ptr<const AudioClip>& target) {
-        std::string bytes;
-        if (!readTextAsset(assetManager_, path, 2U * 1024U * 1024U, bytes)) {
-            __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                    "Audio clip unavailable: %s", path);
-            target.reset();
-            return;
+    relicAudioClip_ = loadAudioClip("audio/relic.wav");
+    jumpAudioClip_ = loadAudioClip("audio/jump.wav");
+    gateAudioClip_ = loadAudioClip("audio/gate.wav");
+}
+
+void Renderer::clearSceneAudioSources() {
+    for (const auto& source : activeAudioSourceVoices_) {
+        audioEngine_.stop(source.second.handle, 0.04f);
+    }
+    activeAudioSourceVoices_.clear();
+    startedAudioSources_.clear();
+    seenAudioSourcesScratch_.clear();
+    audioSourceScene_ = nullptr;
+}
+
+void Renderer::syncSceneAudioSources(Scene& scene, float deltaSeconds) {
+    if (audioSourceScene_ != nullptr && audioSourceScene_ != &scene) {
+        clearSceneAudioSources();
+    }
+    audioSourceScene_ = &scene;
+    seenAudioSourcesScratch_.clear();
+    for (const Entity& entity : scene.entities()) {
+        const AudioSourceComponent& source = entity.audioSource;
+        if (!source.enabled || !source.playOnAwake || source.assetPath.empty()) continue;
+        seenAudioSourcesScratch_.insert(entity.id);
+        const auto active = activeAudioSourceVoices_.find(entity.id);
+        if (active != activeAudioSourceVoices_.end()
+                && active->second.assetPath != source.assetPath) {
+            audioEngine_.stop(active->second.handle, 0.03f);
+            activeAudioSourceVoices_.erase(active);
+            startedAudioSources_.erase(entity.id);
         }
-        std::vector<std::uint8_t> encoded(bytes.begin(), bytes.end());
-        std::shared_ptr<AudioClip> decoded;
-        std::string error;
-        if (!AudioEngine::decodeWav(encoded, decoded, error)) {
-            __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                    "Audio clip rejected (%s): %s", path, error.c_str());
-            target.reset();
-            return;
+
+        auto voice = activeAudioSourceVoices_.find(entity.id);
+        if (voice != activeAudioSourceVoices_.end()
+                && audioEngine_.isVoiceActive(voice->second.handle)) {
+            if (source.positional) {
+                const auto world = scene.worldMatrix(entity.id);
+                audioEngine_.setVoicePosition(voice->second.handle,
+                        {world[12], world[13], world[14]});
+            }
+            continue;
         }
-        target = std::move(decoded);
-    };
-    load("audio/relic.wav", relicAudioClip_);
-    load("audio/jump.wav", jumpAudioClip_);
-    load("audio/gate.wav", gateAudioClip_);
+        if (!source.looping && startedAudioSources_.find(entity.id)
+                != startedAudioSources_.end()) continue;
+
+        const std::shared_ptr<const AudioClip> clip = loadAudioClip(source.assetPath);
+        if (!clip) continue;
+        const auto world = scene.worldMatrix(entity.id);
+        AudioPlayOptions options;
+        options.bus = source.bus;
+        options.gain = source.gain;
+        options.priority = source.priority;
+        options.looping = source.looping;
+        options.positional = source.positional;
+        options.position = {world[12], world[13], world[14]};
+        options.referenceDistance = source.referenceDistance;
+        options.maximumDistance = source.maximumDistance;
+        options.rolloff = source.rolloff;
+        const AudioVoiceHandle handle = audioEngine_.play(clip, options);
+        if (!handle.valid()) continue;
+        activeAudioSourceVoices_[entity.id] = {handle, source.assetPath};
+        if (!source.looping) startedAudioSources_.insert(entity.id);
+    }
+
+    for (auto voice = activeAudioSourceVoices_.begin();
+            voice != activeAudioSourceVoices_.end();) {
+        if (seenAudioSourcesScratch_.find(voice->first) == seenAudioSourcesScratch_.end()) {
+            audioEngine_.stop(voice->second.handle, 0.04f);
+            voice = activeAudioSourceVoices_.erase(voice);
+        } else {
+            ++voice;
+        }
+    }
+    for (auto started = startedAudioSources_.begin(); started != startedAudioSources_.end();) {
+        if (seenAudioSourcesScratch_.find(*started) == seenAudioSourcesScratch_.end()) {
+            started = startedAudioSources_.erase(started);
+        } else {
+            ++started;
+        }
+    }
+    ensureAudioOutput(deltaSeconds);
+}
+
+void Renderer::ensureAudioOutput(float deltaSeconds) {
+    if (androidAudioOutput_.running()) {
+        audioOutputRetrySeconds_ = 0.0f;
+        audioOutputFailureLogged_ = false;
+        return;
+    }
+    if (audioEngine_.activeVoiceCount() == 0U) return;
+    if (audioOutputFailureLogged_) {
+        audioOutputRetrySeconds_ += std::isfinite(deltaSeconds)
+                ? std::clamp(deltaSeconds, 0.0f, 0.05f) : 0.0f;
+        if (audioOutputRetrySeconds_ < 1.0f) return;
+    }
+    audioOutputRetrySeconds_ = 0.0f;
+    if (!androidAudioOutput_.start(audioEngine_)) {
+        if (!audioOutputFailureLogged_) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                    "OpenSL ES output unavailable; game continues silently");
+            audioOutputFailureLogged_ = true;
+        }
+    } else {
+        audioOutputFailureLogged_ = false;
+    }
 }
 
 void Renderer::playAudioClip(const std::shared_ptr<const AudioClip>& clip,
@@ -2977,17 +3092,17 @@ void Renderer::playAudioClip(const std::shared_ptr<const AudioClip>& clip,
     options.bus = AudioBus::Effects;
     options.gain = gain;
     options.priority = priority;
-    const AudioVoiceHandle handle = audioEngine_.play(clip, options);
-    if (handle.valid() && !androidAudioOutput_.running()
-            && !androidAudioOutput_.start(audioEngine_)) {
-        __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                "OpenSL ES output unavailable; game continues silently");
-    }
+    audioEngine_.play(clip, options);
 }
 
 void Renderer::initialize(AAssetManager* assetManager) {
     androidAudioOutput_.stop();
     audioEngine_.stopAll();
+    clearSceneAudioSources();
+    audioClipCache_.clear();
+    failedAudioClipAssets_.clear();
+    audioOutputRetrySeconds_ = 0.0f;
+    audioOutputFailureLogged_ = false;
     relicAudioClip_.reset();
     jumpAudioClip_.reset();
     gateAudioClip_.reset();
@@ -3515,6 +3630,7 @@ void Renderer::render(float deltaSeconds) {
     listener.position = cameraPosition_;
     listener.right = {view[0], view[4], view[8]};
     audioEngine_.setListener(listener);
+    syncSceneAudioSources(frameScene, dt);
     const float nearPlane = std::max(camera.nearPlane, 0.01f);
     const float farPlane = std::max(camera.farPlane, nearPlane + 0.01f);
     const float aspectRatio = static_cast<float>(width_)

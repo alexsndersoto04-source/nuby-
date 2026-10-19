@@ -239,7 +239,11 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.orbitCamera.collisionRadius)
             || !finite(entity.orbitCamera.collisionPadding)
             || !finite(entity.orbitCamera.collisionMinimumDistance)
-            || !finite(entity.orbitCamera.collisionRecoverySpeed)) {
+            || !finite(entity.orbitCamera.collisionRecoverySpeed)
+            || !finite(entity.audioSource.gain)
+            || !finite(entity.audioSource.referenceDistance)
+            || !finite(entity.audioSource.maximumDistance)
+            || !finite(entity.audioSource.rolloff)) {
         return false;
     }
     if (entity.orbitCamera.collisionRadius <= 0.0f
@@ -249,6 +253,14 @@ bool validEntity(const Entity& entity) {
             || entity.orbitCamera.collisionLayer == 0U
             || (entity.orbitCamera.collisionEnabled
                 && entity.orbitCamera.collisionMask == 0U)
+            || !validTexturePath(entity.audioSource.assetPath)
+            || (entity.audioSource.enabled && entity.audioSource.assetPath.empty())
+            || static_cast<std::uint8_t>(entity.audioSource.bus)
+                    > static_cast<std::uint8_t>(AudioBus::Music)
+            || entity.audioSource.gain < 0.0f || entity.audioSource.gain > 4.0f
+            || entity.audioSource.referenceDistance <= 0.0f
+            || entity.audioSource.maximumDistance < entity.audioSource.referenceDistance
+            || entity.audioSource.rolloff < 0.0f
             || entity.sphereCollider.collisionLayer == 0U
             || entity.boxCollider.collisionLayer == 0U
             || (entity.rigidbody.enabled && entity.rigidbody.mass < 1.0e-6f)
@@ -533,6 +545,17 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << entity.orbitCamera.collisionRecoverySpeed << ' '
            << entity.orbitCamera.collisionLayer << ' '
            << entity.orbitCamera.collisionMask << '\n';
+    output << "AUDIO_SOURCE " << (entity.audioSource.enabled ? 1 : 0) << ' '
+           << std::quoted(entity.audioSource.assetPath) << ' '
+           << static_cast<unsigned int>(entity.audioSource.bus) << ' '
+           << entity.audioSource.gain << ' '
+           << static_cast<unsigned int>(entity.audioSource.priority) << ' '
+           << (entity.audioSource.looping ? 1 : 0) << ' '
+           << (entity.audioSource.positional ? 1 : 0) << ' '
+           << (entity.audioSource.playOnAwake ? 1 : 0) << ' '
+           << entity.audioSource.referenceDistance << ' '
+           << entity.audioSource.maximumDistance << ' '
+           << entity.audioSource.rolloff << '\n';
     output << "RIGIDBODY " << (entity.rigidbody.enabled ? 1 : 0) << ' '
            << entity.rigidbody.mass;
     writeFloatArray(output, entity.rigidbody.velocity);
@@ -846,6 +869,26 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !std::isfinite(entity.orbitCamera.collisionRecoverySpeed)) {
             return fail(error, "Entity orbit-camera collision settings are invalid");
         }
+    }
+    if (version >= 22) {
+        unsigned int audioBus = 0U;
+        unsigned int audioPriority = 0U;
+        if (!readTag(input, "AUDIO_SOURCE", error)
+                || !readBool(input, entity.audioSource.enabled)
+                || !(input >> std::quoted(entity.audioSource.assetPath)
+                            >> audioBus >> entity.audioSource.gain >> audioPriority)
+                || !readBool(input, entity.audioSource.looping)
+                || !readBool(input, entity.audioSource.positional)
+                || !readBool(input, entity.audioSource.playOnAwake)
+                || !(input >> entity.audioSource.referenceDistance
+                            >> entity.audioSource.maximumDistance
+                            >> entity.audioSource.rolloff)
+                || audioBus > static_cast<unsigned int>(AudioBus::Music)
+                || audioPriority > 255U) {
+            return fail(error, "Entity audio-source component is invalid");
+        }
+        entity.audioSource.bus = static_cast<AudioBus>(audioBus);
+        entity.audioSource.priority = static_cast<std::uint8_t>(audioPriority);
     }
 
     if (version >= 2) {
