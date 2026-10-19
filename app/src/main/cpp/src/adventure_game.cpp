@@ -11,9 +11,11 @@ namespace nuby {
 namespace {
 constexpr float kFloorHeight = -1.22f;
 constexpr float kPlayerCenterHeight = -0.84f;
-constexpr float kWorldLimitX = 7.0f;
+constexpr float kWorldLimitX = 16.0f;
 constexpr float kWorldNearZ = 3.0f;
-constexpr float kWorldFarZ = -15.0f;
+constexpr float kWorldFarZ = -20.0f;
+constexpr std::size_t kZoneGridSide = 3U;
+constexpr std::size_t kMaximumResidentAdventureZones = 4U;
 constexpr float kGateZ = -11.5f;
 constexpr float kPiOverTwo = 1.57079632679489661923f;
 }
@@ -24,12 +26,12 @@ void AdventureGame::setZoneSceneReader(ZoneSceneReader reader) {
         zoneSceneLoader_.reset();
     }
     if (reader) zoneSceneLoader_ = std::make_unique<AsyncSceneAssetLoader>(std::move(reader));
-    streamedZonePending_.fill(false);
+    std::fill(streamedZonePending_.begin(), streamedZonePending_.end(), false);
 }
 
 void AdventureGame::buildScene(Scene& scene) {
     if (zoneSceneLoader_) zoneSceneLoader_->cancelAll();
-    streamedZonePending_.fill(false);
+    std::fill(streamedZonePending_.begin(), streamedZonePending_.end(), false);
     scene.clear();
     PhysicsSettings& physics = scene.physicsSettings();
     physics.gravity = {0.0f, -9.81f, 0.0f};
@@ -169,24 +171,36 @@ void AdventureGame::buildScene(Scene& scene) {
     pack.material.roughness = 0.84f;
     scene.setParent(pack.id, playerId_);
 
-    for (std::vector<std::uint32_t>& entityIds : streamedZoneEntityIds_) entityIds.clear();
-    streamedZoneLoaded_.fill(false);
-    streamedZonePending_.fill(false);
     zoneLoadResultsScratch_.clear();
     zoneLoadFailureCount_ = 0;
-    const std::vector<WorldZoneDefinition> zones{
-            {1U, {0.0f, 0.0f, -2.5f}, 5.5f, 8.5f,
-                    "scenes/zones/ruins_01.scene"},
-            {2U, {0.0f, 0.0f, -8.0f}, 5.5f, 8.5f,
-                    "scenes/zones/ruins_02.scene"},
-            {3U, {0.0f, 0.0f, -13.5f}, 5.5f, 8.5f,
-                    "scenes/zones/ruins_03.scene"}
-    };
-    for (std::size_t index = 0; index < zoneDefinitions_.size(); ++index) {
-        zoneDefinitions_[index] = zones[index];
+    streamedZoneEntityIds_.assign(kZoneGridSide * kZoneGridSide, {});
+    streamedZoneLoaded_.assign(kZoneGridSide * kZoneGridSide, false);
+    streamedZonePending_.assign(kZoneGridSide * kZoneGridSide, false);
+    streamedZoneOffsets_.assign(kZoneGridSide * kZoneGridSide, {0.0f, 0.0f, 0.0f});
+    zoneDefinitions_.clear();
+    zoneDefinitions_.reserve(kZoneGridSide * kZoneGridSide);
+    constexpr std::array<float, 3> xCenters{{-11.0f, 0.0f, 11.0f}};
+    constexpr std::array<float, 3> zCenters{{-2.5f, -8.0f, -13.5f}};
+    constexpr std::array<const char*, 3> rowAssets{{
+            "scenes/zones/ruins_01.scene",
+            "scenes/zones/ruins_02.scene",
+            "scenes/zones/ruins_03.scene"
+    }};
+    std::vector<WorldZoneDefinition> zones;
+    zones.reserve(kZoneGridSide * kZoneGridSide);
+    for (std::size_t row = 0; row < kZoneGridSide; ++row) {
+        for (std::size_t column = 0; column < kZoneGridSide; ++column) {
+            const std::size_t index = row * kZoneGridSide + column;
+            const std::uint32_t id = static_cast<std::uint32_t>(index + 1U);
+            zones.push_back({id, {xCenters[column], 0.0f, zCenters[row]},
+                    7.5f, 9.2f, rowAssets[row]});
+            zoneDefinitions_.push_back(zones.back());
+            streamedZoneOffsets_[index] = {xCenters[column], 0.0f, 0.0f};
+        }
     }
     std::string streamingError;
-    if (worldZoneStreamer_.configure(zones, streamingError)) {
+    if (worldZoneStreamer_.configure(zones, streamingError,
+                                     kMaximumResidentAdventureZones)) {
         const Entity* playerEntity = scene.find(playerId_);
         if (playerEntity != nullptr
                 && worldZoneStreamer_.update(playerEntity->transform.position,
@@ -224,15 +238,22 @@ void AdventureGame::loadZoneFallback(Scene& scene, std::uint32_t zoneId) {
 
     // A missing/corrupt scene asset falls back to deterministic scenery so the
     // adventure remains playable; the failure count stays observable in tests.
-    const int firstPillar = static_cast<int>(zoneIndex * 2U);
+    const std::size_t row = zoneIndex / kZoneGridSide;
+    const std::size_t column = zoneIndex % kZoneGridSide;
+    const int firstPillar = static_cast<int>(row * 2U);
+    const std::string cellSuffix = column == 0U ? " West Cell"
+            : column == 2U ? " East Cell" : "";
     for (int localIndex = 0; localIndex < 2; ++localIndex) {
         const int pillarIndex = firstPillar + localIndex;
         const float z = -2.0f - static_cast<float>(pillarIndex) * 2.25f;
         for (int side : {-1, 1}) {
-            Entity& pillar = scene.create("Ruin Zone " + std::to_string(zoneId)
-                    + " Pillar " + std::to_string(pillarIndex * 2 + (side > 0 ? 2 : 1)),
+            Entity& pillar = scene.create("Ruin Zone " + std::to_string(row + 1U)
+                    + " Pillar " + std::to_string(pillarIndex * 2
+                            + (side > 0 ? 2 : 1)) + cellSuffix,
                     Primitive::Sphere);
-            pillar.transform.position = {static_cast<float>(side) * 4.35f, -0.12f, z};
+            pillar.transform.position = {
+                    streamedZoneOffsets_[zoneIndex][0] + static_cast<float>(side) * 4.35f,
+                    -0.12f, z};
             pillar.transform.scale = {0.38f, 1.18f, 0.42f};
             pillar.material.color = {0.34f, 0.30f, 0.22f};
             pillar.material.roughness = 0.96f;
@@ -259,6 +280,17 @@ void AdventureGame::integrateReadyZoneScenes(Scene& scene) {
         return;
     }
     std::vector<std::uint32_t>& entityIds = streamedZoneEntityIds_[zoneIndex];
+    const std::size_t column = zoneIndex % kZoneGridSide;
+    if (result.success) {
+        const std::string cellSuffix = column == 0U ? " West Cell"
+                : column == 2U ? " East Cell" : "";
+        for (Entity& entity : result.scene.entities()) {
+            if (entity.parentId == 0U) {
+                entity.transform.position[0] += streamedZoneOffsets_[zoneIndex][0];
+            }
+            entity.name += cellSuffix;
+        }
+    }
     if (result.success && scene.appendEntities(result.scene, entityIds)) {
         streamedZoneLoaded_[zoneIndex] = true;
         if (zoneAssetsChangedCallback_) zoneAssetsChangedCallback_();
@@ -406,9 +438,11 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
 }
 
 std::string AdventureGame::statusText() const {
-    if (completed_) return "AVENTURA COMPLETADA  3/3";
-    return "RUINAS DEL SOL  " + std::to_string(relicsCollected_) + "/"
-            + std::to_string(kRelicGoal) + " RELIQUIAS";
+    const std::string objective = completed_ ? "AVENTURA COMPLETADA  3/3"
+            : "RUINAS DEL SOL  " + std::to_string(relicsCollected_) + "/"
+                    + std::to_string(kRelicGoal) + " RELIQUIAS";
+    return objective + "  ·  ZONAS " + std::to_string(residentZoneCount())
+            + "/" + std::to_string(zoneCount());
 }
 
 }  // namespace nuby

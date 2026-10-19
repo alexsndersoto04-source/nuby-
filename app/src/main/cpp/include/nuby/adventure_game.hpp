@@ -33,6 +33,8 @@ public:
 
     bool completed() const { return completed_; }
     std::size_t zoneLoadFailureCount() const { return zoneLoadFailureCount_; }
+    std::size_t residentZoneCount() const { return worldZoneStreamer_.loadedCount(); }
+    std::size_t zoneCount() const { return zoneDefinitions_.size(); }
     int relicsCollected() const { return relicsCollected_; }
     std::uint32_t playerId() const { return playerId_; }
     std::string statusText() const;
@@ -50,10 +52,11 @@ private:
     std::uint32_t gateTriggerId_ = 0;
     std::vector<std::uint32_t> relicIds_;
     std::array<float, 2> moveInput_{0.0f, 0.0f};
-    std::array<std::vector<std::uint32_t>, 3> streamedZoneEntityIds_;
-    std::array<WorldZoneDefinition, 3> zoneDefinitions_{};
-    std::array<bool, 3> streamedZoneLoaded_{};
-    std::array<bool, 3> streamedZonePending_{};
+    std::vector<std::vector<std::uint32_t>> streamedZoneEntityIds_;
+    std::vector<WorldZoneDefinition> zoneDefinitions_;
+    std::vector<std::array<float, 3>> streamedZoneOffsets_;
+    std::vector<bool> streamedZoneLoaded_;
+    std::vector<bool> streamedZonePending_;
     std::unique_ptr<AsyncSceneAssetLoader> zoneSceneLoader_;
     ZoneAssetsChangedCallback zoneAssetsChangedCallback_;
     std::vector<WorldZoneTransition> zoneTransitionsScratch_;

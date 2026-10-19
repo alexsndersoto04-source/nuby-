@@ -104,8 +104,11 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
            "adventure constructs a standalone courtyard with its starting streamed sector");
     expect(game.relicsCollected() == 0 && !game.completed(),
            "a new adventure starts with three relics to find and a sealed gate");
-    expect(game.statusText().find("0/3") != std::string::npos,
-           "adventure exposes objective progress for the HUD");
+    expect(game.statusText().find("0/3") != std::string::npos
+                   && game.statusText().find("ZONAS 1/9") != std::string::npos,
+           "the HUD reports mission progress and live residency within the nine-cell world");
+    expect(game.zoneCount() == 9U && game.residentZoneCount() == 1U,
+           "the adventure starts with a single resident cell and the full world map configured");
 }
 
 void testCharacterFacesItsMovementDirection() {
@@ -212,6 +215,44 @@ void testAdventureStreamsSceneryByPlayerZone() {
            "returning to the starting area reloads scenery once without duplicates");
 }
 
+void testAdventureStreamsAcrossNineCellsWithBoundedResidency() {
+    nuby::AdventureGame game;
+    nuby::Scene scene;
+    game.start(scene);
+    expect(game.zoneCount() == 9U && game.residentZoneCount() == 1U
+                   && findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0
+                   && findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell") == 0,
+           "adventure begins in the center cell of a nine-cell world and keeps distant scenery unloaded");
+
+    const std::uint32_t playerId = game.playerId();
+    const std::uint32_t cameraId = scene.activeCamera() == nullptr
+            ? 0U : scene.activeCamera()->id;
+    movePlayerTo(scene, playerId, -2.15f, -3.0f);
+    advance(game, scene, 1);
+    expect(game.relicsCollected() == 1,
+           "the existing mission remains playable while the world is split into cells");
+
+    movePlayerTo(scene, playerId, 5.0f, -5.25f);
+    advance(game, scene, 1);
+    const nuby::Entity* eastPillar = scene.find(
+            findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell"));
+    expect(game.residentZoneCount() == 4U && eastPillar != nullptr
+                   && std::fabs(eastPillar->transform.position[0] - 6.65f) < 1.0e-5f,
+           "crossing the middle of the map loads translated east cells while respecting the four-cell budget");
+    expect(scene.find(playerId) != nullptr && scene.activeCamera() != nullptr
+                   && scene.activeCamera()->id == cameraId && game.relicsCollected() == 1,
+           "cell transitions preserve the player, camera and collected mission progress");
+
+    movePlayerTo(scene, playerId, -5.0f, -5.25f);
+    advance(game, scene, 1);
+    const nuby::Entity* westPillar = scene.find(
+            findEntityId(scene, "Ruin Zone 1 Pillar 1 West Cell"));
+    expect(game.residentZoneCount() == 4U && westPillar != nullptr
+                   && std::fabs(westPillar->transform.position[0] + 15.35f) < 1.0e-5f
+                   && findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell") == 0,
+           "moving west releases east-cell entities and places the west-cell scene at its world offset");
+}
+
 void testAdventureLoadsSerializedZoneScenesAndPreservesMissionState() {
     std::atomic<int> sceneAssetsRead{0};
     int resourceChanges = 0;
@@ -266,6 +307,41 @@ void testAdventureLoadsSerializedZoneScenesAndPreservesMissionState() {
     expect(sceneAssetsRead.load() >= 3 && resourceChanges >= 3
                    && game.zoneLoadFailureCount() == 0,
            "each new zone scene triggers resource loading without falling back");
+}
+
+void testSerializedEastCellIsTranslatedAndUsesUniqueNames() {
+    nuby::AdventureGame game;
+    game.setZoneSceneReader([](const std::string& assetPath, nuby::Scene& fragment,
+                               std::string& error) {
+        std::ifstream input("app/src/main/assets/" + assetPath, std::ios::binary);
+        if (!input) {
+            error = "zone asset not found";
+            return false;
+        }
+        return nuby::SceneSerializer::load(fragment, input, error);
+    });
+    nuby::Scene scene;
+    game.start(scene);
+    expect(waitForGameUpdate(game, scene, [&scene]() {
+        return findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0;
+    }), "the serialized center cell becomes resident before traversing east");
+
+    movePlayerTo(scene, game.playerId(), 5.0f, -5.25f);
+    advance(game, scene, 1);
+    const bool eastCellLoaded = waitForGameUpdate(game, scene, [&scene]() {
+        return findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell") != 0;
+    });
+    const nuby::Entity* eastPillar = scene.find(
+            findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell"));
+    expect(eastCellLoaded && eastPillar != nullptr
+                   && eastPillar->primitive == nuby::Primitive::ImportedMesh
+                   && eastPillar->meshAsset == "meshes/ruin_pillar.obj"
+                   && std::fabs(eastPillar->transform.position[0] - 6.65f) < 1.0e-5f,
+           "a real serialized scene fragment is translated into the east cell without replacing its asset references");
+    expect(findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0
+                   && findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell") != 0
+                   && game.residentZoneCount() <= 4U,
+           "neighbor cells coexist with unique entity names under the residency budget");
 }
 
 void testAdventureCancelsZoneReadAfterLeavingItsResidencyRange() {
@@ -424,7 +500,9 @@ int main() {
     testCharacterFacesItsMovementDirection();
     testWayfarerSelectsIdleWalkRunAndJumpClips();
     testAdventureStreamsSceneryByPlayerZone();
+    testAdventureStreamsAcrossNineCellsWithBoundedResidency();
     testAdventureLoadsSerializedZoneScenesAndPreservesMissionState();
+    testSerializedEastCellIsTranslatedAndUsesUniqueNames();
     testAdventureCancelsZoneReadAfterLeavingItsResidencyRange();
     testMissingZoneSceneFallsBackWithoutBreakingAdventure();
     testMovementJumpAndCameraFollow();

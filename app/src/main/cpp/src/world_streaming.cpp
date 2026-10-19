@@ -1,5 +1,6 @@
 #include "nuby/world_streaming.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_set>
 #include <utility>
@@ -16,10 +17,12 @@ bool finitePosition(const std::array<float, 3>& position) {
 }  // namespace
 
 bool WorldZoneStreamer::configure(const std::vector<WorldZoneDefinition>& zones,
-                                  std::string& error) {
+                                  std::string& error,
+                                  std::size_t maximumResidentZones) {
     error.clear();
-    if (zones.size() > kMaximumWorldZones) {
-        error = "World contains more zones than the supported limit";
+    if (zones.size() > kMaximumWorldZones
+            || (!zones.empty() && maximumResidentZones == 0U)) {
+        error = "World zone count or residency budget is invalid";
         return false;
     }
 
@@ -37,7 +40,13 @@ bool WorldZoneStreamer::configure(const std::vector<WorldZoneDefinition>& zones,
         candidate.push_back({zone, false});
     }
 
+    std::vector<std::pair<double, std::size_t>> candidateScratch;
+    candidateScratch.reserve(zones.size());
+    std::vector<bool> nextLoaded(zones.size(), false);
     zones_.swap(candidate);
+    residencyCandidates_.swap(candidateScratch);
+    nextLoaded_.swap(nextLoaded);
+    maximumResidentZones_ = std::min(maximumResidentZones, zones_.size());
     error.clear();
     return true;
 }
@@ -47,7 +56,9 @@ bool WorldZoneStreamer::update(const std::array<float, 3>& worldPosition,
     transitions.clear();
     if (!finitePosition(worldPosition)) return false;
 
-    for (ZoneState& zone : zones_) {
+    residencyCandidates_.clear();
+    for (std::size_t index = 0; index < zones_.size(); ++index) {
+        const ZoneState& zone = zones_[index];
         const double dx = static_cast<double>(worldPosition[0])
                 - static_cast<double>(zone.definition.center[0]);
         const double dz = static_cast<double>(worldPosition[2])
@@ -55,10 +66,31 @@ bool WorldZoneStreamer::update(const std::array<float, 3>& worldPosition,
         const double distanceSquared = dx * dx + dz * dz;
         const double transitionRadius = zone.loaded ? zone.definition.unloadRadius
                                                     : zone.definition.loadRadius;
-        const bool shouldBeLoaded = distanceSquared <= transitionRadius * transitionRadius;
-        if (shouldBeLoaded == zone.loaded) continue;
-        zone.loaded = shouldBeLoaded;
-        transitions.push_back({zone.definition.id, shouldBeLoaded});
+        if (distanceSquared <= transitionRadius * transitionRadius) {
+            residencyCandidates_.emplace_back(distanceSquared, index);
+        }
+    }
+
+    if (residencyCandidates_.size() > maximumResidentZones_) {
+        const auto priorityOrder = [](const auto& first, const auto& second) {
+            if (first.first != second.first) return first.first < second.first;
+            return first.second < second.second;
+        };
+        std::partial_sort(residencyCandidates_.begin(),
+                residencyCandidates_.begin() + maximumResidentZones_,
+                residencyCandidates_.end(), priorityOrder);
+        residencyCandidates_.resize(maximumResidentZones_);
+    }
+    std::fill(nextLoaded_.begin(), nextLoaded_.end(), false);
+    for (const auto& candidate : residencyCandidates_) {
+        nextLoaded_[candidate.second] = true;
+    }
+
+    for (std::size_t index = 0; index < zones_.size(); ++index) {
+        ZoneState& zone = zones_[index];
+        if (zone.loaded == nextLoaded_[index]) continue;
+        zone.loaded = nextLoaded_[index];
+        transitions.push_back({zone.definition.id, zone.loaded});
     }
     return true;
 }

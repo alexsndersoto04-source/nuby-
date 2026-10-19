@@ -53,6 +53,63 @@ void testZoneLoadingUsesHorizontalDistanceAndStableOrdering() {
            "returning to a zone reloads it while the now-distant neighbor unloads");
 }
 
+void testGridResidencyHonorsDeterministicBudget() {
+    nuby::WorldZoneStreamer streamer;
+    std::string error;
+    std::vector<nuby::WorldZoneDefinition> zones;
+    std::uint32_t id = 1;
+    for (float z : {6.0f, 0.0f, -6.0f}) {
+        for (float x : {-6.0f, 0.0f, 6.0f}) {
+            zones.push_back({id++, {x, 0.0f, z}, 7.0f, 8.0f, ""});
+        }
+    }
+    expect(streamer.configure(zones, error, 3U) && error.empty(),
+           "a nine-cell world accepts a bounded resident-zone budget");
+    std::vector<nuby::WorldZoneTransition> transitions;
+    expect(streamer.update({0.0f, 0.0f, 0.0f}, transitions)
+                   && streamer.loadedCount() == 3U
+                   && streamer.isLoaded(5U) && streamer.isLoaded(2U)
+                   && streamer.isLoaded(4U) && !streamer.isLoaded(6U)
+                   && !streamer.isLoaded(8U),
+           "the center cell wins, then equal-distance neighbors use manifest order");
+    expect(transitions.size() == 3U && transitions[0].zoneId == 2U
+                   && transitions[1].zoneId == 4U && transitions[2].zoneId == 5U,
+           "initial grid loads are emitted in stable manifest order under the cap");
+
+    expect(streamer.update({6.0f, 0.0f, 0.0f}, transitions)
+                   && streamer.loadedCount() == 3U
+                   && streamer.isLoaded(6U) && streamer.isLoaded(3U)
+                   && streamer.isLoaded(5U) && !streamer.isLoaded(4U)
+                   && !streamer.isLoaded(9U),
+           "moving across a cell transfers the budget to the nearest neighboring residency set");
+    expect(streamer.update({6.0f, 0.0f, 0.0f}, transitions) && transitions.empty(),
+           "a stable player position does not churn a budgeted grid");
+    expect(!streamer.configure(zones, error, 0U) && streamer.zoneCount() == 9U
+                   && streamer.loadedCount() == 3U,
+           "a zero residency budget is rejected transactionally");
+}
+
+void testLargeManifestKeepsDeterministicResidencyBounded() {
+    constexpr std::size_t zoneCount = 4096U;
+    nuby::WorldZoneStreamer streamer;
+    std::vector<nuby::WorldZoneDefinition> zones;
+    zones.reserve(zoneCount);
+    for (std::size_t index = 0; index < zoneCount; ++index) {
+        zones.push_back({static_cast<std::uint32_t>(index + 1U),
+                {0.0f, 0.0f, 0.0f}, 5.0f, 8.0f, ""});
+    }
+    std::string error;
+    expect(streamer.configure(zones, error, 4U),
+           "the maximum supported world manifest can configure a small residency budget");
+    std::vector<nuby::WorldZoneTransition> transitions;
+    expect(streamer.update({0.0f, 0.0f, 0.0f}, transitions)
+                   && streamer.loadedCount() == 4U && transitions.size() == 4U
+                   && streamer.isLoaded(1U) && streamer.isLoaded(2U)
+                   && streamer.isLoaded(3U) && streamer.isLoaded(4U)
+                   && !streamer.isLoaded(5U),
+           "a large overlapping manifest selects only the nearest deterministic four cells");
+}
+
 void testInvalidInputDoesNotMutateResidency() {
     nuby::WorldZoneStreamer streamer;
     std::string error;
@@ -92,6 +149,8 @@ void testInvalidInputDoesNotMutateResidency() {
 
 int main() {
     testZoneLoadingUsesHorizontalDistanceAndStableOrdering();
+    testGridResidencyHonorsDeterministicBudget();
+    testLargeManifestKeepsDeterministicResidencyBounded();
     testInvalidInputDoesNotMutateResidency();
     if (failures != 0) {
         std::cerr << failures << " world streaming test(s) failed\n";

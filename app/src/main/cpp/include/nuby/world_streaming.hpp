@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nuby {
@@ -27,7 +28,8 @@ struct WorldZoneTransition {
 // the caller, which applies the returned load/unload transitions.
 class WorldZoneStreamer final {
 public:
-    bool configure(const std::vector<WorldZoneDefinition>& zones, std::string& error);
+    bool configure(const std::vector<WorldZoneDefinition>& zones, std::string& error,
+                   std::size_t maximumResidentZones = 4096U);
     bool update(const std::array<float, 3>& worldPosition,
                 std::vector<WorldZoneTransition>& transitions);
     bool isLoaded(std::uint32_t zoneId) const;
@@ -41,6 +43,9 @@ private:
     };
 
     std::vector<ZoneState> zones_;
+    std::vector<std::pair<double, std::size_t>> residencyCandidates_;
+    std::vector<bool> nextLoaded_;
+    std::size_t maximumResidentZones_ = 4096U;
 };
 
 }  // namespace nuby
