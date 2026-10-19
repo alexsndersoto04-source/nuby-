@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -84,6 +85,64 @@ void testCancelledLoadsCannotPublishStaleScenes() {
            "polling a completed result releases its outstanding-request slot");
 }
 
+void testQueuedSceneReadsAreStablePriorityOrdered() {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool blockerStarted = false;
+    bool releaseBlocker = false;
+    nuby::AsyncSceneAssetLoader loader(
+            [&mutex, &condition, &blockerStarted, &releaseBlocker](
+                    const std::string& path, nuby::Scene& scene, std::string&) {
+                if (path == "block.scene") {
+                    std::unique_lock<std::mutex> lock(mutex);
+                    blockerStarted = true;
+                    condition.notify_all();
+                    condition.wait(lock, [&releaseBlocker]() { return releaseBlocker; });
+                }
+                scene.create(path, nuby::Primitive::Sphere);
+                return true;
+            });
+    expect(loader.request(1U, "block.scene"),
+           "priority test occupies the worker before queuing scene requests");
+    bool started = false;
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        started = condition.wait_for(lock, std::chrono::seconds(2),
+                [&blockerStarted]() { return blockerStarted; });
+    }
+    expect(started, "priority test blocker reaches the reader");
+    if (!started) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            releaseBlocker = true;
+        }
+        condition.notify_all();
+        return;
+    }
+
+    expect(loader.request(2U, "low.scene", 1.0)
+                   && loader.request(3U, "high-a.scene", 10.0)
+                   && loader.request(4U, "high-b.scene", 10.0),
+           "loader accepts queued work with explicit priorities");
+    expect(!loader.request(5U, "invalid-priority.scene",
+                          std::numeric_limits<double>::infinity()),
+           "non-finite scheduling priorities are rejected");
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        releaseBlocker = true;
+    }
+    condition.notify_all();
+
+    expect(loader.waitUntilIdle(std::chrono::seconds(2)),
+           "priority queue drains after the active read completes");
+    std::vector<nuby::SceneAssetLoadResult> results;
+    loader.poll(results);
+    expect(results.size() == 4U && results[0].requestId == 1U
+                   && results[1].requestId == 3U && results[2].requestId == 4U
+                   && results[3].requestId == 2U,
+           "higher-priority queued reads run first while equal priority remains FIFO");
+}
+
 void testReaderFailuresAndExceptionsAreReportedWithoutKillingWorker() {
     nuby::AsyncSceneAssetLoader loader(
             [](const std::string& path, nuby::Scene& scene, std::string& error) {
@@ -122,6 +181,7 @@ void testReaderFailuresAndExceptionsAreReportedWithoutKillingWorker() {
 
 int main() {
     testCancelledLoadsCannotPublishStaleScenes();
+    testQueuedSceneReadsAreStablePriorityOrdered();
     testReaderFailuresAndExceptionsAreReportedWithoutKillingWorker();
     if (failures != 0) {
         std::cerr << failures << " async scene asset loader test(s) failed\n";

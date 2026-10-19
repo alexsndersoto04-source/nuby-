@@ -173,34 +173,46 @@ void AdventureGame::buildScene(Scene& scene) {
 
     zoneLoadResultsScratch_.clear();
     zoneLoadFailureCount_ = 0;
-    streamedZoneEntityIds_.assign(kZoneGridSide * kZoneGridSide, {});
-    streamedZoneLoaded_.assign(kZoneGridSide * kZoneGridSide, false);
-    streamedZonePending_.assign(kZoneGridSide * kZoneGridSide, false);
-    streamedZoneOffsets_.assign(kZoneGridSide * kZoneGridSide, {0.0f, 0.0f, 0.0f});
-    zoneDefinitions_.clear();
-    zoneDefinitions_.reserve(kZoneGridSide * kZoneGridSide);
-    constexpr std::array<float, 3> xCenters{{-11.0f, 0.0f, 11.0f}};
-    constexpr std::array<float, 3> zCenters{{-2.5f, -8.0f, -13.5f}};
-    constexpr std::array<const char*, 3> rowAssets{{
-            "scenes/zones/ruins_01.scene",
-            "scenes/zones/ruins_02.scene",
-            "scenes/zones/ruins_03.scene"
-    }};
     std::vector<WorldZoneDefinition> zones;
-    zones.reserve(kZoneGridSide * kZoneGridSide);
-    for (std::size_t row = 0; row < kZoneGridSide; ++row) {
-        for (std::size_t column = 0; column < kZoneGridSide; ++column) {
-            const std::size_t index = row * kZoneGridSide + column;
-            const std::uint32_t id = static_cast<std::uint32_t>(index + 1U);
-            zones.push_back({id, {xCenters[column], 0.0f, zCenters[row]},
-                    7.5f, 9.2f, rowAssets[row], 10.5f});
-            zoneDefinitions_.push_back(zones.back());
-            streamedZoneOffsets_[index] = {xCenters[column], 0.0f, 0.0f};
+    std::size_t maximumResidentZones = kMaximumResidentAdventureZones;
+    WorldZoneManifest manifest;
+    std::string manifestError;
+    if (zoneManifestReader_ && zoneManifestReader_(manifest, manifestError)) {
+        zones = std::move(manifest.zones);
+        maximumResidentZones = manifest.maximumResidentZones;
+    } else {
+        // The packaged manifest is authoritative; this safe fallback keeps the
+        // adventure playable in native tests and if a future manifest is bad.
+        constexpr std::array<float, 3> xCenters{{-11.0f, 0.0f, 11.0f}};
+        constexpr std::array<float, 3> zCenters{{-2.5f, -8.0f, -13.5f}};
+        constexpr std::array<const char*, 3> rowAssets{{
+                "scenes/zones/ruins_01.scene",
+                "scenes/zones/ruins_02.scene",
+                "scenes/zones/ruins_03.scene"
+        }};
+        zones.reserve(kZoneGridSide * kZoneGridSide);
+        for (std::size_t row = 0; row < kZoneGridSide; ++row) {
+            for (std::size_t column = 0; column < kZoneGridSide; ++column) {
+                const std::size_t index = row * kZoneGridSide + column;
+                const std::uint32_t id = static_cast<std::uint32_t>(index + 1U);
+                zones.push_back({id, {xCenters[column], 0.0f, zCenters[row]},
+                        7.5f, 9.2f, rowAssets[row], 10.5f});
+            }
         }
+        maximumResidentZones = kMaximumResidentAdventureZones;
     }
+    zoneDefinitions_ = std::move(zones);
+    zones = zoneDefinitions_;
+    streamedZoneEntityIds_.assign(zones.size(), {});
+    streamedZoneLoaded_.assign(zones.size(), false);
+    streamedZonePending_.assign(zones.size(), false);
+    streamedZoneOffsets_.assign(zones.size(), {0.0f, 0.0f, 0.0f});
+    for (std::size_t index = 0; index < zones.size(); ++index) {
+        streamedZoneOffsets_[index] = {zones[index].center[0], 0.0f, 0.0f};
+    }
+
     std::string streamingError;
-    if (worldZoneStreamer_.configure(zones, streamingError,
-                                     kMaximumResidentAdventureZones)) {
+    if (worldZoneStreamer_.configure(zones, streamingError, maximumResidentZones)) {
         const Entity* playerEntity = scene.find(playerId_);
         if (playerEntity != nullptr
                 && worldZoneStreamer_.update(playerEntity->transform.position,
@@ -215,13 +227,14 @@ void AdventureGame::buildScene(Scene& scene) {
     }
 }
 
-void AdventureGame::loadZone(Scene& scene, std::uint32_t zoneId) {
+void AdventureGame::loadZone(Scene& scene, std::uint32_t zoneId, double priority) {
     if (zoneId == 0 || zoneId > streamedZoneEntityIds_.size()) return;
     const std::size_t zoneIndex = zoneId - 1U;
     if (streamedZoneLoaded_[zoneIndex] || streamedZonePending_[zoneIndex]) return;
 
     if (zoneSceneLoader_ && !zoneDefinitions_[zoneIndex].sceneAssetPath.empty()) {
-        if (zoneSceneLoader_->request(zoneId, zoneDefinitions_[zoneIndex].sceneAssetPath)) {
+        if (zoneSceneLoader_->request(zoneId, zoneDefinitions_[zoneIndex].sceneAssetPath,
+                                      priority)) {
             streamedZonePending_[zoneIndex] = true;
             return;
         }
@@ -321,7 +334,7 @@ void AdventureGame::unloadZone(Scene& scene, std::uint32_t zoneId) {
 
 void AdventureGame::applyZoneTransitions(Scene& scene) {
     for (const WorldZoneTransition& transition : zoneTransitionsScratch_) {
-        if (transition.load) loadZone(scene, transition.zoneId);
+        if (transition.load) loadZone(scene, transition.zoneId, transition.priority);
         else unloadZone(scene, transition.zoneId);
     }
 }

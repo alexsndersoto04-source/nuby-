@@ -3,6 +3,7 @@
 #include "nuby/async_scene_asset_loader.hpp"
 #include "nuby/scene.hpp"
 #include "nuby/world_streaming.hpp"
+#include "nuby/world_zone_manifest.hpp"
 
 #include <array>
 #include <cstdint>
@@ -25,8 +26,12 @@ public:
     bool setMoveInput(Scene& scene, float horizontal, float forward);
     bool jump(Scene& scene);
     using ZoneSceneReader = AsyncSceneAssetLoader::Reader;
+    using ZoneManifestReader = std::function<bool(WorldZoneManifest&, std::string&)>;
     using ZoneAssetsChangedCallback = std::function<void()>;
     void setZoneSceneReader(ZoneSceneReader reader);
+    void setZoneManifestReader(ZoneManifestReader reader) {
+        zoneManifestReader_ = std::move(reader);
+    }
     void setZoneAssetsChangedCallback(ZoneAssetsChangedCallback callback) {
         zoneAssetsChangedCallback_ = std::move(callback);
     }
@@ -42,7 +47,7 @@ public:
 private:
     void buildScene(Scene& scene);
     void applyZoneTransitions(Scene& scene);
-    void loadZone(Scene& scene, std::uint32_t zoneId);
+    void loadZone(Scene& scene, std::uint32_t zoneId, double priority = 0.0);
     void loadZoneFallback(Scene& scene, std::uint32_t zoneId);
     void integrateReadyZoneScenes(Scene& scene);
     void unloadZone(Scene& scene, std::uint32_t zoneId);
@@ -58,6 +63,7 @@ private:
     std::vector<bool> streamedZoneLoaded_;
     std::vector<bool> streamedZonePending_;
     std::unique_ptr<AsyncSceneAssetLoader> zoneSceneLoader_;
+    ZoneManifestReader zoneManifestReader_;
     ZoneAssetsChangedCallback zoneAssetsChangedCallback_;
     std::vector<WorldZoneTransition> zoneTransitionsScratch_;
     std::vector<SceneAssetLoadResult> zoneLoadResultsScratch_;

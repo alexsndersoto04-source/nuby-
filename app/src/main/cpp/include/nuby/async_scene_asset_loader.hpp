@@ -37,7 +37,8 @@ public:
     AsyncSceneAssetLoader(const AsyncSceneAssetLoader&) = delete;
     AsyncSceneAssetLoader& operator=(const AsyncSceneAssetLoader&) = delete;
 
-    bool request(std::uint32_t requestId, std::string assetPath);
+    bool request(std::uint32_t requestId, std::string assetPath,
+                 double priority = 0.0);
     void cancel(std::uint32_t requestId);
     void cancelAll();
     void poll(std::vector<SceneAssetLoadResult>& results);
@@ -51,6 +52,7 @@ private:
     struct Request {
         std::uint32_t requestId = 0;
         std::uint64_t token = 0;
+        double priority = 0.0;
         std::string assetPath;
     };
 

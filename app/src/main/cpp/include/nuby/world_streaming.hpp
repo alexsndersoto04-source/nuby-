@@ -25,6 +25,8 @@ struct WorldZoneDefinition {
 struct WorldZoneTransition {
     std::uint32_t zoneId = 0;
     bool load = false;
+    // Higher values are scheduled first by asynchronous scene readers.
+    double priority = 0.0;
 };
 
 // Deterministic distance-based residency policy. Content ownership stays with

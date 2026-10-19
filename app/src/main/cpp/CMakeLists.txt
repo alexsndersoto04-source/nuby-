@@ -9,6 +9,7 @@ add_library(nuby-engine SHARED
     src/adventure_game.cpp
     src/game_project.cpp
     src/game_project_runtime.cpp
+    src/frame_timing.cpp
     src/gltf_loader.cpp
     src/gpu_upload_planner.cpp
     src/image_loader.cpp
@@ -22,6 +23,7 @@ add_library(nuby-engine SHARED
     src/shadow_cascades.cpp
     src/skeletal_animation.cpp
     src/world_streaming.cpp
+    src/world_zone_manifest.cpp
     src/obj_loader.cpp
 )
 

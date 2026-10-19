@@ -171,7 +171,7 @@ bool WorldZoneStreamer::update(const std::array<float, 3>& worldPosition,
             priorityDistance = dx * dx + dz * dz;
         }
         transitionScratch_.push_back({priorityDistance,
-                {zone.definition.id, zone.loaded}});
+                {zone.definition.id, zone.loaded, -priorityDistance}});
     }
     std::sort(transitionScratch_.begin(), transitionScratch_.end(), transitionPriorityLess);
     for (const auto& transition : transitionScratch_) {

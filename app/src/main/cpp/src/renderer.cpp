@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <sstream>
@@ -2406,6 +2407,16 @@ std::string Renderer::assetMemoryStatusText() const {
     return "CACHE ~" + std::to_string(mebibytes) + "MB";
 }
 
+std::string Renderer::frameTimingStatusText() const {
+    const FrameTimingStats stats = frameTimingWindow_.snapshot();
+    if (stats.sampleCount == 0U) return "CPU P95 --";
+    std::ostringstream status;
+    status << std::fixed << std::setprecision(1)
+           << "CPU P95 " << stats.p95Milliseconds << "ms · MAX "
+           << stats.maximumMilliseconds << "ms";
+    return status.str();
+}
+
 int Renderer::sceneAssetStatus() const {
     bool hasImportedAssets = false;
     bool missingMesh = false;
@@ -2933,6 +2944,16 @@ void Renderer::initialize(AAssetManager* assetManager) {
         }
         return true;
     });
+    adventureGame_.setZoneManifestReader([this](WorldZoneManifest& manifest,
+                                                    std::string& error) {
+        std::string contents;
+        if (!readTextAsset(assetManager_, "worlds/sun_ruins.world",
+                           1024U * 1024U, contents)) {
+            error = "could not read world zone manifest";
+            return false;
+        }
+        return parseWorldZoneManifest(contents, manifest, error);
+    });
     adventureGame_.setZoneAssetsChangedCallback([this]() { loadSceneAssets(); });
     demoMode_ = 0;
     gameMode_ = false;
@@ -3272,8 +3293,14 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
 }
 
 void Renderer::render(float deltaSeconds) {
+    const auto frameStart = std::chrono::steady_clock::now();
+    const auto recordFrameTime = [this, &frameStart]() {
+        const auto elapsed = std::chrono::steady_clock::now() - frameStart;
+        frameTimingWindow_.record(std::chrono::duration<double, std::milli>(elapsed).count());
+    };
     if (program_ == 0) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        recordFrameTime();
         return;
     }
 
@@ -3526,6 +3553,7 @@ void Renderer::render(float deltaSeconds) {
         glDisable(GL_BLEND);
     }
     if (postProcessingAvailable_) renderBloom();
+    recordFrameTime();
 }
 
 void Renderer::touch(int action, float x, float y, float pinchDistance, int pointerCount) {

@@ -1,6 +1,7 @@
 #include "nuby/async_scene_asset_loader.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <limits>
 #include <utility>
@@ -26,8 +27,9 @@ AsyncSceneAssetLoader::~AsyncSceneAssetLoader() {
     if (worker_.joinable()) worker_.join();
 }
 
-bool AsyncSceneAssetLoader::request(std::uint32_t requestId, std::string assetPath) {
-    if (requestId == 0U || assetPath.empty()
+bool AsyncSceneAssetLoader::request(std::uint32_t requestId, std::string assetPath,
+                                    double priority) {
+    if (requestId == 0U || assetPath.empty() || !std::isfinite(priority)
             || assetPath.size() > kMaximumAssetPathLength || !reader_) {
         return false;
     }
@@ -47,7 +49,9 @@ bool AsyncSceneAssetLoader::request(std::uint32_t requestId, std::string assetPa
             [requestId](const SceneAssetLoadResult& result) {
                 return result.requestId == requestId;
             }), completed_.end());
-    requests_.push_back({requestId, token, std::move(assetPath)});
+    const auto position = std::find_if(requests_.begin(), requests_.end(),
+            [priority](const Request& queued) { return queued.priority < priority; });
+    requests_.insert(position, {requestId, token, priority, std::move(assetPath)});
     wakeCondition_.notify_one();
     return true;
 }

@@ -73,8 +73,10 @@ void testGridResidencyHonorsDeterministicBudget() {
                    && !streamer.isLoaded(8U),
            "the center cell wins, then equal-distance neighbors use manifest order");
     expect(transitions.size() == 3U && transitions[0].zoneId == 5U
-                   && transitions[1].zoneId == 2U && transitions[2].zoneId == 4U,
-           "initial grid loads emit the nearest cell first, then stable distance ties");
+                   && transitions[1].zoneId == 2U && transitions[2].zoneId == 4U
+                   && transitions[0].priority > transitions[1].priority
+                   && transitions[1].priority == transitions[2].priority,
+           "initial grid loads emit the nearest cell first with scheduler priority and stable ties");
 
     expect(streamer.update({6.0f, 0.0f, 0.0f}, transitions)
                    && streamer.loadedCount() == 3U

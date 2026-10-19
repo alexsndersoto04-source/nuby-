@@ -111,6 +111,23 @@ void testAdventureBuildsItsOwnCharacterAndScene() {
            "the adventure starts with a single resident cell and the full world map configured");
 }
 
+void testWorldLayoutCanBeAuthoredByManifest() {
+    nuby::AdventureGame game;
+    game.setZoneManifestReader([](nuby::WorldZoneManifest& manifest, std::string&) {
+        manifest.maximumResidentZones = 1U;
+        manifest.zones = {
+                {1U, {0.0f, 0.0f, 0.0f}, 5.0f, 7.0f, ""},
+                {2U, {30.0f, 0.0f, -4.0f}, 5.0f, 7.0f, ""}
+        };
+        return true;
+    });
+    nuby::Scene scene;
+    game.start(scene);
+    expect(game.zoneCount() == 2U && game.residentZoneCount() == 1U
+                   && game.statusText().find("ZONAS 1/2") != std::string::npos,
+           "adventure consumes authored manifest definitions and resident budget");
+}
+
 void testCharacterFacesItsMovementDirection() {
     nuby::AdventureGame game;
     nuby::Scene scene;
@@ -497,6 +514,7 @@ void testRelicsUnlockTheGateAndRestartResetsProgress() {
 
 int main() {
     testAdventureBuildsItsOwnCharacterAndScene();
+    testWorldLayoutCanBeAuthoredByManifest();
     testCharacterFacesItsMovementDirection();
     testWayfarerSelectsIdleWalkRunAndJumpClips();
     testAdventureStreamsSceneryByPlayerZone();

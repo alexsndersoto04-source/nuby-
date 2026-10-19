@@ -15,6 +15,7 @@
 #include "nuby/asset_memory_cache.hpp"
 #include "nuby/async_asset_task_queue.hpp"
 #include "nuby/frustum.hpp"
+#include "nuby/frame_timing.hpp"
 #include "nuby/gpu_upload_planner.hpp"
 #include "nuby/game_project_runtime.hpp"
 #include "nuby/gltf_loader.hpp"
@@ -70,6 +71,7 @@ public:
     // texture maps pending, 3 = all referenced assets ready, 4 = asset failure.
     int sceneAssetStatus() const;
     std::string assetMemoryStatusText() const;
+    std::string frameTimingStatusText() const;
 
 private:
     struct Mesh {
@@ -296,6 +298,7 @@ private:
 
     AAssetManager* assetManager_ = nullptr;
     AssetMemoryCache assetMemoryCache_;
+    FrameTimingWindow frameTimingWindow_;
     std::uint64_t assetUseSequence_ = 0U;
     std::unordered_map<std::string, std::uint64_t> textureGpuBytes_;
     std::unordered_map<std::string, std::unordered_set<std::string>> embeddedImagesByModel_;

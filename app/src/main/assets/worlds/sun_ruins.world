@@ -1,0 +1,12 @@
+# Nuby streamed world manifest. Zone IDs are stable compact runtime handles.
+NUBY_WORLD_ZONES 1
+MAX_RESIDENT 4
+ZONE 1 -11 0 -2.5 7.5 9.2 10.5 "scenes/zones/ruins_01.scene"
+ZONE 2   0 0 -2.5 7.5 9.2 10.5 "scenes/zones/ruins_01.scene"
+ZONE 3  11 0 -2.5 7.5 9.2 10.5 "scenes/zones/ruins_01.scene"
+ZONE 4 -11 0 -8   7.5 9.2 10.5 "scenes/zones/ruins_02.scene"
+ZONE 5   0 0 -8   7.5 9.2 10.5 "scenes/zones/ruins_02.scene"
+ZONE 6  11 0 -8   7.5 9.2 10.5 "scenes/zones/ruins_02.scene"
+ZONE 7 -11 0 -13.5 7.5 9.2 10.5 "scenes/zones/ruins_03.scene"
+ZONE 8   0 0 -13.5 7.5 9.2 10.5 "scenes/zones/ruins_03.scene"
+ZONE 9  11 0 -13.5 7.5 9.2 10.5 "scenes/zones/ruins_03.scene"

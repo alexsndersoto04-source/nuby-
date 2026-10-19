@@ -53,6 +53,15 @@ jobs:
           tests/image_loader_tests.cpp -o /tmp/nuby-image-tests
           && /tmp/nuby-image-tests
 
+      - name: Compile and run frame timing tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/frame_timing.cpp
+          tests/frame_timing_tests.cpp
+          -o /tmp/nuby-frame-timing-tests
+          && /tmp/nuby-frame-timing-tests
+
       - name: Compile and run GPU upload planner tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic
@@ -187,6 +196,16 @@ jobs:
           app/src/main/cpp/src/scene_editor.cpp tests/scene_editor_tests.cpp
           -o /tmp/nuby-scene-editor-tests
           && /tmp/nuby-scene-editor-tests
+
+      - name: Compile and run world zone manifest tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic
+          -Iapp/src/main/cpp/include
+          app/src/main/cpp/src/world_streaming.cpp
+          app/src/main/cpp/src/world_zone_manifest.cpp
+          tests/world_zone_manifest_tests.cpp
+          -o /tmp/nuby-world-zone-manifest-tests
+          && /tmp/nuby-world-zone-manifest-tests
 
       - name: Compile and run world streaming tests
         run: >-

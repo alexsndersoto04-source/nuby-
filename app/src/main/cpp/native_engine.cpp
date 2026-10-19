@@ -45,6 +45,13 @@ Java_com_nuby_engine_MainActivity_nativeAssetMemoryStatus(JNIEnv* env, jclass) {
     return env->NewStringUTF(status.c_str());
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nuby_engine_MainActivity_nativeFrameTimingStatus(JNIEnv* env, jclass) {
+    const std::string status = gRenderer
+            ? gRenderer->frameTimingStatusText() : std::string("CPU P95 --");
+    return env->NewStringUTF(status.c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuby_engine_MainActivity_nativeSetGameMode(JNIEnv*, jclass, jboolean enabled) {
     if (gRenderer) gRenderer->setGameMode(enabled == JNI_TRUE);
