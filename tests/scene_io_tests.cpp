@@ -1033,7 +1033,7 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "scene serialization rejects unbounded texture map base/gain values");
 }
 
-void testAdventureZonePillarsBlockActorsAndCamera() {
+void testAdventureZonePillarsBlockActorsWithoutRetractingCamera() {
     for (int zone = 1; zone <= 3; ++zone) {
         const std::string path = "app/src/main/assets/scenes/zones/ruins_0"
                 + std::to_string(zone) + ".scene";
@@ -1050,13 +1050,21 @@ void testAdventureZonePillarsBlockActorsAndCamera() {
             if (firstPillarId == 0U) firstPillarId = entity.id;
             expect(entity.boxCollider.enabled
                            && entity.boxCollider.collisionLayer == 4U
-                           && entity.boxCollider.collisionMask == 6U,
-                   "ruin pillar collider is queryable by camera and solid to actor layer 2");
+                           && entity.boxCollider.collisionMask == 2U,
+                   "ruin pillar collider is solid to actors but filtered from camera queries");
         }
         expect(pillars == 4U, "each zone keeps its four authored pillar meshes");
         if (zone == 1 && firstPillarId != 0U) {
             const nuby::Entity* pillar = scene.find(firstPillarId);
             const std::array<float, 3> start = pillar->transform.position;
+            nuby::SphereCastHit castHit;
+            const std::array<float, 3> castOrigin{start[0], 0.0f, start[2] - 2.0f};
+            expect(!scene.sphereCast(castOrigin, {0.0f, 0.0f, 1.0f}, 0.24f, 4.0f,
+                                     castHit, 4U, 0xFFFFFFFDU),
+                   "camera-layer sweep passes pillars without collapsing the zoom arm");
+            expect(scene.sphereCast(castOrigin, {0.0f, 0.0f, 1.0f}, 0.24f, 4.0f,
+                                    castHit, 2U, 0xFFFFFFFFU),
+                   "actor-layer sweep still detects solid pillars");
             scene.physicsSettings().gravity = {0.0f, 0.0f, 0.0f};
             nuby::Entity& actor = scene.create("layer-2 actor probe", nuby::Primitive::Sphere);
             const std::uint32_t actorId = actor.id;
@@ -1120,7 +1128,7 @@ void testAppendingSceneFragmentsRemapsHierarchyTransactionally() {
 
 int main() {
     testRoundTripAllSceneData();
-    testAdventureZonePillarsBlockActorsAndCamera();
+    testAdventureZonePillarsBlockActorsWithoutRetractingCamera();
     testAppendingSceneFragmentsRemapsHierarchyTransactionally();
     testMalformedFilesDoNotPartiallyReplaceScene();
     if (failures != 0) {
