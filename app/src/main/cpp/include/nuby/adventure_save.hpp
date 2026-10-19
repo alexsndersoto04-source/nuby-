@@ -11,6 +11,8 @@ struct AdventureSaveData {
     float playerYaw = 0.0f;
     float cameraYaw = 0.0f;
     float cameraPitch = 0.3f;
+    float gateX = 0.0f;
+    float gateZ = -11.5f;
     std::uint8_t collectedRelicMask = 0U;
     bool completed = false;
 };

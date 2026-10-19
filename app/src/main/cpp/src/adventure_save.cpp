@@ -9,8 +9,6 @@ namespace nuby {
 namespace {
 constexpr std::size_t kMaximumSaveBytes = 4096U;
 constexpr std::uint8_t kAllRelicsMask = 0x07U;
-constexpr float kGateX = 0.0f;
-constexpr float kGateZ = -11.5f;
 constexpr float kGateCompletionRadius = 1.8f;
 
 std::uint32_t checksum(const std::string& value) {
@@ -61,6 +59,17 @@ bool readCameraLine(std::istringstream& source, AdventureSaveData& candidate) {
     return true;
 }
 
+bool readGateLine(std::istringstream& source, AdventureSaveData& candidate) {
+    std::string text;
+    if (!std::getline(source, text)) return false;
+    std::istringstream line(text);
+    line.imbue(std::locale::classic());
+    std::string name;
+    if (!(line >> name >> candidate.gateX >> candidate.gateZ)
+            || name != "GATE" || !lineHasOnlyExpectedValues(line)) return false;
+    return true;
+}
+
 bool readMaskLine(std::istringstream& source, AdventureSaveData& candidate) {
     std::string text;
     if (!std::getline(source, text)) return false;
@@ -106,7 +115,8 @@ bool validateAdventureSaveData(const AdventureSaveData& data, std::string& error
     error.clear();
     if (!std::isfinite(data.playerX) || !std::isfinite(data.playerZ)
             || !std::isfinite(data.playerYaw) || !std::isfinite(data.cameraYaw)
-            || !std::isfinite(data.cameraPitch)) {
+            || !std::isfinite(data.cameraPitch) || !std::isfinite(data.gateX)
+            || !std::isfinite(data.gateZ)) {
         error = "save contains non-finite transform values";
         return false;
     }
@@ -114,7 +124,9 @@ bool validateAdventureSaveData(const AdventureSaveData& data, std::string& error
             || data.playerZ < -20.0f || data.playerZ > 3.0f
             || std::abs(data.playerYaw) > 1000000.0f
             || std::abs(data.cameraYaw) > 1000000.0f
-            || data.cameraPitch < 0.08f || data.cameraPitch > 0.72f) {
+            || data.cameraPitch < 0.08f || data.cameraPitch > 0.72f
+            || data.gateX < -16.0f || data.gateX > 16.0f
+            || data.gateZ < -20.0f || data.gateZ > 3.0f) {
         error = "save transform is outside the adventure bounds";
         return false;
     }
@@ -123,8 +135,8 @@ bool validateAdventureSaveData(const AdventureSaveData& data, std::string& error
         return false;
     }
     if (data.completed) {
-        const float dx = data.playerX - kGateX;
-        const float dz = data.playerZ - kGateZ;
+        const float dx = data.playerX - data.gateX;
+        const float dz = data.playerZ - data.gateZ;
         if (data.collectedRelicMask != kAllRelicsMask
                 || dx * dx + dz * dz > kGateCompletionRadius * kGateCompletionRadius) {
             error = "completed save does not satisfy the gate objective";
@@ -139,12 +151,13 @@ bool serializeAdventureSave(const AdventureSaveData& data, std::string& output,
     if (!validateAdventureSaveData(data, error)) return false;
     std::ostringstream body;
     body.imbue(std::locale::classic());
-    body << "NUBY_ADVENTURE_SAVE 1\n"
+    body << "NUBY_ADVENTURE_SAVE 2\n"
          << "WORLD " << kAdventureSaveWorldId << '\n'
          << std::fixed << std::setprecision(6)
          << "PLAYER " << data.playerX << ' ' << data.playerZ << ' '
          << data.playerYaw << '\n'
          << "CAMERA " << data.cameraYaw << ' ' << data.cameraPitch << '\n'
+         << "GATE " << data.gateX << ' ' << data.gateZ << '\n'
          << "RELICS " << static_cast<unsigned int>(data.collectedRelicMask) << '\n'
          << "COMPLETED " << (data.completed ? 1 : 0) << '\n';
     const std::string bodyText = body.str();
@@ -194,10 +207,25 @@ bool parseAdventureSave(const std::string& source, AdventureSaveData& output,
     std::istringstream body(bodyText);
     body.imbue(std::locale::classic());
     std::string versionLine;
+    std::istringstream versionRecord;
+    std::string versionTag;
+    unsigned int version = 0U;
+    std::string versionTrailing;
+    if (!std::getline(body, versionLine)) {
+        error = "save header is missing";
+        return false;
+    }
+    versionRecord.str(versionLine);
+    versionRecord.imbue(std::locale::classic());
+    if (!(versionRecord >> versionTag >> version) || versionTag != "NUBY_ADVENTURE_SAVE"
+            || (version != 1U && version != 2U) || (versionRecord >> versionTrailing)) {
+        error = "save version is unsupported or malformed";
+        return false;
+    }
     std::string worldId;
-    if (!std::getline(body, versionLine) || versionLine != "NUBY_ADVENTURE_SAVE 1"
-            || !readNamedLine(body, "WORLD", worldId) || worldId != kAdventureSaveWorldId
+    if (!readNamedLine(body, "WORLD", worldId) || worldId != kAdventureSaveWorldId
             || !readPlayerLine(body, candidate) || !readCameraLine(body, candidate)
+            || (version >= 2U && !readGateLine(body, candidate))
             || !readMaskLine(body, candidate) || !readCompletedLine(body, candidate)) {
         error = "save fields are malformed or belong to another world version";
         return false;

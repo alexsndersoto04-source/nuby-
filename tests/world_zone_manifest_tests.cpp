@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <string>
 
 namespace {
@@ -46,6 +47,31 @@ void testParseAndRoundTripPreserveAuthoredStreamingRules() {
            "serialized world manifest round-trips without losing zone behavior");
 }
 
+void testVersionTwoManifestsRoundTripObjectiveDefinitions() {
+    const std::string source =
+            "NUBY_WORLD_ZONES 2\nMAX_RESIDENT 1\n"
+            "ZONE 1 0 0 0 5 7 5 \"scenes/start.scene\"\n"
+            "OBJECTIVE RELIC 1 -2 -0.4 -3\n"
+            "OBJECTIVE GATE 2 0 0.2 -11\n";
+    nuby::WorldZoneManifest manifest;
+    std::string error;
+    expect(nuby::parseWorldZoneManifest(source, manifest, error)
+                   && manifest.objectives.size() == 2U
+                   && manifest.objectives[0].type == nuby::WorldObjectiveType::Relic
+                   && manifest.objectives[0].position[0] == -2.0f
+                   && manifest.objectives[1].type == nuby::WorldObjectiveType::Gate,
+           "v2 parser reads stable objective types and authored world positions");
+    std::string serialized;
+    expect(nuby::serializeWorldZoneManifest(manifest, serialized, error)
+                   && serialized.find("NUBY_WORLD_ZONES 2") == 0U,
+           "manifest serializer selects v2 when objective records are present");
+    nuby::WorldZoneManifest decoded;
+    expect(nuby::parseWorldZoneManifest(serialized, decoded, error)
+                   && decoded.objectives.size() == 2U
+                   && decoded.objectives[1].position == manifest.objectives[1].position,
+           "objective definitions survive manifest serialization round-trip");
+}
+
 void testPackagedAdventureManifestMatchesTheAuthoredGrid() {
     std::ifstream file("app/src/main/assets/worlds/sun_ruins.world", std::ios::binary);
     expect(file.good(), "packaged Sun Ruins world manifest exists");
@@ -57,8 +83,11 @@ void testPackagedAdventureManifestMatchesTheAuthoredGrid() {
     expect(nuby::parseWorldZoneManifest(source, manifest, error)
                    && manifest.zones.size() == 9U
                    && manifest.maximumResidentZones == 4U
-                   && manifest.zones[8].sceneAssetPath == "scenes/zones/ruins_03.scene",
-           "packaged adventure map loads all nine authored cells and its four-cell cap");
+                   && manifest.zones[8].sceneAssetPath == "scenes/zones/ruins_03.scene"
+                   && manifest.objectives.size() == 4U
+                   && manifest.objectives[0].type == nuby::WorldObjectiveType::Relic
+                   && manifest.objectives[3].type == nuby::WorldObjectiveType::Gate,
+           "packaged adventure map loads nine cells, a four-cell cap, and all objectives");
 }
 
 void testMalformedManifestsAreRejectedTransactionally() {
@@ -73,7 +102,9 @@ void testMalformedManifestsAreRejectedTransactionally() {
         "NUBY_WORLD_ZONES 1\nMAX_RESIDENT 1\nZONE 2 0 0 0 1 2 2 \"a.scene\"\n",
         "NUBY_WORLD_ZONES 1\nMAX_RESIDENT 1\nZONE 1 0 0 0 4 2 5 \"a.scene\"\n",
         "NUBY_WORLD_ZONES 1\nMAX_RESIDENT 1\nZONE 1 0 0 0 1 2 5 \"../escape.scene\"\n",
-        "NUBY_WORLD_ZONES 1\nMAX_RESIDENT 1\nZONE 1 nan 0 0 1 2 3 \"a.scene\"\n"
+        "NUBY_WORLD_ZONES 1\nMAX_RESIDENT 1\nZONE 1 nan 0 0 1 2 3 \"a.scene\"\n",
+        "NUBY_WORLD_ZONES 2\nMAX_RESIDENT 1\nZONE 1 0 0 0 1 2 2 \"a.scene\"\nOBJECTIVE TELEPORT 1 0 0 0\n",
+        "NUBY_WORLD_ZONES 2\nMAX_RESIDENT 1\nZONE 1 0 0 0 1 2 2 \"a.scene\"\nOBJECTIVE RELIC 1 nan 0 0\n"
     };
     for (const std::string& source : invalid) {
         std::string error;
@@ -94,11 +125,19 @@ void testSerializerRejectsUnsafeAuthoredPaths() {
     expect(!nuby::serializeWorldZoneManifest(manifest, output, error)
                    && !error.empty() && output == "preserve this",
            "unsafe paths are rejected transactionally when serializing");
+    manifest.zones[0].sceneAssetPath = "safe.scene";
+    manifest.objectives.push_back(
+            {1U, nuby::WorldObjectiveType::Gate,
+             {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}});
+    expect(!nuby::serializeWorldZoneManifest(manifest, output, error)
+                   && !error.empty() && output == "preserve this",
+           "non-finite authored objectives are rejected transactionally when serializing");
 }
 }  // namespace
 
 int main() {
     testParseAndRoundTripPreserveAuthoredStreamingRules();
+    testVersionTwoManifestsRoundTripObjectiveDefinitions();
     testPackagedAdventureManifestMatchesTheAuthoredGrid();
     testMalformedManifestsAreRejectedTransactionally();
     testSerializerRejectsUnsafeAuthoredPaths();

@@ -128,6 +128,47 @@ void testWorldLayoutCanBeAuthoredByManifest() {
            "adventure consumes authored manifest definitions and resident budget");
 }
 
+void testAdventureObjectivesAreAuthoredByTheWorldManifest() {
+    nuby::AdventureGame game;
+    game.setZoneManifestReader([](nuby::WorldZoneManifest& manifest, std::string&) {
+        manifest.maximumResidentZones = 1U;
+        manifest.zones = {{1U, {0.0f, 0.0f, 0.0f}, 5.0f, 7.0f, ""}};
+        manifest.objectives = {
+                {1U, nuby::WorldObjectiveType::Relic, {-4.0f, -0.42f, -2.0f}},
+                {2U, nuby::WorldObjectiveType::Relic, {4.0f, -0.42f, -4.0f}},
+                {3U, nuby::WorldObjectiveType::Relic, {-3.0f, -0.42f, -7.0f}},
+                {4U, nuby::WorldObjectiveType::Gate, {5.0f, 0.18f, -11.5f}}
+        };
+        return true;
+    });
+    nuby::Scene scene;
+    game.start(scene);
+    const nuby::Entity* firstRelic = scene.find(findEntityId(scene, "Sun Relic 1"));
+    const nuby::Entity* secondRelic = scene.find(findEntityId(scene, "Sun Relic 2"));
+    const nuby::Entity* gate = scene.find(findEntityId(scene, "Sun Gate"));
+    const nuby::Entity* gateTrigger = scene.find(findEntityId(scene, "Sun Gate Trigger"));
+    expect(firstRelic != nullptr && firstRelic->transform.position
+                    == std::array<float, 3>{-4.0f, -0.42f, -2.0f}
+                   && secondRelic != nullptr && secondRelic->transform.position
+                    == std::array<float, 3>{4.0f, -0.42f, -4.0f}
+                   && gate != nullptr && gate->transform.position
+                    == std::array<float, 3>{5.0f, 0.18f, -11.5f}
+                   && gateTrigger != nullptr && gateTrigger->transform.position[0] == 5.0f
+                   && gateTrigger->transform.position[2] == -11.5f,
+           "manifest objective records reposition relics, gate visuals, and the goal trigger together");
+    nuby::AdventureSaveData save;
+    std::string error;
+    expect(game.saveData(scene, save, error) && save.gateX == 5.0f
+                   && save.gateZ == -11.5f,
+           "save snapshots record the authored gate location for compatibility checks");
+    nuby::AdventureGame defaultWorld;
+    nuby::Scene defaultScene;
+    defaultWorld.start(defaultScene);
+    expect(!defaultWorld.loadData(defaultScene, save, error)
+                   && defaultWorld.relicsCollected() == 0,
+           "progress from a different authored gate layout is rejected without mutation");
+}
+
 void testCharacterFacesItsMovementDirection() {
     nuby::AdventureGame game;
     nuby::Scene scene;
@@ -554,6 +595,7 @@ void testRelicsUnlockTheGateAndRestartResetsProgress() {
 int main() {
     testAdventureBuildsItsOwnCharacterAndScene();
     testWorldLayoutCanBeAuthoredByManifest();
+    testAdventureObjectivesAreAuthoredByTheWorldManifest();
     testCharacterFacesItsMovementDirection();
     testWayfarerSelectsIdleWalkRunAndJumpClips();
     testAdventureStreamsSceneryByPlayerZone();

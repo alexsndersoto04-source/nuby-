@@ -49,6 +49,8 @@ public:
 
 private:
     void buildScene(Scene& scene);
+    bool applyAuthoredObjectives(Scene& scene,
+                                 const std::vector<WorldObjectiveDefinition>& objectives);
     void applyZoneTransitions(Scene& scene);
     void loadZone(Scene& scene, std::uint32_t zoneId, double priority = 0.0);
     void loadZoneFallback(Scene& scene, std::uint32_t zoneId);
@@ -57,6 +59,7 @@ private:
 
     std::uint32_t playerId_ = 0;
     std::uint32_t cameraId_ = 0;
+    std::uint32_t gateId_ = 0;
     std::uint32_t gateTriggerId_ = 0;
     std::vector<std::uint32_t> relicIds_;
     std::array<std::uint32_t, static_cast<std::size_t>(kRelicGoal)> relicEntityIds_{};

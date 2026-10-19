@@ -95,6 +95,7 @@ void AdventureGame::buildScene(Scene& scene) {
     }
 
     Entity& gate = scene.create("Sun Gate", Primitive::Torus);
+    gateId_ = gate.id;
     gate.transform.position = {0.0f, 0.18f, kGateZ};
     gate.transform.rotation[0] = kPiOverTwo;
     gate.transform.scale = {1.6f, 1.6f, 1.6f};
@@ -182,6 +183,9 @@ void AdventureGame::buildScene(Scene& scene) {
     if (zoneManifestReader_ && zoneManifestReader_(manifest, manifestError)) {
         zones = std::move(manifest.zones);
         maximumResidentZones = manifest.maximumResidentZones;
+        if (!manifest.objectives.empty()) {
+            applyAuthoredObjectives(scene, manifest.objectives);
+        }
     } else {
         // The packaged manifest is authoritative; this safe fallback keeps the
         // adventure playable in native tests and if a future manifest is bad.
@@ -227,6 +231,53 @@ void AdventureGame::buildScene(Scene& scene) {
             loadZone(scene, zoneId);
         }
     }
+}
+
+bool AdventureGame::applyAuthoredObjectives(
+        Scene& scene, const std::vector<WorldObjectiveDefinition>& objectives) {
+    constexpr std::size_t kExpectedObjectiveCount =
+            static_cast<std::size_t>(kRelicGoal) + 1U;
+    if (objectives.size() != kExpectedObjectiveCount) return false;
+    std::array<std::array<float, 3>, static_cast<std::size_t>(kRelicGoal)> relicPositions{};
+    std::array<bool, static_cast<std::size_t>(kRelicGoal)> foundRelics{};
+    std::array<float, 3> gatePosition{};
+    bool foundGate = false;
+    for (const WorldObjectiveDefinition& objective : objectives) {
+        if (objective.type == WorldObjectiveType::Relic
+                && objective.id >= 1U && objective.id <= kRelicGoal) {
+            const std::size_t slot = static_cast<std::size_t>(objective.id - 1U);
+            if (foundRelics[slot]) return false;
+            relicPositions[slot] = objective.position;
+            foundRelics[slot] = true;
+        } else if (objective.type == WorldObjectiveType::Gate
+                && objective.id == kExpectedObjectiveCount && !foundGate) {
+            gatePosition = objective.position;
+            foundGate = true;
+        } else {
+            return false;
+        }
+        if (objective.position[0] < -kWorldLimitX || objective.position[0] > kWorldLimitX
+                || objective.position[1] < -3.0f || objective.position[1] > 8.0f
+                || objective.position[2] < kWorldFarZ || objective.position[2] > kWorldNearZ) {
+            return false;
+        }
+    }
+    if (!foundGate || !std::all_of(foundRelics.begin(), foundRelics.end(),
+                                    [](bool found) { return found; })) return false;
+    std::array<Entity*, static_cast<std::size_t>(kRelicGoal)> relicEntities{};
+    for (std::size_t slot = 0U; slot < relicEntities.size(); ++slot) {
+        relicEntities[slot] = scene.find(relicEntityIds_[slot]);
+        if (relicEntities[slot] == nullptr) return false;
+    }
+    Entity* gate = scene.find(gateId_);
+    Entity* gateTrigger = scene.find(gateTriggerId_);
+    if (gate == nullptr || gateTrigger == nullptr) return false;
+    for (std::size_t slot = 0U; slot < relicEntities.size(); ++slot) {
+        relicEntities[slot]->transform.position = relicPositions[slot];
+    }
+    gate->transform.position = gatePosition;
+    gateTrigger->transform.position = {gatePosition[0], kPlayerCenterHeight, gatePosition[2]};
+    return true;
 }
 
 void AdventureGame::loadZone(Scene& scene, std::uint32_t zoneId, double priority) {
@@ -467,8 +518,9 @@ bool AdventureGame::saveData(const Scene& scene, AdventureSaveData& output,
                              std::string& error) const {
     const Entity* player = scene.find(playerId_);
     const Entity* camera = scene.find(cameraId_);
-    if (player == nullptr || camera == nullptr) {
-        error = "adventure player or camera is unavailable";
+    const Entity* gate = scene.find(gateId_);
+    if (player == nullptr || camera == nullptr || gate == nullptr) {
+        error = "adventure player, camera, or gate is unavailable";
         return false;
     }
     AdventureSaveData candidate;
@@ -477,6 +529,8 @@ bool AdventureGame::saveData(const Scene& scene, AdventureSaveData& output,
     candidate.playerYaw = player->transform.rotation[1];
     candidate.cameraYaw = camera->orbitCamera.yaw;
     candidate.cameraPitch = camera->orbitCamera.pitch;
+    candidate.gateX = gate->transform.position[0];
+    candidate.gateZ = gate->transform.position[2];
     candidate.collectedRelicMask = collectedRelicMask_;
     candidate.completed = completed_;
     if (!validateAdventureSaveData(candidate, error)) return false;
@@ -490,8 +544,14 @@ bool AdventureGame::loadData(Scene& scene, const AdventureSaveData& data,
     if (!validateAdventureSaveData(data, error)) return false;
     Entity* player = scene.find(playerId_);
     Entity* camera = scene.find(cameraId_);
-    if (player == nullptr || camera == nullptr) {
-        error = "adventure player or camera is unavailable";
+    const Entity* gate = scene.find(gateId_);
+    if (player == nullptr || camera == nullptr || gate == nullptr) {
+        error = "adventure player, camera, or gate is unavailable";
+        return false;
+    }
+    if (std::fabs(data.gateX - gate->transform.position[0]) > 0.001f
+            || std::fabs(data.gateZ - gate->transform.position[2]) > 0.001f) {
+        error = "save gate layout does not match the current world";
         return false;
     }
     for (std::size_t slot = 0U; slot < relicEntityIds_.size(); ++slot) {
