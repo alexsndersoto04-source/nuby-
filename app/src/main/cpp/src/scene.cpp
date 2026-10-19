@@ -2549,6 +2549,62 @@ void Scene::simulatePhysics(float deltaSeconds) {
     if (physicsAccumulator_ >= step) physicsAccumulator_ = std::fmod(physicsAccumulator_, step);
 }
 
+void Scene::refreshOrbitCameraCollisions(float deltaSeconds) {
+    const float dt = std::isfinite(deltaSeconds)
+            ? std::clamp(deltaSeconds, 0.0f, 0.05f) : 0.0f;
+    for (Entity& entity : entities_) {
+        OrbitCameraController& camera = entity.orbitCamera;
+        if (!camera.enabled || !camera.collisionEnabled) {
+            camera.resolvedDistance = -1.0f;
+            continue;
+        }
+        const float requestedDistance = std::isfinite(camera.distance)
+                ? std::max(camera.distance, 0.1f) : 0.1f;
+        const bool zoomChanged = std::isfinite(camera.lastRequestedDistance)
+                && camera.lastRequestedDistance > 0.0f
+                && std::fabs(requestedDistance - camera.lastRequestedDistance) > 1.0e-4f;
+        if (zoomChanged || !std::isfinite(camera.resolvedDistance)
+                || camera.resolvedDistance <= 0.0f) {
+            camera.resolvedDistance = requestedDistance;
+        }
+        camera.lastRequestedDistance = requestedDistance;
+        const float horizontal = std::cos(camera.pitch) * requestedDistance;
+        const std::array<float, 3> offset{
+            std::sin(camera.yaw) * horizontal,
+            std::sin(camera.pitch) * requestedDistance + 0.12f,
+            std::cos(camera.yaw) * horizontal};
+        const float boomLength = std::sqrt(dot(offset, offset));
+        if (!std::isfinite(boomLength) || boomLength <= 1.0e-6f) {
+            camera.resolvedDistance = requestedDistance;
+            continue;
+        }
+        std::array<float, 3> direction{};
+        for (std::size_t axis = 0; axis < direction.size(); ++axis) {
+            direction[axis] = offset[axis] / boomLength;
+        }
+        float safeDistance = requestedDistance;
+        SphereCastHit hit;
+        if (sphereCast(camera.target, direction, camera.collisionRadius,
+                       boomLength, hit, camera.collisionLayer, camera.collisionMask)) {
+            const float safeBoomLength = std::min(boomLength,
+                    std::max(camera.collisionMinimumDistance,
+                            hit.distance - camera.collisionPadding));
+            safeDistance = requestedDistance * (safeBoomLength / boomLength);
+        }
+        if (!std::isfinite(camera.resolvedDistance) || camera.resolvedDistance <= 0.0f) {
+            camera.resolvedDistance = requestedDistance;
+        }
+        if (safeDistance < camera.resolvedDistance) {
+            // Retraction is immediate to avoid rendering through a newly entered wall.
+            camera.resolvedDistance = safeDistance;
+        } else if (safeDistance > camera.resolvedDistance) {
+            const float speed = std::max(0.0f, camera.collisionRecoverySpeed);
+            const float blend = speed > 0.0f ? 1.0f - std::exp(-speed * dt) : 0.0f;
+            camera.resolvedDistance += (safeDistance - camera.resolvedDistance) * blend;
+        }
+    }
+}
+
 void Scene::update(float deltaSeconds) {
     const float dt = std::isfinite(deltaSeconds)
             ? std::clamp(deltaSeconds, 0.0f, 0.05f) : 0.0f;
@@ -2616,6 +2672,7 @@ void Scene::update(float deltaSeconds) {
         }
     }
     simulatePhysics(dt);
+    refreshOrbitCameraCollisions(dt);
 
     for (Entity& entity : entities_) {
         SkeletalLocomotionComponent& locomotion = entity.skeletalLocomotion;

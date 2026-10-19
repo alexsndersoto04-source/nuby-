@@ -54,6 +54,55 @@ void testOrbitIsStable() {
     expect(near(orbiting.transform.position[2], 2.0f), "orbit radius is preserved");
 }
 
+void testOrbitCameraCollisionSpringArm() {
+    nuby::Scene scene;
+    nuby::Entity& camera = scene.create("camera", nuby::Primitive::None);
+    camera.camera.enabled = true;
+    camera.orbitCamera.enabled = true;
+    camera.orbitCamera.distance = 5.0f;
+    camera.orbitCamera.yaw = 0.0f;
+    camera.orbitCamera.pitch = 0.0f;
+    const std::uint32_t cameraId = camera.id;
+    camera.orbitCamera.collisionEnabled = true;
+    camera.orbitCamera.collisionRadius = 0.2f;
+    camera.orbitCamera.collisionPadding = 0.15f;
+    camera.orbitCamera.collisionRecoverySpeed = 8.0f;
+    scene.setActiveCamera(camera.id);
+
+    nuby::Entity& wall = scene.create("wall", nuby::Primitive::None);
+    wall.transform.position = {0.0f, 0.0f, 3.0f};
+    wall.boxCollider.enabled = true;
+    wall.boxCollider.halfExtents = {0.7f, 0.7f, 0.35f};
+    scene.update(1.0f / 60.0f);
+    const float obstructedDistance = scene.find(cameraId)->orbitCamera.resolvedDistance;
+    expect(obstructedDistance > scene.find(cameraId)->orbitCamera.collisionMinimumDistance
+            && obstructedDistance < 3.0f,
+            "spring arm retracts before an obstructing box");
+
+    wall.boxCollider.collisionLayer = 2U;
+    scene.find(cameraId)->orbitCamera.collisionMask = ~2U;
+    scene.update(1.0f / 60.0f);
+    const float filteredDistance = scene.find(cameraId)->orbitCamera.resolvedDistance;
+    expect(filteredDistance > obstructedDistance,
+            "camera collision mask filters non-occluding actor layers");
+    expect(filteredDistance < scene.find(cameraId)->orbitCamera.distance,
+            "camera boom recovery is damped rather than snapping outward");
+
+    wall.boxCollider.collisionLayer = 1U;
+    scene.find(cameraId)->orbitCamera.collisionMask = 0xFFFFFFFFU;
+    scene.update(1.0f / 60.0f);
+    expect(scene.find(cameraId)->orbitCamera.resolvedDistance < filteredDistance,
+            "new obstruction retracts the camera immediately");
+    wall.boxCollider.enabled = false;
+    scene.update(1.0f / 60.0f);
+    expect(scene.find(cameraId)->orbitCamera.resolvedDistance > obstructedDistance,
+            "camera smoothly restores its authored orbit distance after obstruction clears");
+    scene.find(cameraId)->orbitCamera.distance = 6.0f;
+    scene.update(1.0f / 60.0f);
+    expect(near(scene.find(cameraId)->orbitCamera.resolvedDistance, 6.0f),
+            "intentional zoom is applied immediately instead of damped as wall recovery");
+}
+
 void testTransformHierarchyAndCycleProtection() {
     nuby::Scene scene;
     nuby::Entity& parent = scene.create("root", nuby::Primitive::Sphere);
@@ -1471,6 +1520,7 @@ int main() {
     testEntityIdentityAndSpin();
     testDeltaTimeIsClamped();
     testOrbitIsStable();
+    testOrbitCameraCollisionSpringArm();
     testTransformHierarchyAndCycleProtection();
     testEntityDestructionCascadesAndPreservesOtherEntities();
     testActiveCameraAndOrbitInput();

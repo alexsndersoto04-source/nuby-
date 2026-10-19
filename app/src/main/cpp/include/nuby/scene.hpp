@@ -308,6 +308,17 @@ struct OrbitCameraController {
     float maximumPitch = 0.62f;
     float yawPerPixel = 0.006f;
     float pitchPerPixel = 0.004f;
+    // A spring arm retracts against collider queries; smoothing only applies while
+    // recovering so an obstruction never pulls the camera through a wall.
+    bool collisionEnabled = false;
+    float collisionRadius = 0.22f;
+    float collisionPadding = 0.16f;
+    float collisionMinimumDistance = 0.28f;
+    float collisionRecoverySpeed = 9.0f;
+    std::uint32_t collisionLayer = 4U;
+    std::uint32_t collisionMask = 0xFFFFFFFFU;
+    float resolvedDistance = -1.0f;  // Runtime-only; reinitialized from distance.
+    float lastRequestedDistance = -1.0f;  // Runtime-only; distinguishes zoom from recovery.
 };
 
 struct Entity {
@@ -406,6 +417,8 @@ public:
                                std::uint32_t queryMask = 0xFFFFFFFFU) const;
     std::array<float, 16> worldMatrix(std::uint32_t id) const;
     void update(float deltaSeconds);
+    // Re-evaluate camera occlusion after external code edits targets/transforms.
+    void refreshOrbitCameraCollisions(float deltaSeconds);
     void clear();
 
     const std::vector<Entity>& entities() const { return entities_; }

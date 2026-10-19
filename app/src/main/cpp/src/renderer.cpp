@@ -3405,7 +3405,9 @@ void Renderer::render(float deltaSeconds) {
     Mat4 view{};
     if (cameraEntity != nullptr && cameraEntity->orbitCamera.enabled) {
         const OrbitCameraController& orbit = cameraEntity->orbitCamera;
-        const float distance = std::max(orbit.distance, 0.1f);
+        const float requestedDistance = orbit.resolvedDistance > 0.0f
+                ? orbit.resolvedDistance : orbit.distance;
+        const float distance = std::max(requestedDistance, 0.1f);
         const float horizontal = std::cos(orbit.pitch) * distance;
         const Vec3 target = orbit.target;
         cameraPosition_ = {target[0] + std::sin(orbit.yaw) * horizontal,

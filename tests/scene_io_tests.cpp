@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -70,8 +71,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 20") {
+        if (line == "NUBY_SCENE 21") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("ORBIT_CAMERA_COLLISION ", 0) == 0 && targetVersion < 21) {
+            continue;
         } else if (line.rfind("CHARACTER_CONTROLLER ", 0) == 0 && targetVersion < 20) {
             std::istringstream record(line);
             std::string tag;
@@ -333,6 +336,13 @@ nuby::Scene makeScene() {
     camera.orbitCamera.maximumPitch = 0.8f;
     camera.orbitCamera.yawPerPixel = 0.01f;
     camera.orbitCamera.pitchPerPixel = 0.02f;
+    camera.orbitCamera.collisionEnabled = true;
+    camera.orbitCamera.collisionRadius = 0.31f;
+    camera.orbitCamera.collisionPadding = 0.22f;
+    camera.orbitCamera.collisionMinimumDistance = 0.42f;
+    camera.orbitCamera.collisionRecoverySpeed = 6.5f;
+    camera.orbitCamera.collisionLayer = 8U;
+    camera.orbitCamera.collisionMask = 0x00000014U;
     camera.characterController.enabled = true;
     camera.characterController.moveInput = {0.6f, -0.8f};
     camera.characterController.maximumSpeed = 5.2f;
@@ -375,6 +385,15 @@ void testRoundTripAllSceneData() {
     expect(loaded.elapsedSeconds() == original.elapsedSeconds(), "round-trip preserves scene time");
     expect(loaded.activeCamera() != nullptr && loaded.activeCamera()->id == 3,
            "round-trip preserves the active camera ID");
+    expect(loaded.activeCamera() != nullptr
+                   && loaded.activeCamera()->orbitCamera.collisionEnabled
+                   && near(loaded.activeCamera()->orbitCamera.collisionRadius, 0.31f)
+                   && near(loaded.activeCamera()->orbitCamera.collisionPadding, 0.22f)
+                   && near(loaded.activeCamera()->orbitCamera.collisionMinimumDistance, 0.42f)
+                   && near(loaded.activeCamera()->orbitCamera.collisionRecoverySpeed, 6.5f)
+                   && loaded.activeCamera()->orbitCamera.collisionLayer == 8U
+                   && loaded.activeCamera()->orbitCamera.collisionMask == 0x00000014U,
+           "round-trip preserves spring-arm collision controls and filtering");
     expect(near(loaded.physicsSettings().gravity[1], -12.0f)
                    && near(loaded.physicsSettings().fixedTimeStep, 1.0f / 120.0f)
                    && loaded.physicsSettings().maximumSubsteps == 8
@@ -662,6 +681,14 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid crossfade source data cannot partially replace the target scene");
 
+    std::stringstream legacyV20(downgradeTextureSchema(valid.str(), 20, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV20, error),
+           "version-twenty scenes remain readable without spring-arm data");
+    expect(target.activeCamera() != nullptr
+                   && !target.activeCamera()->orbitCamera.collisionEnabled
+                   && near(target.activeCamera()->orbitCamera.collisionRadius, 0.22f),
+           "version-twenty cameras receive compatible collision defaults");
+
     std::stringstream legacyV19(downgradeTextureSchema(valid.str(), 19, 8));
     expect(nuby::SceneSerializer::load(target, legacyV19, error),
            "version-nineteen scenes remain readable before jump-assist settings");
@@ -943,6 +970,28 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "scene serialization rejects unbounded texture map base/gain values");
 }
 
+void testAdventureZonePillarsHaveCameraOnlyColliders() {
+    for (int zone = 1; zone <= 3; ++zone) {
+        const std::string path = "app/src/main/assets/scenes/zones/ruins_0"
+                + std::to_string(zone) + ".scene";
+        std::ifstream input(path);
+        nuby::Scene scene;
+        std::string error;
+        expect(input.good() && nuby::SceneSerializer::load(scene, input, error),
+               "packaged adventure zone scene remains loadable");
+        std::size_t pillars = 0U;
+        for (const nuby::Entity& entity : scene.entities()) {
+            if (entity.primitive != nuby::Primitive::ImportedMesh) continue;
+            ++pillars;
+            expect(entity.boxCollider.enabled
+                           && entity.boxCollider.collisionLayer == 4U
+                           && entity.boxCollider.collisionMask == 4U,
+                   "ruin pillar collider is isolated to camera-query interactions");
+        }
+        expect(pillars == 4U, "each zone keeps its four authored pillar meshes");
+    }
+}
+
 void testAppendingSceneFragmentsRemapsHierarchyTransactionally() {
     nuby::Scene destination;
     const std::uint32_t existingId = destination.create(
@@ -984,6 +1033,7 @@ void testAppendingSceneFragmentsRemapsHierarchyTransactionally() {
 
 int main() {
     testRoundTripAllSceneData();
+    testAdventureZonePillarsHaveCameraOnlyColliders();
     testAppendingSceneFragmentsRemapsHierarchyTransactionally();
     testMalformedFilesDoNotPartiallyReplaceScene();
     if (failures != 0) {

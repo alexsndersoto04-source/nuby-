@@ -52,6 +52,13 @@ void AdventureGame::buildScene(Scene& scene) {
     camera.orbitCamera.minimumDistance = 4.8f;
     camera.orbitCamera.maximumDistance = 10.0f;
     camera.orbitCamera.pitch = 0.3f;
+    camera.orbitCamera.collisionEnabled = true;
+    camera.orbitCamera.collisionRadius = 0.24f;
+    camera.orbitCamera.collisionPadding = 0.18f;
+    camera.orbitCamera.collisionMinimumDistance = 0.42f;
+    camera.orbitCamera.collisionRecoverySpeed = 7.5f;
+    camera.orbitCamera.collisionLayer = 4U;
+    camera.orbitCamera.collisionMask = 0xFFFFFFFDU;  // Ignore the actor/trigger layer.
     camera.orbitCamera.minimumPitch = 0.08f;
     camera.orbitCamera.maximumPitch = 0.72f;
     camera.orbitCamera.target = {0.0f, -0.48f, 0.0f};
@@ -83,6 +90,7 @@ void AdventureGame::buildScene(Scene& scene) {
         relic.sphereCollider.enabled = true;
         relic.sphereCollider.radius = 1.0f;
         relic.sphereCollider.trigger = true;
+        relic.sphereCollider.collisionLayer = 2U;
         relic.material.color = {1.0f, 1.0f, 1.0f};
         relic.material.emission = {0.055f, 0.025f, 0.003f};
         relic.material.metallic = 0.72f;
@@ -112,6 +120,7 @@ void AdventureGame::buildScene(Scene& scene) {
     gateTrigger.sphereCollider.enabled = true;
     gateTrigger.sphereCollider.radius = 1.0f;
     gateTrigger.sphereCollider.trigger = true;
+    gateTrigger.sphereCollider.collisionLayer = 2U;
 
     Entity& player = scene.create("Wayfarer", Primitive::Sphere);
     playerId_ = player.id;
@@ -122,6 +131,7 @@ void AdventureGame::buildScene(Scene& scene) {
     player.rigidbody.linearDamping = 0.04f;
     player.sphereCollider.enabled = true;
     player.sphereCollider.radius = 1.0f;
+    player.sphereCollider.collisionLayer = 2U;
     player.sphereCollider.restitution = 0.0f;
     player.sphereCollider.friction = 0.0f;
     player.characterController.enabled = true;
@@ -512,6 +522,9 @@ void AdventureGame::update(Scene& scene, float deltaSeconds) {
         completed_ = dx * dx + dz * dz <= 1.8f * 1.8f;
         if (completed_) moveInput_ = {0.0f, 0.0f};
     }
+    // The follow target is updated after physics; re-run the sweep at dt=0 so
+    // camera obstruction is current this frame without double-advancing recovery.
+    scene.refreshOrbitCameraCollisions(0.0f);
 }
 
 bool AdventureGame::saveData(const Scene& scene, AdventureSaveData& output,

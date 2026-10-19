@@ -235,10 +235,22 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.orbitCamera.maximumDistance) || !finite(entity.orbitCamera.yaw)
             || !finite(entity.orbitCamera.pitch) || !finite(entity.orbitCamera.minimumPitch)
             || !finite(entity.orbitCamera.maximumPitch) || !finite(entity.orbitCamera.yawPerPixel)
-            || !finite(entity.orbitCamera.pitchPerPixel)) {
+            || !finite(entity.orbitCamera.pitchPerPixel)
+            || !finite(entity.orbitCamera.collisionRadius)
+            || !finite(entity.orbitCamera.collisionPadding)
+            || !finite(entity.orbitCamera.collisionMinimumDistance)
+            || !finite(entity.orbitCamera.collisionRecoverySpeed)) {
         return false;
     }
-    if (entity.sphereCollider.collisionLayer == 0U || entity.boxCollider.collisionLayer == 0U
+    if (entity.orbitCamera.collisionRadius <= 0.0f
+            || entity.orbitCamera.collisionPadding < 0.0f
+            || entity.orbitCamera.collisionMinimumDistance <= 0.0f
+            || entity.orbitCamera.collisionRecoverySpeed < 0.0f
+            || entity.orbitCamera.collisionLayer == 0U
+            || (entity.orbitCamera.collisionEnabled
+                && entity.orbitCamera.collisionMask == 0U)
+            || entity.sphereCollider.collisionLayer == 0U
+            || entity.boxCollider.collisionLayer == 0U
             || (entity.rigidbody.enabled && entity.rigidbody.mass < 1.0e-6f)
             || entity.rigidbody.linearDamping < 0.0f || entity.rigidbody.angularDamping < 0.0f
             || (entity.sphereCollider.enabled && entity.sphereCollider.radius <= 0.0f)
@@ -513,6 +525,14 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << ' ' << entity.orbitCamera.minimumPitch << ' ' << entity.orbitCamera.maximumPitch
            << ' ' << entity.orbitCamera.yawPerPixel << ' ' << entity.orbitCamera.pitchPerPixel
            << '\n';
+    output << "ORBIT_CAMERA_COLLISION "
+           << (entity.orbitCamera.collisionEnabled ? 1 : 0) << ' '
+           << entity.orbitCamera.collisionRadius << ' '
+           << entity.orbitCamera.collisionPadding << ' '
+           << entity.orbitCamera.collisionMinimumDistance << ' '
+           << entity.orbitCamera.collisionRecoverySpeed << ' '
+           << entity.orbitCamera.collisionLayer << ' '
+           << entity.orbitCamera.collisionMask << '\n';
     output << "RIGIDBODY " << (entity.rigidbody.enabled ? 1 : 0) << ' '
            << entity.rigidbody.mass;
     writeFloatArray(output, entity.rigidbody.velocity);
@@ -810,6 +830,22 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
             || !std::isfinite(entity.orbitCamera.yawPerPixel)
             || !std::isfinite(entity.orbitCamera.pitchPerPixel)) {
         return fail(error, "Entity orbit camera component is invalid");
+    }
+    if (version >= 21) {
+        if (!readTag(input, "ORBIT_CAMERA_COLLISION", error)
+                || !readBool(input, entity.orbitCamera.collisionEnabled)
+                || !(input >> entity.orbitCamera.collisionRadius
+                            >> entity.orbitCamera.collisionPadding
+                            >> entity.orbitCamera.collisionMinimumDistance
+                            >> entity.orbitCamera.collisionRecoverySpeed
+                            >> entity.orbitCamera.collisionLayer
+                            >> entity.orbitCamera.collisionMask)
+                || !std::isfinite(entity.orbitCamera.collisionRadius)
+                || !std::isfinite(entity.orbitCamera.collisionPadding)
+                || !std::isfinite(entity.orbitCamera.collisionMinimumDistance)
+                || !std::isfinite(entity.orbitCamera.collisionRecoverySpeed)) {
+            return fail(error, "Entity orbit-camera collision settings are invalid");
+        }
     }
 
     if (version >= 2) {
