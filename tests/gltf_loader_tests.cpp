@@ -280,6 +280,39 @@ std::string makeSkeletalGlb() {
     return data;
 }
 
+std::string makeSkeletalGlbWithIntermediaryTransform() {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeSkeletalGlb(), json, binary, error)) return {};
+    const std::string originalNodes =
+            R"JSON("nodes":[{"name":"child_joint","translation":[1,0,0]},{"name":"root_joint","children":[0]},{"name":"mesh","mesh":0,"skin":0}],)JSON";
+    const std::string nodesWithHelper =
+            R"JSON("nodes":[{"name":"child_joint","translation":[1,0,0]},{"name":"root_joint","children":[0]},{"name":"mesh","mesh":0,"skin":0},{"name":"armature_offset","translation":[0,2,0],"children":[1]}],)JSON";
+    const std::size_t nodesPosition = json.find(originalNodes);
+    if (nodesPosition == std::string::npos) return {};
+    json.replace(nodesPosition, originalNodes.size(), nodesWithHelper);
+    const std::string originalTarget = R"JSON("node":1,"path":"translation")JSON";
+    const std::string helperTarget = R"JSON("node":3,"path":"translation")JSON";
+    const std::size_t targetPosition = json.find(originalTarget);
+    if (targetPosition == std::string::npos) return {};
+    json.replace(targetPosition, originalTarget.size(), helperTarget);
+    const float helperY = 2.0f;
+    std::uint32_t helperYBits = 0;
+    std::memcpy(&helperYBits, &helperY, sizeof(helperYBits));
+    setU32(binary, 244U, helperYBits);
+    setU32(binary, 256U, helperYBits);
+
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, json);
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
 std::string makeMultipleMeshSkeletalGlb(bool translateSecondMesh = false) {
     std::string json;
     std::string binary;
@@ -647,6 +680,42 @@ void testSkeletalGlbImportsJointsBindMatricesAndClips() {
            "mesh skin indices map into the imported skeleton palette");
 }
 
+void testSkeletalGlbImportsAnimatedNonJointAncestors() {
+    nuby::GltfSkeletalAsset asset;
+    std::string error;
+    expect(nuby::parseGlbSkeletalAsset(
+                   makeSkeletalGlbWithIntermediaryTransform(), asset, error),
+           "skeletal GLB preserves TRS intermediary nodes in the joint hierarchy");
+    expect(asset.skeleton.size() == 3U && asset.animations.size() == 1U
+                   && asset.animations[0].clip.joints.size() == 3U,
+           "intermediary transforms receive unweighted animation palette entries");
+    if (asset.skeleton.size() != 3U || asset.animations.size() != 1U) return;
+    expect(asset.skeleton[0].name == "armature_offset"
+                   && asset.skeleton[0].parentIndex == -1
+                   && asset.skeleton[1].name == "root_joint"
+                   && asset.skeleton[1].parentIndex == 0
+                   && asset.skeleton[2].name == "child_joint"
+                   && asset.skeleton[2].parentIndex == 1,
+           "non-joint ancestor and skin joints are reordered as a parent-first chain");
+    expect(asset.animations[0].clip.joints[0].translation.keyframes.size() == 2U,
+           "animation channels targeting intermediary nodes are imported");
+    expect(asset.primitives.size() == 1U
+                   && asset.primitives[0].influences[0].jointIndices[0] == 2U,
+           "vertex skin indices still resolve to actual joints after adding helper nodes");
+
+    nuby::SkeletalPose pose;
+    expect(nuby::evaluateSkeletalPose(asset.skeleton, asset.animations[0].clip,
+                                      0.5f, pose, error),
+           "animation evaluates through an animated non-joint ancestor");
+    expect(pose.jointMatrices.size() == 3U
+                   && std::fabs(pose.jointMatrices[0][12] - 0.5f) < 1.0e-5f
+                   && std::fabs(pose.jointMatrices[0][13] - 2.0f) < 1.0e-5f
+                   && std::fabs(pose.jointMatrices[1][12] - 0.5f) < 1.0e-5f
+                   && std::fabs(pose.jointMatrices[2][12] - 0.5f) < 1.0e-5f
+                   && std::fabs(pose.jointMatrices[2][13] - 2.0f) < 1.0e-5f,
+           "ancestor bind offset and animated motion propagate to weighted skin joints");
+}
+
 void testSkeletalGlbImportsMultipleIdentityMeshNodes() {
     nuby::GltfSkeletalAsset asset;
     std::string error;
@@ -860,6 +929,7 @@ int main() {
     testGlbMaterialsBindEmbeddedPngTextures();
     testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
+    testSkeletalGlbImportsAnimatedNonJointAncestors();
     testSkeletalGlbImportsMultipleIdentityMeshNodes();
     testSkeletalGlbStepAndCubicSplineInterpolation();
     testPackagedAlphaMaskFixture();

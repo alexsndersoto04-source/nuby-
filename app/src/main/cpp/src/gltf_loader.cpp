@@ -1,10 +1,10 @@
 #include "nuby/gltf_loader.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
-#include <functional>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -1569,36 +1569,33 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
         return fail(error, "Skeletal GLB contains no mesh node using skin zero");
     }
 
-    std::vector<std::int32_t> skinIndexByNodeIndex(nodes.size(), -1);
-    for (std::size_t skinIndex = 0; skinIndex < skinNodes.size(); ++skinIndex) {
-        skinIndexByNodeIndex[skinNodes[skinIndex]] = static_cast<std::int32_t>(skinIndex);
-        if (nodes[skinNodes[skinIndex]].matrixAuthored) {
-            return fail(error, "Matrix-authored skin joints are not supported");
-        }
-    }
-    // Reject intermediary nodes after constructing the complete node-to-skin map.
-    for (std::uint32_t nodeIndex : skinNodes) {
-        const std::int32_t parent = nodes[nodeIndex].parentIndex;
-        if (parent >= 0 && skinIndexByNodeIndex[static_cast<std::size_t>(parent)] == -1) {
-            return fail(error, "Non-joint intermediary nodes in a skin hierarchy are unsupported");
-        }
-    }
-
-    std::vector<std::int32_t> parentFirstNodes;
+    // Promote non-joint ancestors to unweighted palette entries. This preserves
+    // their bind and animated TRS transforms while keeping every skin joint's
+    // parent chain intact for the shared pose evaluator.
+    std::vector<std::uint32_t> parentFirstNodes;
     std::vector<std::uint8_t> visitState(nodes.size(), 0U);
-    std::function<bool(std::uint32_t)> visitJoint = [&](std::uint32_t nodeIndex) {
-        std::uint8_t& state = visitState[nodeIndex];
-        if (state == 1U) return false;
-        if (state == 2U) return true;
-        state = 1U;
-        const std::int32_t parent = nodes[nodeIndex].parentIndex;
-        if (parent >= 0 && !visitJoint(static_cast<std::uint32_t>(parent))) return false;
-        state = 2U;
-        parentFirstNodes.push_back(nodeIndex);
-        return true;
-    };
-    for (std::uint32_t nodeIndex : skinNodes) {
-        if (!visitJoint(nodeIndex)) return fail(error, "GLB skin hierarchy contains a cycle");
+    for (std::uint32_t skinNode : skinNodes) {
+        std::vector<std::uint32_t> chain;
+        std::int32_t current = static_cast<std::int32_t>(skinNode);
+        while (current >= 0 && visitState[static_cast<std::size_t>(current)] != 2U) {
+            const std::size_t nodeIndex = static_cast<std::size_t>(current);
+            if (visitState[nodeIndex] == 1U) {
+                return fail(error, "GLB skin hierarchy contains a cycle");
+            }
+            visitState[nodeIndex] = 1U;
+            chain.push_back(static_cast<std::uint32_t>(current));
+            current = nodes[nodeIndex].parentIndex;
+        }
+        for (auto node = chain.rbegin(); node != chain.rend(); ++node) {
+            if (nodes[*node].matrixAuthored) {
+                return fail(error, "Matrix-authored nodes in a skin hierarchy are unsupported");
+            }
+            visitState[*node] = 2U;
+            parentFirstNodes.push_back(*node);
+            if (parentFirstNodes.size() > 64U) {
+                return fail(error, "GLB skin hierarchy exceeds the 64-entry pose palette limit");
+            }
+        }
     }
 
     GltfSkeletalAsset candidate;

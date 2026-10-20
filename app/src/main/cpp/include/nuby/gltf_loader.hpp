@@ -64,6 +64,7 @@ struct GltfStaticAsset {
 struct GltfSkeletalAsset {
     std::vector<GltfPrimitive> primitives;
     std::vector<GltfEmbeddedImage> images;
+    // Parent-first pose palette; may include unweighted TRS ancestor nodes.
     std::vector<SkeletalJoint> skeleton;
     std::vector<GltfAnimation> animations;
 };
@@ -95,9 +96,11 @@ bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
                          std::string& error);
 
 // Imports a constrained single-skin GLB subset with multiple identity-root mesh
-// nodes, parent-first joints, inverse-bind matrices, per-vertex weights, embedded
-// PNG PBR textures and LINEAR, STEP or CUBICSPLINE TRS animation. Mesh-node
-// transforms, intermediary hierarchy nodes and multiple skins are rejected.
+// nodes, parent-first skin joints, TRS intermediary ancestors, inverse-bind
+// matrices, per-vertex weights, embedded PNG PBR textures and LINEAR, STEP or
+// CUBICSPLINE animation. Intermediary ancestors are unweighted palette entries;
+// the full pose hierarchy is limited to 64 entries. Matrix-authored hierarchy
+// nodes, mesh-node transforms and multiple skins are rejected.
 bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                            std::string& error);
 
