@@ -49,6 +49,7 @@ void AdventureGame::buildScene(Scene& scene) {
     scene.sky().groundColor = {0.06f, 0.07f, 0.09f};
     scene.sky().sunColor = {1.0f, 0.72f, 0.43f};
     scene.sky().sunAngularRadius = 0.018f;
+    scene.sky().ambientStrength = 0.7f;
 
     Entity& camera = scene.create("Adventure Follow Camera", Primitive::None);
     cameraId_ = camera.id;

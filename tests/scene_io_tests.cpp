@@ -72,8 +72,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 25") {
+        if (line == "NUBY_SCENE 26") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("SKY_AMBIENT ", 0) == 0 && targetVersion < 26) {
+            continue;
         } else if (line.rfind("SKY ", 0) == 0 && targetVersion < 25) {
             continue;
         } else if (line.rfind("ATMOSPHERE ", 0) == 0 && targetVersion < 24) {
@@ -224,6 +226,7 @@ nuby::Scene makeScene() {
     scene.sky().groundColor = {0.08f, 0.09f, 0.1f};
     scene.sky().sunColor = {1.0f, 0.8f, 0.5f};
     scene.sky().sunAngularRadius = 0.025f;
+    scene.sky().ambientStrength = 0.6f;
     scene.physicsSettings().floorCollisionLayer = 4U;
     scene.physicsSettings().floorCollisionMask = 0x0000000CU;
     nuby::Entity& root = scene.create("root \"quoted\" \\ node", nuby::Primitive::None);
@@ -469,7 +472,8 @@ void testRoundTripAllSceneData() {
                    && near(loaded.sky().zenithColor[2], 0.4f)
                    && near(loaded.sky().horizonColor[0], 0.7f)
                    && near(loaded.sky().sunColor[1], 0.8f)
-                   && near(loaded.sky().sunAngularRadius, 0.025f),
+                   && near(loaded.sky().sunAngularRadius, 0.025f)
+                   && near(loaded.sky().ambientStrength, 0.6f),
            "round-trip preserves procedural sky palette and sun-disc settings");
 
     const nuby::Entity* root = loaded.find(1);
@@ -746,6 +750,15 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid sky settings cannot partially replace the target scene");
 
+    std::string invalidSkyAmbient = valid.str();
+    expect(replaceRecordField(invalidSkyAmbient, "SKY_AMBIENT", 1, "5.1"),
+           "v26 scene stores bounded sky-ambient intensity");
+    std::stringstream malformedSkyAmbient(invalidSkyAmbient);
+    expect(!nuby::SceneSerializer::load(target, malformedSkyAmbient, error),
+           "excessive sky-ambient intensity is rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid sky-ambient lighting cannot partially replace the target scene");
+
     std::string invalidSkeletalPlayback = valid.str();
     expect(replaceRecordField(invalidSkeletalPlayback, "SKELETAL_PLAYER", 6, "0", 1),
            "v17 scene stores skeletal playback duration");
@@ -800,6 +813,12 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV25(downgradeTextureSchema(valid.str(), 25, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV25, error),
+           "version-twenty-five scenes remain readable before sky-ambient fill");
+    expect(target.sky().enabled && near(target.sky().ambientStrength, 0.0f),
+           "version-twenty-five sky does not add extra ambient light by default");
 
     std::stringstream legacyV24(downgradeTextureSchema(valid.str(), 24, 8));
     expect(nuby::SceneSerializer::load(target, legacyV24, error),

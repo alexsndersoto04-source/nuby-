@@ -111,6 +111,34 @@ void testLoopingAndQuaternionShortestPath() {
            "looping clip wraps sample time before interpolating");
 }
 
+void testStepAndCubicSplineTracks() {
+    nuby::SkeletalVectorTrack step;
+    step.interpolation = nuby::SkeletalInterpolation::Step;
+    step.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    step.addKeyframe(1.0f, {1.0f, 0.0f, 0.0f});
+    expect(near(step.sample(0.5f, {})[0], 0.0f)
+                   && near(step.sample(1.0f, {})[0], 1.0f),
+           "STEP holds the previous key until the next key time");
+
+    nuby::SkeletalVectorTrack cubic;
+    cubic.interpolation = nuby::SkeletalInterpolation::CubicSpline;
+    cubic.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+                      {1.0f, 0.0f, 0.0f});
+    cubic.addKeyframe(1.0f, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+                      {0.0f, 0.0f, 0.0f});
+    expect(near(cubic.sample(0.5f, {})[0], 0.625f),
+           "cubic vector tracks use span-scaled Hermite tangents");
+
+    nuby::SkeletalQuaternionTrack rotations;
+    rotations.interpolation = nuby::SkeletalInterpolation::CubicSpline;
+    const float halfSqrt = std::sqrt(0.5f);
+    rotations.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f, 1.0f});
+    rotations.addKeyframe(1.0f, {0.0f, 0.0f, halfSqrt, halfSqrt});
+    const nuby::SkeletalQuaternion middle = rotations.sample(0.5f, {});
+    expect(near(middle.z, 0.3826834f) && near(middle.w, 0.9238795f),
+           "cubic quaternion tracks Hermite-interpolate components then normalize");
+}
+
 void testCrossfadeAndNonLoopingEvaluation() {
     std::vector<nuby::SkeletalJoint> skeleton(1);
     skeleton[0].name = "root";
@@ -248,6 +276,7 @@ void testTrackEditingAndInvalidData() {
 int main() {
     testParentedPoseAndInverseBind();
     testLoopingAndQuaternionShortestPath();
+    testStepAndCubicSplineTracks();
     testCrossfadeAndNonLoopingEvaluation();
     testLinearBlendSkinningReference();
     testTrackEditingAndInvalidData();

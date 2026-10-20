@@ -17,28 +17,44 @@ struct SkeletalQuaternion {
     float w = 1.0f;
 };
 
+enum class SkeletalInterpolation : std::uint8_t {
+    Linear = 0,
+    Step = 1,
+    CubicSpline = 2
+};
+
 struct SkeletalVectorKeyframe {
     float timeSeconds = 0.0f;
     std::array<float, 3> value{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> inTangent{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> outTangent{0.0f, 0.0f, 0.0f};
 };
 
 struct SkeletalQuaternionKeyframe {
     float timeSeconds = 0.0f;
     SkeletalQuaternion value;
+    SkeletalQuaternion inTangent{0.0f, 0.0f, 0.0f, 0.0f};
+    SkeletalQuaternion outTangent{0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 struct SkeletalVectorTrack {
+    SkeletalInterpolation interpolation = SkeletalInterpolation::Linear;
     std::vector<SkeletalVectorKeyframe> keyframes;
 
-    bool addKeyframe(float timeSeconds, const std::array<float, 3>& value);
+    bool addKeyframe(float timeSeconds, const std::array<float, 3>& value,
+                     const std::array<float, 3>& inTangent = {0.0f, 0.0f, 0.0f},
+                     const std::array<float, 3>& outTangent = {0.0f, 0.0f, 0.0f});
     std::array<float, 3> sample(float timeSeconds,
                                 const std::array<float, 3>& fallback) const;
 };
 
 struct SkeletalQuaternionTrack {
+    SkeletalInterpolation interpolation = SkeletalInterpolation::Linear;
     std::vector<SkeletalQuaternionKeyframe> keyframes;
 
-    bool addKeyframe(float timeSeconds, const SkeletalQuaternion& value);
+    bool addKeyframe(float timeSeconds, const SkeletalQuaternion& value,
+                     const SkeletalQuaternion& inTangent = {0.0f, 0.0f, 0.0f, 0.0f},
+                     const SkeletalQuaternion& outTangent = {0.0f, 0.0f, 0.0f, 0.0f});
     SkeletalQuaternion sample(float timeSeconds,
                               const SkeletalQuaternion& fallback) const;
 };
@@ -98,8 +114,8 @@ bool validateSkeletalAnimation(const std::vector<SkeletalJoint>& skeleton,
                                const SkeletalAnimationClip& clip,
                                std::string& error);
 
-// Evaluates parented TRS animation, quaternion-slerps rotations and computes
-// mesh-space skin matrices (animated world matrix * inverse bind matrix).
+// Evaluates parented TRS animation using each track's interpolation mode and
+// computes mesh-space skin matrices (animated world matrix * inverse bind).
 bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
                           const SkeletalAnimationClip& clip, float timeSeconds,
                           SkeletalPose& output, std::string& error);

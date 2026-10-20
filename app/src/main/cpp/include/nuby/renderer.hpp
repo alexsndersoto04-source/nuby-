@@ -270,6 +270,10 @@ private:
         GLint fogColor = -1;
         GLint fogStart = -1;
         GLint fogEnd = -1;
+        GLint skyAmbientStrength = -1;
+        GLint skyZenithColor = -1;
+        GLint skyHorizonColor = -1;
+        GLint skyGroundColor = -1;
         GLint view = -1;
         std::array<GLint, kDirectionalShadowCascadeCount> lightViewProjection{};
         GLint cascadeFarSplits = -1;

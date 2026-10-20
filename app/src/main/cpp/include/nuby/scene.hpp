@@ -244,6 +244,7 @@ struct SkySettings {
     std::array<float, 3> groundColor{0.12f, 0.14f, 0.16f};
     std::array<float, 3> sunColor{1.0f, 0.82f, 0.58f};
     float sunAngularRadius = 0.018f;
+    float ambientStrength = 0.0f;
 };
 
 struct PhysicsSettings {

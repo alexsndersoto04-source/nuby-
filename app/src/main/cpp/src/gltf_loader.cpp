@@ -1524,8 +1524,8 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
     const JsonValue* meshes = member(root, "meshes");
     if (skins == nullptr || skins->type != JsonValue::Type::Array || skins->arrayValue.size() != 1U
             || meshes == nullptr || meshes->type != JsonValue::Type::Array
-            || meshes->arrayValue.size() != 1U) {
-        return fail(error, "Skeletal GLB requires exactly one skin and one mesh");
+            || meshes->arrayValue.empty() || meshes->arrayValue.size() > 4096U) {
+        return fail(error, "Skeletal GLB requires one skin and a bounded mesh array");
     }
     const JsonValue* skinJoints = member(skins->arrayValue[0], "joints");
     if (skinJoints == nullptr || skinJoints->type != JsonValue::Type::Array
@@ -1544,8 +1544,7 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
         skinNodes.push_back(nodeIndex);
     }
 
-    std::uint32_t meshNodeIndex = 0;
-    std::size_t matchingMeshNodes = 0;
+    std::vector<std::uint32_t> skinnedMeshIndices;
     const JsonValue* nodeValues = member(root, "nodes");
     for (std::size_t index = 0; index < nodeValues->arrayValue.size(); ++index) {
         const JsonValue& source = nodeValues->arrayValue[index];
@@ -1555,17 +1554,19 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
         std::uint32_t meshIndex = 0;
         std::uint32_t skinIndex = 0;
         if (meshIndexValue == nullptr || skinIndexValue == nullptr
-                || !unsignedInteger(meshIndexValue, meshIndex) || meshIndex != 0
-                || !unsignedInteger(skinIndexValue, skinIndex) || skinIndex != 0) {
-            return fail(error, "Skeletal GLB only supports one mesh node using skin zero");
+                || !unsignedInteger(meshIndexValue, meshIndex) || meshIndex >= meshes->arrayValue.size()
+                || !unsignedInteger(skinIndexValue, skinIndex) || skinIndex != 0U
+                || nodes[index].parentIndex != -1 || nodes[index].matrixAuthored
+                || !nodeHasIdentityTransform(nodes[index])) {
+            return fail(error, "Skeletal mesh nodes must use skin zero and identity root transforms");
         }
-        ++matchingMeshNodes;
-        meshNodeIndex = static_cast<std::uint32_t>(index);
+        if (skinnedMeshIndices.size() >= 8192U) {
+            return fail(error, "Skeletal GLB mesh-node instance count exceeds limits");
+        }
+        skinnedMeshIndices.push_back(meshIndex);
     }
-    if (matchingMeshNodes != 1U || nodes[meshNodeIndex].parentIndex != -1
-            || nodes[meshNodeIndex].matrixAuthored
-            || !nodeHasIdentityTransform(nodes[meshNodeIndex])) {
-        return fail(error, "Skeletal mesh node must be a single identity root node");
+    if (skinnedMeshIndices.empty()) {
+        return fail(error, "Skeletal GLB contains no mesh node using skin zero");
     }
 
     std::vector<std::int32_t> skinIndexByNodeIndex(nodes.size(), -1);
@@ -1647,8 +1648,27 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
         return fail(error, skeletonError.c_str());
     }
 
-    if (!parseGlbMeshes(bytes, candidate.primitives, error)) return false;
-    if (candidate.primitives.empty()) return fail(error, "Skeletal GLB contains no primitives");
+    std::vector<GltfPrimitive> sourcePrimitives;
+    if (!parseGlbMeshes(bytes, sourcePrimitives, error)) return false;
+    candidate.primitives.reserve(sourcePrimitives.size());
+    std::size_t totalSkinnedVertices = 0U;
+    std::size_t totalSkinnedIndices = 0U;
+    for (const std::uint32_t meshIndex : skinnedMeshIndices) {
+        for (const GltfPrimitive& source : sourcePrimitives) {
+            if (source.meshIndex != meshIndex) continue;
+            if (candidate.primitives.size() >= 8192U
+                    || source.vertices.size() > 4000000U - totalSkinnedVertices
+                    || source.indices.size() > 12000000U - totalSkinnedIndices) {
+                return fail(error, "Skeletal mesh instances exceed geometry limits");
+            }
+            totalSkinnedVertices += source.vertices.size();
+            totalSkinnedIndices += source.indices.size();
+            candidate.primitives.push_back(source);
+        }
+    }
+    if (candidate.primitives.empty()) {
+        return fail(error, "Skeletal GLB mesh nodes reference no mesh primitives");
+    }
     for (GltfPrimitive& primitive : candidate.primitives) {
         if (!primitive.hasSkinAttributes || primitive.influences.size() != primitive.vertices.size()) {
             return fail(error, "Every skeletal GLB primitive must provide JOINTS_0 and WEIGHTS_0");
@@ -1743,11 +1763,21 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                 }
                 const JsonValue& sampler = samplers->arrayValue[samplerIndex];
                 const JsonValue* interpolation = member(sampler, "interpolation");
-                if (interpolation != nullptr
-                        && (interpolation->type != JsonValue::Type::String
-                            || interpolation->stringValue != "LINEAR")) {
-                    return fail(error, "Only LINEAR glTF skeletal animation is supported");
+                SkeletalInterpolation interpolationMode = SkeletalInterpolation::Linear;
+                if (interpolation != nullptr) {
+                    if (interpolation->type != JsonValue::Type::String) {
+                        return fail(error, "GLB skeletal animation interpolation is invalid");
+                    }
+                    if (interpolation->stringValue == "STEP") {
+                        interpolationMode = SkeletalInterpolation::Step;
+                    } else if (interpolation->stringValue == "CUBICSPLINE") {
+                        interpolationMode = SkeletalInterpolation::CubicSpline;
+                    } else if (interpolation->stringValue != "LINEAR") {
+                        return fail(error, "GLB skeletal animation interpolation is unsupported");
+                    }
                 }
+                if (vectorTrack != nullptr) vectorTrack->interpolation = interpolationMode;
+                else quaternionTrack->interpolation = interpolationMode;
                 std::uint32_t inputAccessorIndex = 0;
                 std::uint32_t outputAccessorIndex = 0;
                 if (!unsignedInteger(member(sampler, "input"), inputAccessorIndex)
@@ -1758,29 +1788,59 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                 }
                 const Accessor& inputAccessor = accessors[inputAccessorIndex];
                 const Accessor& outputAccessor = accessors[outputAccessorIndex];
+                const std::size_t outputsPerKey = interpolationMode
+                        == SkeletalInterpolation::CubicSpline ? 3U : 1U;
+                if (inputAccessor.count == 0U || inputAccessor.count > 16384U
+                        || inputAccessor.count > std::numeric_limits<std::size_t>::max()
+                                / outputsPerKey
+                        || outputAccessor.count != inputAccessor.count * outputsPerKey) {
+                    return fail(error, "GLB animation sampler output count is invalid");
+                }
                 std::vector<float> times;
                 std::vector<float> values;
                 if (!readFloatAccessor(inputAccessor, views, binary, "SCALAR", 1U, times)
                         || !readFloatAccessor(outputAccessor, views, binary,
-                                              outputType, outputComponents, values)
-                        || inputAccessor.count != outputAccessor.count) {
+                                              outputType, outputComponents, values)) {
                     return fail(error, "GLB animation sampler data has an unsupported layout");
                 }
+                const std::size_t valuesPerKey = outputsPerKey * outputComponents;
+                const bool cubicSpline = interpolationMode == SkeletalInterpolation::CubicSpline;
                 for (std::size_t key = 0; key < times.size(); ++key) {
                     if (key > 0U && times[key] <= times[key - 1U]) {
                         return fail(error, "GLB animation key times must increase strictly");
                     }
                     animation.clip.durationSeconds = std::max(animation.clip.durationSeconds, times[key]);
+                    const std::size_t keyBase = key * valuesPerKey;
+                    const std::size_t valueBase = keyBase + (cubicSpline ? outputComponents : 0U);
                     if (vectorTrack != nullptr) {
-                        const std::array<float, 3> value{{values[key * 3U], values[key * 3U + 1U],
-                                                         values[key * 3U + 2U]}};
-                        if (!vectorTrack->addKeyframe(times[key], value)) {
+                        const std::array<float, 3> value{{values[valueBase],
+                                values[valueBase + 1U], values[valueBase + 2U]}};
+                        const std::array<float, 3> inTangent = cubicSpline
+                                ? std::array<float, 3>{{values[keyBase], values[keyBase + 1U],
+                                        values[keyBase + 2U]}}
+                                : std::array<float, 3>{};
+                        const std::size_t outBase = keyBase + 2U * outputComponents;
+                        const std::array<float, 3> outTangent = cubicSpline
+                                ? std::array<float, 3>{{values[outBase], values[outBase + 1U],
+                                        values[outBase + 2U]}}
+                                : std::array<float, 3>{};
+                        if (!vectorTrack->addKeyframe(times[key], value, inTangent, outTangent)) {
                             return fail(error, "GLB animation translation or scale key is invalid");
                         }
                     } else {
-                        const SkeletalQuaternion value{values[key * 4U], values[key * 4U + 1U],
-                                values[key * 4U + 2U], values[key * 4U + 3U]};
-                        if (!quaternionTrack->addKeyframe(times[key], value)) {
+                        const SkeletalQuaternion value{values[valueBase], values[valueBase + 1U],
+                                values[valueBase + 2U], values[valueBase + 3U]};
+                        const std::size_t outBase = keyBase + 2U * outputComponents;
+                        const SkeletalQuaternion inTangent = cubicSpline
+                                ? SkeletalQuaternion{values[keyBase], values[keyBase + 1U],
+                                        values[keyBase + 2U], values[keyBase + 3U]}
+                                : SkeletalQuaternion{0.0f, 0.0f, 0.0f, 0.0f};
+                        const SkeletalQuaternion outTangent = cubicSpline
+                                ? SkeletalQuaternion{values[outBase], values[outBase + 1U],
+                                        values[outBase + 2U], values[outBase + 3U]}
+                                : SkeletalQuaternion{0.0f, 0.0f, 0.0f, 0.0f};
+                        if (!quaternionTrack->addKeyframe(times[key], value,
+                                                           inTangent, outTangent)) {
                             return fail(error, "GLB animation quaternion key is invalid");
                         }
                     }

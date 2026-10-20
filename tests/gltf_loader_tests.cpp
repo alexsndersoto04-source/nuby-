@@ -10,6 +10,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -269,6 +270,80 @@ std::string makeSkeletalGlb() {
             "\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}],"
             "\"animations\":[{\"name\":\"walk\",\"samplers\":[{\"input\":5,\"output\":6}],"
             "\"channels\":[{\"sampler\":0,\"target\":{\"node\":1,\"path\":\"translation\"}}]}]}";
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, json);
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
+std::string makeMultipleMeshSkeletalGlb(bool translateSecondMesh = false) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeSkeletalGlb(), json, binary, error)) return {};
+    const std::string singleMesh =
+            R"JSON("meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":2,"WEIGHTS_0":3},"indices":1}]}],)JSON";
+    const std::string twoMeshes =
+            R"JSON("meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":2,"WEIGHTS_0":3},"indices":1}]},{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":2,"WEIGHTS_0":3},"indices":1}]}],)JSON";
+    const std::size_t meshPosition = json.find(singleMesh);
+    if (meshPosition == std::string::npos) return {};
+    json.replace(meshPosition, singleMesh.size(), twoMeshes);
+    const std::string meshNode = R"JSON({"name":"mesh","mesh":0,"skin":0})JSON";
+    const std::string secondMeshNode = translateSecondMesh
+            ? R"JSON({"name":"mesh_accessory","mesh":1,"skin":0,"translation":[1,0,0]})JSON"
+            : R"JSON({"name":"mesh_accessory","mesh":1,"skin":0})JSON";
+    const std::size_t nodePosition = json.find(meshNode);
+    if (nodePosition == std::string::npos) return {};
+    json.replace(nodePosition, meshNode.size(), meshNode + "," + secondMeshNode);
+
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, json);
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
+std::string makeSkeletalGlbWithInterpolation(const std::string& interpolation) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeSkeletalGlb(), json, binary, error)) return {};
+    const std::string sampler = R"JSON("samplers":[{"input":5,"output":6}])JSON";
+    const std::string animatedSampler = "\"samplers\":[{\"input\":5,\"output\":6,\"interpolation\":\""
+            + interpolation + "\"}]";
+    const std::size_t samplerPosition = json.find(sampler);
+    if (samplerPosition == std::string::npos) return {};
+    json.replace(samplerPosition, sampler.size(), animatedSampler);
+    if (interpolation == "CUBICSPLINE") {
+        const auto replaceOnce = [&json](const std::string& from, const std::string& to) {
+            const std::size_t position = json.find(from);
+            if (position == std::string::npos) return false;
+            json.replace(position, from.size(), to);
+            return true;
+        };
+        if (!replaceOnce(R"JSON("byteLength":264)JSON", R"JSON("byteLength":312)JSON")
+                || !replaceOnce(R"JSON("byteOffset":240,"byteLength":24)JSON",
+                                R"JSON("byteOffset":240,"byteLength":72)JSON")
+                || !replaceOnce(R"JSON("bufferView":6,"componentType":5126,"count":2,"type":"VEC3")JSON",
+                                R"JSON("bufferView":6,"componentType":5126,"count":6,"type":"VEC3")JSON")) {
+            return {};
+        }
+        binary.resize(240U);
+        for (float value : {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                            1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                            1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}) {
+            std::uint32_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            appendU32(binary, bits);
+        }
+    }
     std::string data;
     appendU32(data, 0x46546C67U);
     appendU32(data, 2U);
@@ -572,6 +647,52 @@ void testSkeletalGlbImportsJointsBindMatricesAndClips() {
            "mesh skin indices map into the imported skeleton palette");
 }
 
+void testSkeletalGlbImportsMultipleIdentityMeshNodes() {
+    nuby::GltfSkeletalAsset asset;
+    std::string error;
+    expect(nuby::parseGlbSkeletalAsset(makeMultipleMeshSkeletalGlb(), asset, error),
+           "one skin can drive several identity-root mesh nodes");
+    expect(asset.skeleton.size() == 2U && asset.primitives.size() == 2U
+                   && asset.primitives[0].meshIndex == 0U
+                   && asset.primitives[1].meshIndex == 1U
+                   && asset.primitives[0].hasSkinAttributes
+                   && asset.primitives[1].hasSkinAttributes,
+           "each referenced skeletal mesh contributes independently skinned draw parts");
+
+    nuby::GltfSkeletalAsset rejected;
+    rejected.primitives.push_back({});
+    expect(!nuby::parseGlbSkeletalAsset(
+                   makeMultipleMeshSkeletalGlb(true), rejected, error)
+                   && rejected.primitives.empty(),
+           "skinned mesh-node transforms remain rejected transactionally");
+}
+
+void testSkeletalGlbStepAndCubicSplineInterpolation() {
+    for (const auto& testCase : {
+            std::pair<std::string, nuby::SkeletalInterpolation>{
+                    "STEP", nuby::SkeletalInterpolation::Step},
+            std::pair<std::string, nuby::SkeletalInterpolation>{
+                    "CUBICSPLINE", nuby::SkeletalInterpolation::CubicSpline}}) {
+        nuby::GltfSkeletalAsset asset;
+        std::string error;
+        expect(nuby::parseGlbSkeletalAsset(
+                       makeSkeletalGlbWithInterpolation(testCase.first), asset, error),
+               "skeletal GLB accepts STEP and CUBICSPLINE animation channels");
+        if (asset.animations.empty() || asset.skeleton.empty()) continue;
+        const nuby::SkeletalAnimationTrack& rootTrack = asset.animations[0].clip.joints[0];
+        expect(rootTrack.translation.interpolation == testCase.second,
+               "glTF sampler interpolation mode is retained per track");
+        nuby::SkeletalPose pose;
+        expect(nuby::evaluateSkeletalPose(asset.skeleton, asset.animations[0].clip,
+                                          0.5f, pose, error),
+               "non-linear imported clips evaluate through the shared pose core");
+        const float expectedRootX = testCase.first == "STEP" ? 0.0f : 0.625f;
+        expect(pose.jointMatrices.size() == 2U
+                       && std::fabs(pose.jointMatrices[0][12] - expectedRootX) < 1.0e-5f,
+               "STEP holds the left key and cubic Hermite uses authored tangents");
+    }
+}
+
 void testPackagedAlphaMaskFixture() {
     std::ifstream input("app/src/main/assets/engine-tests/alpha_mask_card.glb", std::ios::binary);
     const std::string bytes((std::istreambuf_iterator<char>(input)),
@@ -739,6 +860,8 @@ int main() {
     testGlbMaterialsBindEmbeddedPngTextures();
     testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
+    testSkeletalGlbImportsMultipleIdentityMeshNodes();
+    testSkeletalGlbStepAndCubicSplineInterpolation();
     testPackagedAlphaMaskFixture();
     testPackagedWayfarerAsset();
     testGltfJsonSyntaxAndVersionValidation();

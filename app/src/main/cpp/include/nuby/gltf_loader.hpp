@@ -94,10 +94,10 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
 bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
                          std::string& error);
 
-// Imports a constrained single-mesh-node, single-skin GLB subset, including
-// multiple triangle primitives, parent-first joints, inverse-bind matrices,
-// per-vertex weights, embedded PNG PBR textures and LINEAR TRS animation.
-// Unsupported hierarchy, image formats and interpolation forms are rejected.
+// Imports a constrained single-skin GLB subset with multiple identity-root mesh
+// nodes, parent-first joints, inverse-bind matrices, per-vertex weights, embedded
+// PNG PBR textures and LINEAR, STEP or CUBICSPLINE TRS animation. Mesh-node
+// transforms, intermediary hierarchy nodes and multiple skins are rejected.
 bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                            std::string& error);
 

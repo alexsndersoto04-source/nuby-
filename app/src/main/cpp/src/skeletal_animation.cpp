@@ -132,15 +132,42 @@ std::array<float, 3> sampleVectorTrack(const SkeletalVectorTrack& track,
     const SkeletalVectorKeyframe& left = *(upper - 1);
     const float span = right.timeSeconds - left.timeSeconds;
     if (span <= 0.0f) return right.value;
+    if (track.interpolation == SkeletalInterpolation::Step) return left.value;
     const float amount = (timeSeconds - left.timeSeconds) / span;
-    return {left.value[0] + (right.value[0] - left.value[0]) * amount,
-            left.value[1] + (right.value[1] - left.value[1]) * amount,
-            left.value[2] + (right.value[2] - left.value[2]) * amount};
+    if (track.interpolation != SkeletalInterpolation::CubicSpline) {
+        return {left.value[0] + (right.value[0] - left.value[0]) * amount,
+                left.value[1] + (right.value[1] - left.value[1]) * amount,
+                left.value[2] + (right.value[2] - left.value[2]) * amount};
+    }
+    const float amountSquared = amount * amount;
+    const float amountCubed = amountSquared * amount;
+    const float h00 = 2.0f * amountCubed - 3.0f * amountSquared + 1.0f;
+    const float h10 = amountCubed - 2.0f * amountSquared + amount;
+    const float h01 = -2.0f * amountCubed + 3.0f * amountSquared;
+    const float h11 = amountCubed - amountSquared;
+    std::array<float, 3> value{};
+    for (std::size_t axis = 0; axis < value.size(); ++axis) {
+        value[axis] = h00 * left.value[axis] + h10 * span * left.outTangent[axis]
+                + h01 * right.value[axis] + h11 * span * right.inTangent[axis];
+    }
+    return value;
+}
+
+bool validateInterpolation(SkeletalInterpolation interpolation) {
+    return interpolation == SkeletalInterpolation::Linear
+            || interpolation == SkeletalInterpolation::Step
+            || interpolation == SkeletalInterpolation::CubicSpline;
+}
+
+bool finiteQuaternionComponents(const SkeletalQuaternion& value) {
+    return std::isfinite(value.x) && std::isfinite(value.y)
+            && std::isfinite(value.z) && std::isfinite(value.w);
 }
 
 bool validateVectorTrack(const SkeletalVectorTrack& track, float durationSeconds,
                          std::string& error) {
-    if (track.keyframes.size() > kMaximumTrackKeyframes) {
+    if (!validateInterpolation(track.interpolation)
+            || track.keyframes.size() > kMaximumTrackKeyframes) {
         error = "Skeletal animation vector track exceeds the keyframe limit";
         return false;
     }
@@ -151,7 +178,15 @@ bool validateVectorTrack(const SkeletalVectorTrack& track, float durationSeconds
                 || !finiteVector(keyframe.value)
                 || std::fabs(keyframe.value[0]) > kMaximumAuthoredValue
                 || std::fabs(keyframe.value[1]) > kMaximumAuthoredValue
-                || std::fabs(keyframe.value[2]) > kMaximumAuthoredValue) {
+                || std::fabs(keyframe.value[2]) > kMaximumAuthoredValue
+                || (track.interpolation == SkeletalInterpolation::CubicSpline
+                    && (!finiteVector(keyframe.inTangent) || !finiteVector(keyframe.outTangent)
+                        || std::fabs(keyframe.inTangent[0]) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.inTangent[1]) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.inTangent[2]) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent[0]) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent[1]) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent[2]) > kMaximumAuthoredValue))) {
             error = "Skeletal animation vector track contains invalid keyframes";
             return false;
         }
@@ -163,7 +198,8 @@ bool validateVectorTrack(const SkeletalVectorTrack& track, float durationSeconds
 
 bool validateQuaternionTrack(const SkeletalQuaternionTrack& track, float durationSeconds,
                              std::string& error) {
-    if (track.keyframes.size() > kMaximumTrackKeyframes) {
+    if (!validateInterpolation(track.interpolation)
+            || track.keyframes.size() > kMaximumTrackKeyframes) {
         error = "Skeletal animation quaternion track exceeds the keyframe limit";
         return false;
     }
@@ -171,7 +207,18 @@ bool validateQuaternionTrack(const SkeletalQuaternionTrack& track, float duratio
     bool hasPrevious = false;
     for (const SkeletalQuaternionKeyframe& keyframe : track.keyframes) {
         if (!validTrackTime(keyframe.timeSeconds, durationSeconds, previousTime, hasPrevious)
-                || !validQuaternion(keyframe.value)) {
+                || !validQuaternion(keyframe.value)
+                || (track.interpolation == SkeletalInterpolation::CubicSpline
+                    && (!finiteQuaternionComponents(keyframe.inTangent)
+                        || !finiteQuaternionComponents(keyframe.outTangent)
+                        || std::fabs(keyframe.inTangent.x) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.inTangent.y) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.inTangent.z) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.inTangent.w) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent.x) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent.y) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent.z) > kMaximumAuthoredValue
+                        || std::fabs(keyframe.outTangent.w) > kMaximumAuthoredValue))) {
             error = "Skeletal animation quaternion track contains invalid keyframes";
             return false;
         }
@@ -183,17 +230,22 @@ bool validateQuaternionTrack(const SkeletalQuaternionTrack& track, float duratio
 }  // namespace
 
 bool SkeletalVectorTrack::addKeyframe(float timeSeconds,
-                                      const std::array<float, 3>& value) {
-    if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f || !finiteVector(value)) return false;
+                                      const std::array<float, 3>& value,
+                                      const std::array<float, 3>& inTangent,
+                                      const std::array<float, 3>& outTangent) {
+    if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f || !finiteVector(value)
+            || !finiteVector(inTangent) || !finiteVector(outTangent)) return false;
     const auto position = std::lower_bound(keyframes.begin(), keyframes.end(), timeSeconds,
             [](const SkeletalVectorKeyframe& keyframe, float time) {
                 return keyframe.timeSeconds < time;
             });
     if (position != keyframes.end() && position->timeSeconds == timeSeconds) {
         position->value = value;
+        position->inTangent = inTangent;
+        position->outTangent = outTangent;
     } else {
         if (keyframes.size() >= kMaximumTrackKeyframes) return false;
-        keyframes.insert(position, {timeSeconds, value});
+        keyframes.insert(position, {timeSeconds, value, inTangent, outTangent});
     }
     return true;
 }
@@ -205,8 +257,12 @@ std::array<float, 3> SkeletalVectorTrack::sample(
 }
 
 bool SkeletalQuaternionTrack::addKeyframe(float timeSeconds,
-                                          const SkeletalQuaternion& value) {
-    if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f || !validQuaternion(value)) return false;
+                                          const SkeletalQuaternion& value,
+                                          const SkeletalQuaternion& inTangent,
+                                          const SkeletalQuaternion& outTangent) {
+    if (!std::isfinite(timeSeconds) || timeSeconds < 0.0f || !validQuaternion(value)
+            || !finiteQuaternionComponents(inTangent)
+            || !finiteQuaternionComponents(outTangent)) return false;
     const auto position = std::lower_bound(keyframes.begin(), keyframes.end(), timeSeconds,
             [](const SkeletalQuaternionKeyframe& keyframe, float time) {
                 return keyframe.timeSeconds < time;
@@ -214,9 +270,11 @@ bool SkeletalQuaternionTrack::addKeyframe(float timeSeconds,
     const SkeletalQuaternion normalized = normalizeQuaternion(value);
     if (position != keyframes.end() && position->timeSeconds == timeSeconds) {
         position->value = normalized;
+        position->inTangent = inTangent;
+        position->outTangent = outTangent;
     } else {
         if (keyframes.size() >= kMaximumTrackKeyframes) return false;
-        keyframes.insert(position, {timeSeconds, normalized});
+        keyframes.insert(position, {timeSeconds, normalized, inTangent, outTangent});
     }
     return true;
 }
@@ -240,8 +298,28 @@ SkeletalQuaternion SkeletalQuaternionTrack::sample(
     const SkeletalQuaternionKeyframe& left = *(upper - 1);
     const float span = right.timeSeconds - left.timeSeconds;
     if (span <= 0.0f) return normalizeQuaternion(right.value);
-    return interpolateQuaternion(left.value, right.value,
-                                 (timeSeconds - left.timeSeconds) / span);
+    if (interpolation == SkeletalInterpolation::Step) return normalizeQuaternion(left.value);
+    const float amount = (timeSeconds - left.timeSeconds) / span;
+    if (interpolation == SkeletalInterpolation::CubicSpline) {
+        const float amountSquared = amount * amount;
+        const float amountCubed = amountSquared * amount;
+        const float h00 = 2.0f * amountCubed - 3.0f * amountSquared + 1.0f;
+        const float h10 = amountCubed - 2.0f * amountSquared + amount;
+        const float h01 = -2.0f * amountCubed + 3.0f * amountSquared;
+        const float h11 = amountCubed - amountSquared;
+        const SkeletalQuaternion value{
+            h00 * left.value.x + h10 * span * left.outTangent.x
+                    + h01 * right.value.x + h11 * span * right.inTangent.x,
+            h00 * left.value.y + h10 * span * left.outTangent.y
+                    + h01 * right.value.y + h11 * span * right.inTangent.y,
+            h00 * left.value.z + h10 * span * left.outTangent.z
+                    + h01 * right.value.z + h11 * span * right.inTangent.z,
+            h00 * left.value.w + h10 * span * left.outTangent.w
+                    + h01 * right.value.w + h11 * span * right.inTangent.w};
+        return validQuaternion(value) ? normalizeQuaternion(value)
+                                      : normalizeQuaternion(left.value);
+    }
+    return interpolateQuaternion(left.value, right.value, amount);
 }
 
 bool validateSkeletalAnimation(const std::vector<SkeletalJoint>& skeleton,

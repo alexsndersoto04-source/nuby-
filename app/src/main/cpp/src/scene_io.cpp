@@ -395,8 +395,9 @@ bool validateScene(const Scene& scene, std::uint32_t activeCameraId,
         }
     }
     if (!std::isfinite(sky.sunAngularRadius) || sky.sunAngularRadius < 0.001f
-            || sky.sunAngularRadius > 0.5f) {
-        return fail(error, "Scene sky sun angular radius is invalid");
+            || sky.sunAngularRadius > 0.5f || !std::isfinite(sky.ambientStrength)
+            || sky.ambientStrength < 0.0f || sky.ambientStrength > 5.0f) {
+        return fail(error, "Scene sky lighting settings are invalid");
     }
     const PhysicsSettings& physics = scene.physicsSettings();
     if (!std::isfinite(physics.gravity[0]) || !std::isfinite(physics.gravity[1])
@@ -1054,6 +1055,7 @@ bool SceneSerializer::save(const Scene& scene, std::ostream& output, std::string
     writeFloatArray(output, sky.groundColor);
     writeFloatArray(output, sky.sunColor);
     output << ' ' << sky.sunAngularRadius << '\n';
+    output << "SKY_AMBIENT " << sky.ambientStrength << '\n';
     for (const Entity& entity : scene.entities_) writeEntity(output, entity);
     output << "END_SCENE\n";
     if (!output) return fail(error, "Could not write complete scene data");
@@ -1143,6 +1145,12 @@ bool SceneSerializer::load(Scene& scene, std::istream& input, std::string& error
                 || !readFloatArray(input, sky.sunColor)
                 || !(input >> sky.sunAngularRadius)) {
             return fail(error, "Scene sky settings are invalid");
+        }
+    }
+    if (version >= 26) {
+        if (!readTag(input, "SKY_AMBIENT", error)
+                || !(input >> candidate.sky_.ambientStrength)) {
+            return fail(error, "Scene ambient sky lighting is invalid");
         }
     }
     std::uint32_t maximumId = 0;

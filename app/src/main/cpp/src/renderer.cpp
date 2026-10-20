@@ -387,6 +387,10 @@ uniform int uFogEnabled;
 uniform vec3 uFogColor;
 uniform float uFogStart;
 uniform float uFogEnd;
+uniform float uSkyAmbientStrength;
+uniform vec3 uSkyZenithColor;
+uniform vec3 uSkyHorizonColor;
+uniform vec3 uSkyGroundColor;
 uniform vec3 uDirectionalLightColor;
 uniform float uDirectionalLightIntensity;
 uniform float uShadowStrength;
@@ -637,6 +641,13 @@ void main() {
     }
 
     vec3 ambientLight = max(evaluateAmbientSH(normal), vec3(0.0));
+    float upwardWeight = max(normal.y, 0.0);
+    float downwardWeight = max(-normal.y, 0.0);
+    float horizonWeight = max(1.0 - abs(normal.y), 0.0);
+    vec3 skyAmbient = uSkyZenithColor * upwardWeight
+            + uSkyGroundColor * downwardWeight
+            + uSkyHorizonColor * horizonWeight;
+    ambientLight += skyAmbient * max(uSkyAmbientStrength, 0.0);
     vec3 ambient = baseColor * ambientLight * occlusion * (1.0 - metallic * 0.55);
     vec3 emission = uEmission;
     if (uHasEmissiveTexture != 0) {
@@ -646,7 +657,7 @@ void main() {
     }
     vec3 color = ambient + directLight + emission;
     if (uFogEnabled != 0) {
-        float viewDistance = length(uCameraPosition - vWorldPosition);
+        float viewDistance = vViewDepth;
         float fogAmount = clamp((viewDistance - uFogStart)
                 / max(uFogEnd - uFogStart, 0.001), 0.0, 1.0);
         color = mix(color, uFogColor, fogAmount);
@@ -705,6 +716,10 @@ uniform int uFogEnabled;
 uniform vec3 uFogColor;
 uniform float uFogStart;
 uniform float uFogEnd;
+uniform float uSkyAmbientStrength;
+uniform vec3 uSkyZenithColor;
+uniform vec3 uSkyHorizonColor;
+uniform vec3 uSkyGroundColor;
 uniform vec3 uColor;
 uniform vec3 uEmission;
 uniform vec3 uLightDirection;
@@ -731,8 +746,15 @@ void main() {
     vec3 normal = normalize(vFallbackNormal);
     vec3 lightDirection = normalize(-uLightDirection);
     float diffuse = max(dot(normal, lightDirection), 0.0);
+    float upwardWeight = max(normal.y, 0.0);
+    float downwardWeight = max(-normal.y, 0.0);
+    float horizonWeight = max(1.0 - abs(normal.y), 0.0);
+    vec3 skyAmbient = uSkyZenithColor * upwardWeight
+            + uSkyGroundColor * downwardWeight
+            + uSkyHorizonColor * horizonWeight;
     vec3 lighting = vec3(0.28) + 0.72 * diffuse * uDirectionalLightColor
-            * max(uDirectionalLightIntensity, 0.0);
+            * max(uDirectionalLightIntensity, 0.0)
+            + skyAmbient * max(uSkyAmbientStrength, 0.0);
     vec3 color = uColor * lighting + uEmission;
     if (uFogEnabled != 0) {
         float viewDistance = length(uCameraPosition - vFallbackWorldPosition);
@@ -3410,6 +3432,10 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.fogColor = glGetUniformLocation(program_, "uFogColor");
     uniforms_.fogStart = glGetUniformLocation(program_, "uFogStart");
     uniforms_.fogEnd = glGetUniformLocation(program_, "uFogEnd");
+    uniforms_.skyAmbientStrength = glGetUniformLocation(program_, "uSkyAmbientStrength");
+    uniforms_.skyZenithColor = glGetUniformLocation(program_, "uSkyZenithColor");
+    uniforms_.skyHorizonColor = glGetUniformLocation(program_, "uSkyHorizonColor");
+    uniforms_.skyGroundColor = glGetUniformLocation(program_, "uSkyGroundColor");
     uniforms_.view = glGetUniformLocation(program_, "uView");
     uniforms_.lightViewProjection = {{
             glGetUniformLocation(program_, "uLightViewProjection0"),
@@ -3570,6 +3596,11 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform3fv(uniforms_.fogColor, 1, frameAtmosphere_.fogColor.data());
     glUniform1f(uniforms_.fogStart, frameAtmosphere_.fogStart);
     glUniform1f(uniforms_.fogEnd, frameAtmosphere_.fogEnd);
+    glUniform1f(uniforms_.skyAmbientStrength,
+                frameSky_.enabled ? frameSky_.ambientStrength : 0.0f);
+    glUniform3fv(uniforms_.skyZenithColor, 1, frameSky_.zenithColor.data());
+    glUniform3fv(uniforms_.skyHorizonColor, 1, frameSky_.horizonColor.data());
+    glUniform3fv(uniforms_.skyGroundColor, 1, frameSky_.groundColor.data());
     glUniform1i(uniforms_.shadowMap, 0);
     glUniform1i(uniforms_.shadowsEnabled,
                 shadowsAvailable_ && shadowCascadesValid_ ? 1 : 0);
@@ -3754,6 +3785,8 @@ void Renderer::render(float deltaSeconds) {
     }
     frameSky_.sunAngularRadius = std::isfinite(frameSky_.sunAngularRadius)
             ? std::clamp(frameSky_.sunAngularRadius, 0.001f, 0.5f) : 0.018f;
+    frameSky_.ambientStrength = std::isfinite(frameSky_.ambientStrength)
+            ? std::clamp(frameSky_.ambientStrength, 0.0f, 5.0f) : 0.0f;
     const auto& ambientCoefficients = frameScene.ambientLighting().sphericalHarmonics;
     const auto& defaultAmbient = AmbientLighting{}.sphericalHarmonics;
     for (std::size_t index = 0; index < ambientSphericalHarmonics_.size(); ++index) {

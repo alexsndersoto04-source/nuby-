@@ -292,7 +292,8 @@ void testAdventureStreamsAcrossNineCellsWithBoundedResidency() {
                    && std::fabs(scene.atmosphere().fogStart - 14.0f) < 1.0e-5f
                    && std::fabs(scene.atmosphere().fogEnd - 42.0f) < 1.0e-5f
                    && scene.sky().enabled
-                   && std::fabs(scene.sky().sunAngularRadius - 0.018f) < 1.0e-5f,
+                   && std::fabs(scene.sky().sunAngularRadius - 0.018f) < 1.0e-5f
+                   && std::fabs(scene.sky().ambientStrength - 0.7f) < 1.0e-5f,
            "adventure uses authored horizon fog and a procedural day sky without extra assets");
 
     const std::uint32_t playerId = game.playerId();
