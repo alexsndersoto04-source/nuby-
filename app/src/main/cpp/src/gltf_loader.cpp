@@ -798,13 +798,12 @@ bool parseTextureInfo(const JsonValue* info,
                 || (scale != nullptr && !jsonFloatArray(scale, binding.uvScale))) {
             return fail(error, "KHR_texture_transform offset and scale must contain two finite values");
         }
-        float rotation = 0.0f;
         std::uint32_t transformTexCoord = texCoord;
-        if (!optionalFloat(*transform, "rotation", 0.0f, rotation)
-                || rotation != 0.0f
+        if (!optionalFloat(*transform, "rotation", 0.0f, binding.uvRotation)
+                || std::fabs(binding.uvRotation) > 10000.0f
                 || !optionalUnsigned(*transform, "texCoord", texCoord, transformTexCoord)
                 || transformTexCoord != 0U) {
-            return fail(error, "KHR_texture_transform supports TEXCOORD_0 without rotation only");
+            return fail(error, "KHR_texture_transform rotation is invalid or selects an unsupported UV set");
         }
     }
     return true;

@@ -94,7 +94,8 @@ bool validTextureMapTransform(const TextureMapTransform& transform) {
     for (float offset : transform.uvOffset) {
         if (!std::isfinite(offset) || std::fabs(offset) > 10000.0f) return false;
     }
-    return true;
+    return std::isfinite(transform.uvRotation)
+            && std::fabs(transform.uvRotation) <= 10000.0f;
 }
 
 bool validTextureMapValueRange(const TextureMapValueRange& valueRange) {
@@ -114,10 +115,11 @@ void writeTextureMapValueRange(std::ostream& output,
 }
 
 bool readTextureMapTransform(std::istream& input, TextureMapTransform& transform,
-                             bool hasSamplerSettings) {
-    return readFloatArray(input, transform.uvScale)
-            && readFloatArray(input, transform.uvOffset)
-            && validTextureMapTransform(transform)
+                             bool hasSamplerSettings, bool hasRotation = false) {
+    if (!readFloatArray(input, transform.uvScale)
+            || !readFloatArray(input, transform.uvOffset)) return false;
+    if (hasRotation && !(input >> transform.uvRotation)) return false;
+    return validTextureMapTransform(transform)
             && (!hasSamplerSettings || readBool(input, transform.clampToEdge));
 }
 
@@ -125,7 +127,8 @@ void writeTextureMapTransform(std::ostream& output,
                               const TextureMapTransform& transform) {
     writeFloatArray(output, transform.uvScale);
     writeFloatArray(output, transform.uvOffset);
-    output << ' ' << (transform.clampToEdge ? 1 : 0);
+    output << ' ' << transform.uvRotation
+           << ' ' << (transform.clampToEdge ? 1 : 0);
 }
 
 bool validTrack(const Vector3Track& track) {
@@ -736,23 +739,23 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
     if (version >= 7
             && (!readTag(input, "MATERIAL_MAP_UV", error)
                 || !readTextureMapTransform(input, entity.material.albedoMapTransform,
-                        version >= 8)
+                        version >= 8, version >= 27)
                 || !readTextureMapTransform(input, entity.material.normalMapTransform,
-                        version >= 8)
+                        version >= 8, version >= 27)
                 || !readTextureMapTransform(input,
-                        entity.material.metallicRoughnessMapTransform, version >= 8)
+                        entity.material.metallicRoughnessMapTransform, version >= 8, version >= 27)
                 || !readTextureMapTransform(input, entity.material.metallicMapTransform,
-                        version >= 8)
+                        version >= 8, version >= 27)
                 || !readTextureMapTransform(input, entity.material.roughnessMapTransform,
-                        version >= 8)
+                        version >= 8, version >= 27)
                 || !readTextureMapTransform(input, entity.material.occlusionMapTransform,
-                        version >= 8)
+                        version >= 8, version >= 27)
                 || (version >= 10
                     && !readTextureMapTransform(input,
-                            entity.material.opacityMapTransform, true))
+                            entity.material.opacityMapTransform, true, version >= 27))
                 || (version >= 12
                     && !readTextureMapTransform(input,
-                            entity.material.emissiveMapTransform, true)))) {
+                            entity.material.emissiveMapTransform, true, version >= 27)))) {
         return fail(error, "Material UV transform or sampler settings are invalid");
     }
     if (version >= 10) {

@@ -149,6 +149,10 @@ void hashValue(std::size_t& seed, const T& value) {
     combineHash(seed, std::hash<T>{}(value));
 }
 
+std::array<float, 2> textureRotationPair(float radians) {
+    return {std::cos(radians), std::sin(radians)};
+}
+
 std::size_t materialBatchHash(const Material& material) {
     std::size_t hash = 0;
     for (float value : material.color) hashValue(hash, value);
@@ -172,6 +176,7 @@ std::size_t materialBatchHash(const Material& material) {
     for (const TextureMapTransform* transform : transforms) {
         for (float value : transform->uvScale) hashValue(hash, value);
         for (float value : transform->uvOffset) hashValue(hash, value);
+        hashValue(hash, transform->uvRotation);
         hashValue(hash, transform->clampToEdge);
     }
     const std::array<const TextureMapValueRange*, 8> ranges{{
@@ -191,7 +196,7 @@ bool sameMaterial(const Material& left, const Material& right) {
     const auto sameTransform = [](const TextureMapTransform& a,
                                   const TextureMapTransform& b) {
         return a.uvScale == b.uvScale && a.uvOffset == b.uvOffset
-                && a.clampToEdge == b.clampToEdge;
+                && a.uvRotation == b.uvRotation && a.clampToEdge == b.clampToEdge;
     };
     const auto sameRange = [](const TextureMapValueRange& a,
                               const TextureMapValueRange& b) {
@@ -350,20 +355,28 @@ uniform sampler2D uOpacityTexture;
 uniform sampler2D uEmissiveTexture;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
+uniform vec2 uAlbedoUvRotation;
 uniform vec2 uNormalUvScale;
 uniform vec2 uNormalUvOffset;
+uniform vec2 uNormalUvRotation;
 uniform vec2 uMetallicRoughnessUvScale;
 uniform vec2 uMetallicRoughnessUvOffset;
+uniform vec2 uMetallicRoughnessUvRotation;
 uniform vec2 uMetallicUvScale;
 uniform vec2 uMetallicUvOffset;
+uniform vec2 uMetallicUvRotation;
 uniform vec2 uRoughnessUvScale;
 uniform vec2 uRoughnessUvOffset;
+uniform vec2 uRoughnessUvRotation;
 uniform vec2 uOcclusionUvScale;
 uniform vec2 uOcclusionUvOffset;
+uniform vec2 uOcclusionUvRotation;
 uniform vec2 uOpacityUvScale;
 uniform vec2 uOpacityUvOffset;
+uniform vec2 uOpacityUvRotation;
 uniform vec2 uEmissiveUvScale;
 uniform vec2 uEmissiveUvOffset;
+uniform vec2 uEmissiveUvRotation;
 uniform int uOpacityMapChannel;
 uniform vec2 uAlbedoMapBaseGain;
 uniform vec2 uNormalMapBaseGain;
@@ -520,10 +533,16 @@ vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
             * radiance * normalLight;
 }
 
+vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
+    vec2 scaled = uv * scale;
+    return vec2(rotation.x * scaled.x - rotation.y * scaled.y,
+                rotation.y * scaled.x + rotation.x * scaled.y) + offset;
+}
+
 void main() {
     vec3 normal = normalize(vWorldNormal);
     vec3 lightDirection = normalize(-uLightDirection);
-    vec2 opacityUv = vUv * uOpacityUvScale + uOpacityUvOffset;
+    vec2 opacityUv = transformUv(vUv, uOpacityUvScale, uOpacityUvOffset, uOpacityUvRotation);
     float opacity = clamp(uOpacity, 0.0, 1.0);
     if (uHasOpacityTexture != 0) {
         vec4 opacitySample = texture(uOpacityTexture, opacityUv);
@@ -537,7 +556,7 @@ void main() {
         opacity *= adjustTextureValue(mapOpacity, uOpacityMapBaseGain);
     }
 
-    vec2 albedoUv = vUv * uAlbedoUvScale + uAlbedoUvOffset;
+    vec2 albedoUv = transformUv(vUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation);
     vec4 albedoSample = vec4(1.0);
     if (uHasAlbedoTexture != 0) albedoSample = texture(uAlbedoTexture, albedoUv);
     if (uAlphaMaskEnabled != 0) {
@@ -561,13 +580,13 @@ void main() {
     }
 
     vec3 baseColor = uColor;
-    vec2 normalUv = vUv * uNormalUvScale + uNormalUvOffset;
-    vec2 metallicRoughnessUv = vUv * uMetallicRoughnessUvScale
-                             + uMetallicRoughnessUvOffset;
-    vec2 metallicUv = vUv * uMetallicUvScale + uMetallicUvOffset;
-    vec2 roughnessUv = vUv * uRoughnessUvScale + uRoughnessUvOffset;
-    vec2 occlusionUv = vUv * uOcclusionUvScale + uOcclusionUvOffset;
-    vec2 emissiveUv = vUv * uEmissiveUvScale + uEmissiveUvOffset;
+    vec2 normalUv = transformUv(vUv, uNormalUvScale, uNormalUvOffset, uNormalUvRotation);
+    vec2 metallicRoughnessUv = transformUv(vUv, uMetallicRoughnessUvScale,
+                                       uMetallicRoughnessUvOffset, uMetallicRoughnessUvRotation);
+    vec2 metallicUv = transformUv(vUv, uMetallicUvScale, uMetallicUvOffset, uMetallicUvRotation);
+    vec2 roughnessUv = transformUv(vUv, uRoughnessUvScale, uRoughnessUvOffset, uRoughnessUvRotation);
+    vec2 occlusionUv = transformUv(vUv, uOcclusionUvScale, uOcclusionUvOffset, uOcclusionUvRotation);
+    vec2 emissiveUv = transformUv(vUv, uEmissiveUvScale, uEmissiveUvOffset, uEmissiveUvRotation);
     if (uHasAlbedoTexture != 0) {
         baseColor *= srgbToLinear(adjustTextureValues(
                 albedoSample.rgb, uAlbedoMapBaseGain));
@@ -732,13 +751,20 @@ uniform sampler2D uAlbedoTexture;
 uniform int uHasAlbedoTexture;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
+uniform vec2 uAlbedoUvRotation;
 out vec4 fragmentColor;
+vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
+    vec2 scaled = uv * scale;
+    return vec2(rotation.x * scaled.x - rotation.y * scaled.y,
+                rotation.y * scaled.x + rotation.x * scaled.y) + offset;
+}
+
 void main() {
     float opacity = clamp(uOpacity, 0.0, 1.0);
     if (uAlphaMaskEnabled != 0) {
         if (uHasAlbedoTexture != 0) {
             opacity *= texture(uAlbedoTexture,
-                    vFallbackUv * uAlbedoUvScale + uAlbedoUvOffset).a;
+                    transformUv(vFallbackUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation)).a;
         }
         if (opacity < uAlphaCutoff) discard;
         opacity = 1.0;
@@ -807,12 +833,19 @@ uniform float uAlphaCutoff;
 uniform float uBaseColorAlpha;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
+uniform vec2 uAlbedoUvRotation;
+vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
+    vec2 scaled = uv * scale;
+    return vec2(rotation.x * scaled.x - rotation.y * scaled.y,
+                rotation.y * scaled.x + rotation.x * scaled.y) + offset;
+}
+
 void main() {
     if (uAlphaMaskEnabled != 0) {
         float alpha = uBaseColorAlpha;
         if (uHasAlbedoTexture != 0) {
             alpha *= texture(uAlbedoTexture,
-                    vShadowUv * uAlbedoUvScale + uAlbedoUvOffset).a;
+                    transformUv(vShadowUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation)).a;
         }
         if (alpha < uAlphaCutoff) discard;
     }
@@ -1595,6 +1628,7 @@ void Renderer::processPendingGpuUpload() {
                                                      TextureMapTransform& transform) {
                     transform.uvScale = binding.uvScale;
                     transform.uvOffset = binding.uvOffset;
+                    transform.uvRotation = binding.uvRotation;
                     transform.clampToEdge = binding.clampToEdge;
                     return texturePath(binding.imageIndex);
                 };
@@ -2634,6 +2668,7 @@ void Renderer::initializeShadowMap() {
     shadowProgramHasAlbedoTexture_ = glGetUniformLocation(shadowProgram_, "uHasAlbedoTexture");
     shadowProgramAlbedoUvScale_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvScale");
     shadowProgramAlbedoUvOffset_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvOffset");
+    shadowProgramAlbedoUvRotation_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvRotation");
     const GLuint paletteBlock = glGetUniformBlockIndex(shadowProgram_, "SkinPalette");
     if (paletteBlock != GL_INVALID_INDEX) {
         glUniformBlockBinding(shadowProgram_, paletteBlock, kSkinPaletteBindingPoint);
@@ -2820,6 +2855,9 @@ void Renderer::renderShadowMaps() {
                     ? shadowMaterial->albedoMapTransform : defaultTransform;
             glUniform2fv(shadowProgramAlbedoUvScale_, 1, albedoTransform.uvScale.data());
             glUniform2fv(shadowProgramAlbedoUvOffset_, 1, albedoTransform.uvOffset.data());
+            const std::array<float, 2> shadowUvRotation =
+                    textureRotationPair(albedoTransform.uvRotation);
+            glUniform2fv(shadowProgramAlbedoUvRotation_, 1, shadowUvRotation.data());
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, shadowAlbedoTexture);
             const GLuint shadowSampler = shadowMaterial != nullptr
@@ -3390,6 +3428,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.emissiveTexture = glGetUniformLocation(program_, "uEmissiveTexture");
     uniforms_.opacityUvScale = glGetUniformLocation(program_, "uOpacityUvScale");
     uniforms_.opacityUvOffset = glGetUniformLocation(program_, "uOpacityUvOffset");
+    uniforms_.opacityUvRotation = glGetUniformLocation(program_, "uOpacityUvRotation");
     uniforms_.emissiveUvScale = glGetUniformLocation(program_, "uEmissiveUvScale");
     uniforms_.emissiveUvOffset = glGetUniformLocation(program_, "uEmissiveUvOffset");
     uniforms_.opacityMapChannel = glGetUniformLocation(program_, "uOpacityMapChannel");
@@ -3418,9 +3457,14 @@ void Renderer::initialize(AAssetManager* assetManager) {
             "uAlbedoUvOffset", "uNormalUvOffset", "uMetallicRoughnessUvOffset",
             "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset",
             "uEmissiveUvOffset"}};
+    const std::array<const char*, 7> uvRotationNames{{
+            "uAlbedoUvRotation", "uNormalUvRotation", "uMetallicRoughnessUvRotation",
+            "uMetallicUvRotation", "uRoughnessUvRotation", "uOcclusionUvRotation",
+            "uEmissiveUvRotation"}};
     for (std::size_t map = 0; map < uniforms_.textureUvScale.size(); ++map) {
         uniforms_.textureUvScale[map] = glGetUniformLocation(program_, uvScaleNames[map]);
         uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
+        uniforms_.textureUvRotation[map] = glGetUniformLocation(program_, uvRotationNames[map]);
     }
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
@@ -3555,6 +3599,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                  material.opacityMapTransform.uvScale.data());
     glUniform2fv(uniforms_.opacityUvOffset, 1,
                  material.opacityMapTransform.uvOffset.data());
+    const std::array<float, 2> opacityUvRotation =
+            textureRotationPair(material.opacityMapTransform.uvRotation);
+    glUniform2fv(uniforms_.opacityUvRotation, 1, opacityUvRotation.data());
     const std::array<const TextureMapTransform*, 7> mapTransforms{{
             &material.albedoMapTransform,
             &material.normalMapTransform,
@@ -3569,6 +3616,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                      mapTransforms[map]->uvScale.data());
         glUniform2fv(uniforms_.textureUvOffset[map], 1,
                      mapTransforms[map]->uvOffset.data());
+        const std::array<float, 2> uvRotation =
+                textureRotationPair(mapTransforms[map]->uvRotation);
+        glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
     }
     const std::array<const TextureMapValueRange*, 8> mapValueRanges{{
             &material.albedoMapValueRange,

@@ -72,7 +72,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 26") {
+        if (line == "NUBY_SCENE 27") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("SKY_AMBIENT ", 0) == 0 && targetVersion < 26) {
             continue;
@@ -124,22 +124,15 @@ std::string downgradeTextureSchema(const std::string& encoded,
             std::string field;
             while (mapRecord >> field) fields.push_back(field);
             legacy << tag;
-            if (targetVersion == 7) {
-                for (std::size_t map = 0; map < 6; ++map) {
-                    for (std::size_t component = 0; component < 4; ++component) {
-                        legacy << ' ' << fields[map * 5 + component];
-                    }
+            const std::size_t mapsToKeep = targetVersion == 7 ? 6U
+                    : targetVersion < 10 ? 6U : targetVersion < 12 ? 7U : 8U;
+            const bool keepSamplerSettings = targetVersion >= 8;
+            for (std::size_t map = 0; map < mapsToKeep; ++map) {
+                const std::size_t base = map * 6U;
+                for (std::size_t component = 0; component < 4U; ++component) {
+                    legacy << ' ' << fields[base + component];
                 }
-            } else if (targetVersion < 10) {
-                for (std::size_t value = 0; value < 30; ++value) {
-                    legacy << ' ' << fields[value];
-                }
-            } else if (targetVersion < 12) {
-                for (std::size_t value = 0; value < 35; ++value) {
-                    legacy << ' ' << fields[value];
-                }
-            } else {
-                legacy << line.substr(tag.size());
+                if (keepSamplerSettings) legacy << ' ' << fields[base + 5U];
             }
             legacy << '\n';
         } else if (line.rfind("RIGIDBODY ", 0) == 0 && targetVersion < 13) {
@@ -298,6 +291,7 @@ nuby::Scene makeScene() {
     mesh.boxCollider.collisionMask = 0x00000006U;
     mesh.material.opacityMapTransform.uvScale = {0.7f, 0.8f};
     mesh.material.opacityMapTransform.uvOffset = {0.12f, -0.08f};
+    mesh.material.opacityMapTransform.uvRotation = -0.35f;
     mesh.material.opacityMapTransform.clampToEdge = true;
     mesh.material.emissiveMapTransform.uvScale = {1.25f, 0.75f};
     mesh.material.emissiveMapTransform.uvOffset = {-0.2f, 0.15f};
@@ -312,6 +306,7 @@ nuby::Scene makeScene() {
     mesh.material.emissiveMapValueRange = {0.08f, 1.25f};
     mesh.material.albedoMapTransform.uvScale = {0.5f, 0.75f};
     mesh.material.albedoMapTransform.uvOffset = {0.1f, 0.2f};
+    mesh.material.albedoMapTransform.uvRotation = 0.6f;
     mesh.material.albedoMapTransform.clampToEdge = true;
     mesh.material.normalMapTransform.uvScale = {2.0f, 1.5f};
     mesh.material.normalMapTransform.uvOffset = {-0.25f, 0.35f};
@@ -524,6 +519,7 @@ void testRoundTripAllSceneData() {
         expect(near(mesh->material.albedoMapTransform.uvScale[0], 0.5f)
                        && near(mesh->material.albedoMapTransform.uvScale[1], 0.75f)
                        && near(mesh->material.albedoMapTransform.uvOffset[0], 0.1f)
+                       && near(mesh->material.albedoMapTransform.uvRotation, 0.6f)
                        && near(mesh->material.normalMapTransform.uvScale[0], 2.0f)
                        && near(mesh->material.normalMapTransform.uvOffset[0], -0.25f)
                        && near(mesh->material.roughnessMapTransform.uvScale[1], 0.9f)
@@ -531,6 +527,7 @@ void testRoundTripAllSceneData() {
                        && !mesh->material.normalMapTransform.clampToEdge
                        && near(mesh->material.opacityMapTransform.uvScale[0], 0.7f)
                        && near(mesh->material.opacityMapTransform.uvOffset[1], -0.08f)
+                       && near(mesh->material.opacityMapTransform.uvRotation, -0.35f)
                        && mesh->material.opacityMapTransform.clampToEdge
                        && near(mesh->material.emissiveMapTransform.uvScale[0], 1.25f)
                        && near(mesh->material.emissiveMapTransform.uvOffset[1], 0.15f)
@@ -759,6 +756,16 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid sky-ambient lighting cannot partially replace the target scene");
 
+    std::string invalidTextureRotation = valid.str();
+    expect(replaceRecordField(invalidTextureRotation, "MATERIAL_MAP_UV", 5,
+                              "10001", 1),
+           "v27 material UV records store bounded texture rotations");
+    std::stringstream malformedTextureRotation(invalidTextureRotation);
+    expect(!nuby::SceneSerializer::load(target, malformedTextureRotation, error),
+           "out-of-range material UV rotations are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid UV rotations cannot partially replace a scene");
+
     std::string invalidSkeletalPlayback = valid.str();
     expect(replaceRecordField(invalidSkeletalPlayback, "SKELETAL_PLAYER", 6, "0", 1),
            "v17 scene stores skeletal playback duration");
@@ -813,6 +820,15 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV26(downgradeTextureSchema(valid.str(), 26, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV26, error),
+           "version-twenty-six scenes remain readable before per-map UV rotation");
+    const nuby::Entity* legacyV26Mesh = target.find(2);
+    expect(legacyV26Mesh != nullptr
+                   && near(legacyV26Mesh->material.albedoMapTransform.uvRotation, 0.0f)
+                   && near(legacyV26Mesh->material.opacityMapTransform.uvRotation, 0.0f),
+           "version-twenty-six texture transforms receive zero-rotation defaults");
 
     std::stringstream legacyV25(downgradeTextureSchema(valid.str(), 25, 8));
     expect(nuby::SceneSerializer::load(target, legacyV25, error),

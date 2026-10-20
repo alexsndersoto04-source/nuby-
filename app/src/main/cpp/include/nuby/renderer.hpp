@@ -258,8 +258,10 @@ private:
         GLint emissiveUvOffset = -1;
         GLint opacityUvScale = -1;
         GLint opacityUvOffset = -1;
+        GLint opacityUvRotation = -1;
         std::array<GLint, 7> textureUvScale{};
         std::array<GLint, 7> textureUvOffset{};
+        std::array<GLint, 7> textureUvRotation{};
         std::array<GLint, 8> textureMapValueRange{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
@@ -406,6 +408,7 @@ private:
     GLint shadowProgramHasAlbedoTexture_ = -1;
     GLint shadowProgramAlbedoUvScale_ = -1;
     GLint shadowProgramAlbedoUvOffset_ = -1;
+    GLint shadowProgramAlbedoUvRotation_ = -1;
     static constexpr int kMaximumGpuJoints = 64;
     static constexpr GLuint kSkinPaletteBindingPoint = 0;
     static constexpr int kShadowMapSize = 512;

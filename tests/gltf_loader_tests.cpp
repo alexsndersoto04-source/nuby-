@@ -538,10 +538,17 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("alphaMode":"MASK","alphaCutoff":1.1)JSON"),
                    primitives, error),
            "out-of-range alpha cutoffs are rejected");
-    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+    expect(nuby::parseGlbMeshes(makeTexturedTriangleGlb(
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"rotation":0.5}}}})JSON"),
+                   primitives, error)
+                   && primitives.size() == 1U
+                   && std::fabs(primitives[0].material.baseColorTexture.uvRotation - 0.5f)
+                            < 1.0e-6f,
+           "KHR_texture_transform preserves rotation in radians");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"rotation":10001}}}})JSON"),
                    primitives, error),
-           "rotated KHR_texture_transform is rejected rather than approximated");
+           "extreme texture-transform rotations are rejected before rendering");
     expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"texCoord":1}}}})JSON"),
                    primitives, error),
@@ -574,7 +581,7 @@ void testGlbAlphaMaskMaterials() {
 }
 
 void testGlbMaterialsBindEmbeddedPngTextures() {
-    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.8,0.7,0.6,0.5],"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.25,0.5],"scale":[2,3]}}},"metallicRoughnessTexture":{"index":0},"metallicFactor":0.3,"roughnessFactor":0.4},"normalTexture":{"index":0},"occlusionTexture":{"index":0,"strength":0.45},"emissiveTexture":{"index":0},"emissiveFactor":[0.1,0.2,0.3],"alphaMode":"BLEND")JSON";
+    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.8,0.7,0.6,0.5],"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.25,0.5],"scale":[2,3],"rotation":0.5}}},"metallicRoughnessTexture":{"index":0},"metallicFactor":0.3,"roughnessFactor":0.4},"normalTexture":{"index":0},"occlusionTexture":{"index":0,"strength":0.45},"emissiveTexture":{"index":0},"emissiveFactor":[0.1,0.2,0.3],"alphaMode":"BLEND")JSON";
     const std::string glb = makeTexturedTriangleGlb(material);
     std::vector<nuby::GltfPrimitive> primitives;
     std::string error;
@@ -591,8 +598,10 @@ void testGlbMaterialsBindEmbeddedPngTextures() {
                    && std::fabs(primitives[0].material.baseColorTexture.uvOffset[0] - 0.25f) < 1.0e-6f
                    && std::fabs(primitives[0].material.baseColorTexture.uvOffset[1] - 0.5f) < 1.0e-6f
                    && std::fabs(primitives[0].material.baseColorTexture.uvScale[0] - 2.0f) < 1.0e-6f
-                   && std::fabs(primitives[0].material.baseColorTexture.uvScale[1] - 3.0f) < 1.0e-6f,
-           "all supported glTF PBR texture references and blend factors are retained");
+                   && std::fabs(primitives[0].material.baseColorTexture.uvScale[1] - 3.0f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.baseColorTexture.uvRotation - 0.5f)
+                            < 1.0e-6f,
+           "all supported glTF PBR texture references, transforms and blend factors are retained");
 
     nuby::GltfStaticAsset asset;
     expect(nuby::parseGlbStaticAsset(glb, asset, error)
@@ -600,7 +609,9 @@ void testGlbMaterialsBindEmbeddedPngTextures() {
                    && asset.images[0].bytes.size() == 73U
                    && asset.primitives.size() == 1U
                    && std::fabs(asset.primitives[0].material.baseColorTexture.uvScale[0] - 2.0f) < 1.0e-6f
-                   && std::fabs(asset.primitives[0].material.baseColorTexture.uvOffset[1] - 0.5f) < 1.0e-6f,
+                   && std::fabs(asset.primitives[0].material.baseColorTexture.uvOffset[1] - 0.5f) < 1.0e-6f
+                   && std::fabs(asset.primitives[0].material.baseColorTexture.uvRotation - 0.5f)
+                            < 1.0e-6f,
            "static GLB asset exposes embedded PNG bytes and resolved texture transforms");
     if (asset.images.size() == 1U) {
         nuby::ImageRgba8 decoded;
