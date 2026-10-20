@@ -347,6 +347,57 @@ bool validateScene(const Scene& scene, std::uint32_t activeCameraId,
             return fail(error, "Scene ambient-light coefficients are invalid");
         }
     }
+    const DirectionalLighting& directional = scene.directionalLighting();
+    const float directionLengthSquared = directional.direction[0] * directional.direction[0]
+            + directional.direction[1] * directional.direction[1]
+            + directional.direction[2] * directional.direction[2];
+    if (!std::isfinite(directionLengthSquared) || directionLengthSquared < 1.0e-8f
+            || directionLengthSquared > 1.0e8f
+            || !std::isfinite(directional.color[0]) || directional.color[0] < 0.0f
+            || directional.color[0] > 1.0f || !std::isfinite(directional.color[1])
+            || directional.color[1] < 0.0f || directional.color[1] > 1.0f
+            || !std::isfinite(directional.color[2]) || directional.color[2] < 0.0f
+            || directional.color[2] > 1.0f || !std::isfinite(directional.intensity)
+            || directional.intensity < 0.0f || directional.intensity > 100.0f
+            || !std::isfinite(directional.shadowStrength)
+            || directional.shadowStrength < 0.0f || directional.shadowStrength > 1.0f) {
+        return fail(error, "Scene directional-light settings are invalid");
+    }
+    const AtmosphereSettings& atmosphere = scene.atmosphere();
+    if (!std::isfinite(atmosphere.fogColor[0]) || atmosphere.fogColor[0] < 0.0f
+            || atmosphere.fogColor[0] > 1.0f || !std::isfinite(atmosphere.fogColor[1])
+            || atmosphere.fogColor[1] < 0.0f || atmosphere.fogColor[1] > 1.0f
+            || !std::isfinite(atmosphere.fogColor[2]) || atmosphere.fogColor[2] < 0.0f
+            || atmosphere.fogColor[2] > 1.0f || !std::isfinite(atmosphere.fogStart)
+            || !std::isfinite(atmosphere.fogEnd) || atmosphere.fogStart < 0.0f
+            || atmosphere.fogEnd <= atmosphere.fogStart || atmosphere.fogEnd > 100000.0f) {
+        return fail(error, "Scene atmosphere settings are invalid");
+    }
+    const SkySettings& sky = scene.sky();
+    for (const float component : sky.zenithColor) {
+        if (!std::isfinite(component) || component < 0.0f || component > 1.0f) {
+            return fail(error, "Scene sky colors are invalid");
+        }
+    }
+    for (const float component : sky.horizonColor) {
+        if (!std::isfinite(component) || component < 0.0f || component > 1.0f) {
+            return fail(error, "Scene sky colors are invalid");
+        }
+    }
+    for (const float component : sky.groundColor) {
+        if (!std::isfinite(component) || component < 0.0f || component > 1.0f) {
+            return fail(error, "Scene sky colors are invalid");
+        }
+    }
+    for (const float component : sky.sunColor) {
+        if (!std::isfinite(component) || component < 0.0f || component > 1.0f) {
+            return fail(error, "Scene sky colors are invalid");
+        }
+    }
+    if (!std::isfinite(sky.sunAngularRadius) || sky.sunAngularRadius < 0.001f
+            || sky.sunAngularRadius > 0.5f) {
+        return fail(error, "Scene sky sun angular radius is invalid");
+    }
     const PhysicsSettings& physics = scene.physicsSettings();
     if (!std::isfinite(physics.gravity[0]) || !std::isfinite(physics.gravity[1])
             || !std::isfinite(physics.gravity[2]) || !std::isfinite(physics.fixedTimeStep)
@@ -986,6 +1037,23 @@ bool SceneSerializer::save(const Scene& scene, std::ostream& output, std::string
     output << "AMBIENT_SH";
     writeFloatArray(output, scene.ambientLighting_.sphericalHarmonics);
     output << '\n';
+    const DirectionalLighting& directional = scene.directionalLighting_;
+    output << "DIRECTIONAL_LIGHT";
+    writeFloatArray(output, directional.direction);
+    writeFloatArray(output, directional.color);
+    output << ' ' << directional.intensity << ' ' << directional.shadowStrength << '\n';
+    const AtmosphereSettings& atmosphere = scene.atmosphere_;
+    output << "ATMOSPHERE " << (atmosphere.fogEnabled ? 1 : 0);
+    writeFloatArray(output, atmosphere.fogColor);
+    output << ' ' << atmosphere.fogStart << ' ' << atmosphere.fogEnd << '\n';
+    const SkySettings& sky = scene.sky_;
+    output << "SKY " << (sky.enabled ? 1 : 0) << ' '
+           << (sky.sunDiskEnabled ? 1 : 0);
+    writeFloatArray(output, sky.zenithColor);
+    writeFloatArray(output, sky.horizonColor);
+    writeFloatArray(output, sky.groundColor);
+    writeFloatArray(output, sky.sunColor);
+    output << ' ' << sky.sunAngularRadius << '\n';
     for (const Entity& entity : scene.entities_) writeEntity(output, entity);
     output << "END_SCENE\n";
     if (!output) return fail(error, "Could not write complete scene data");
@@ -1045,6 +1113,36 @@ bool SceneSerializer::load(Scene& scene, std::istream& input, std::string& error
             if (std::fabs(coefficient) > 1000.0f) {
                 return fail(error, "Scene ambient-light coefficients are invalid");
             }
+        }
+    }
+    if (version >= 23) {
+        DirectionalLighting& directional = candidate.directionalLighting_;
+        if (!readTag(input, "DIRECTIONAL_LIGHT", error)
+                || !readFloatArray(input, directional.direction)
+                || !readFloatArray(input, directional.color)
+                || !(input >> directional.intensity >> directional.shadowStrength)) {
+            return fail(error, "Scene directional-light settings are invalid");
+        }
+    }
+    if (version >= 24) {
+        AtmosphereSettings& atmosphere = candidate.atmosphere_;
+        if (!readTag(input, "ATMOSPHERE", error)
+                || !readBool(input, atmosphere.fogEnabled)
+                || !readFloatArray(input, atmosphere.fogColor)
+                || !(input >> atmosphere.fogStart >> atmosphere.fogEnd)) {
+            return fail(error, "Scene atmosphere settings are invalid");
+        }
+    }
+    if (version >= 25) {
+        SkySettings& sky = candidate.sky_;
+        if (!readTag(input, "SKY", error)
+                || !readBool(input, sky.enabled) || !readBool(input, sky.sunDiskEnabled)
+                || !readFloatArray(input, sky.zenithColor)
+                || !readFloatArray(input, sky.horizonColor)
+                || !readFloatArray(input, sky.groundColor)
+                || !readFloatArray(input, sky.sunColor)
+                || !(input >> sky.sunAngularRadius)) {
+            return fail(error, "Scene sky settings are invalid");
         }
     }
     std::uint32_t maximumId = 0;

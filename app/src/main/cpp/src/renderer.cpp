@@ -383,6 +383,13 @@ uniform int uHasOpacityTexture;
 uniform int uHasEmissiveTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
+uniform int uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform vec3 uDirectionalLightColor;
+uniform float uDirectionalLightIntensity;
+uniform float uShadowStrength;
 #ifndef NUBY_DISABLE_CSM
 uniform sampler2D uShadowMap;
 uniform mat4 uLightViewProjection0;
@@ -604,10 +611,13 @@ void main() {
                 texture(uOcclusionTexture, occlusionUv).r, uOcclusionMapBaseGain);
     }
 
-    float visibility = 1.0 - shadowAmount(normal, lightDirection) * 0.82;
+    float visibility = 1.0 - shadowAmount(normal, lightDirection)
+            * clamp(uShadowStrength, 0.0, 1.0);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
     vec3 directLight = evaluateDirectLight(normal, viewDirection, lightDirection,
-            baseColor, metallic, roughness, vec3(2.3, 2.15, 1.88)) * visibility;
+            baseColor, metallic, roughness,
+            vec3(2.3, 2.15, 1.88) * uDirectionalLightColor
+                    * max(uDirectionalLightIntensity, 0.0)) * visibility;
 
     for (int index = 0; index < 4; ++index) {
         if (index >= uPointLightCount) break;
@@ -635,6 +645,12 @@ void main() {
                 emissiveSample, uEmissiveMapBaseGain));
     }
     vec3 color = ambient + directLight + emission;
+    if (uFogEnabled != 0) {
+        float viewDistance = length(uCameraPosition - vWorldPosition);
+        float fogAmount = clamp((viewDistance - uFogStart)
+                / max(uFogEnd - uFogStart, 0.001), 0.0, 1.0);
+        color = mix(color, uFogColor, fogAmount);
+    }
     color = (color * (2.51 * color + 0.03))
           / max(color * (2.43 * color + 0.59) + 0.14, vec3(0.001));
     color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
@@ -657,6 +673,7 @@ uniform mat4 uModel;
 uniform int uSkinningEnabled;
 out vec3 vFallbackNormal;
 out vec2 vFallbackUv;
+out vec3 vFallbackWorldPosition;
 void main() {
     vec4 localPosition = vec4(aPosition, 1.0);
     vec3 localNormal = aNormal;
@@ -672,6 +689,7 @@ void main() {
     vec4 worldPosition = uModel * localPosition;
     vFallbackNormal = normalize(mat3(uModel) * localNormal);
     vFallbackUv = aUv;
+    vFallbackWorldPosition = worldPosition.xyz;
     gl_Position = uViewProjection * worldPosition;
 }
 )";
@@ -681,8 +699,17 @@ constexpr const char* kFallbackFragmentShader = R"(
 precision highp float;
 in vec3 vFallbackNormal;
 in vec2 vFallbackUv;
+in vec3 vFallbackWorldPosition;
+uniform vec3 uCameraPosition;
+uniform int uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
 uniform vec3 uColor;
 uniform vec3 uEmission;
+uniform vec3 uLightDirection;
+uniform vec3 uDirectionalLightColor;
+uniform float uDirectionalLightIntensity;
 uniform float uOpacity;
 uniform int uAlphaMaskEnabled;
 uniform float uAlphaCutoff;
@@ -702,9 +729,18 @@ void main() {
         opacity = 1.0;
     }
     vec3 normal = normalize(vFallbackNormal);
-    vec3 lightDirection = normalize(vec3(-0.45, 0.82, 0.34));
-    float diffuse = 0.28 + 0.72 * max(dot(normal, lightDirection), 0.0);
-    fragmentColor = vec4(uColor * diffuse + uEmission, opacity);
+    vec3 lightDirection = normalize(-uLightDirection);
+    float diffuse = max(dot(normal, lightDirection), 0.0);
+    vec3 lighting = vec3(0.28) + 0.72 * diffuse * uDirectionalLightColor
+            * max(uDirectionalLightIntensity, 0.0);
+    vec3 color = uColor * lighting + uEmission;
+    if (uFogEnabled != 0) {
+        float viewDistance = length(uCameraPosition - vFallbackWorldPosition);
+        float fogAmount = clamp((viewDistance - uFogStart)
+                / max(uFogEnd - uFogStart, 0.001), 0.0, 1.0);
+        color = mix(color, uFogColor, fogAmount);
+    }
+    fragmentColor = vec4(color, opacity);
 }
 )";
 
@@ -770,6 +806,46 @@ out vec2 vUv;
 void main() {
     vUv = aUv;
     gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+)";
+
+constexpr const char* kSkyFragmentShader = R"(
+#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform vec3 uViewForward;
+uniform vec3 uViewRight;
+uniform vec3 uViewUp;
+uniform float uTanHalfFov;
+uniform float uAspectRatio;
+uniform vec3 uSunDirection;
+uniform vec3 uSunColor;
+uniform float uSunAngularRadius;
+uniform int uSunDiskEnabled;
+uniform vec3 uZenithColor;
+uniform vec3 uHorizonColor;
+uniform vec3 uGroundColor;
+out vec4 fragmentColor;
+void main() {
+    vec2 screen = vUv * 2.0 - 1.0;
+    vec3 ray = normalize(uViewForward
+            + uViewRight * screen.x * uTanHalfFov * uAspectRatio
+            + uViewUp * screen.y * uTanHalfFov);
+    float elevation = clamp(ray.y, -1.0, 1.0);
+    float skyBlend = pow(clamp(elevation, 0.0, 1.0), 0.62);
+    float groundBlend = pow(clamp(-elevation, 0.0, 1.0), 0.55);
+    vec3 color = elevation >= 0.0
+            ? mix(uHorizonColor, uZenithColor, skyBlend)
+            : mix(uHorizonColor, uGroundColor, groundBlend);
+    if (uSunDiskEnabled != 0) {
+        float alignment = dot(ray, normalize(uSunDirection));
+        float radius = clamp(uSunAngularRadius, 0.001, 0.5);
+        float disk = smoothstep(cos(radius), cos(radius * 0.78), alignment);
+        float glow = pow(max(alignment, 0.0), 96.0) * 0.16;
+        color += uSunColor * (disk * 2.4 + glow);
+    }
+    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+    fragmentColor = vec4(color, 1.0);
 }
 )";
 
@@ -2810,6 +2886,25 @@ void Renderer::initializePostProcessing() {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                           reinterpret_cast<const void*>(2 * sizeof(float)));
     glBindVertexArray(0);
+
+    skyProgram_ = createProgram(kFullscreenVertexShader, kSkyFragmentShader);
+    if (skyProgram_ != 0) {
+        skyUniforms_.viewForward = glGetUniformLocation(skyProgram_, "uViewForward");
+        skyUniforms_.viewRight = glGetUniformLocation(skyProgram_, "uViewRight");
+        skyUniforms_.viewUp = glGetUniformLocation(skyProgram_, "uViewUp");
+        skyUniforms_.tanHalfFov = glGetUniformLocation(skyProgram_, "uTanHalfFov");
+        skyUniforms_.aspectRatio = glGetUniformLocation(skyProgram_, "uAspectRatio");
+        skyUniforms_.sunDirection = glGetUniformLocation(skyProgram_, "uSunDirection");
+        skyUniforms_.sunColor = glGetUniformLocation(skyProgram_, "uSunColor");
+        skyUniforms_.sunAngularRadius = glGetUniformLocation(skyProgram_, "uSunAngularRadius");
+        skyUniforms_.sunDiskEnabled = glGetUniformLocation(skyProgram_, "uSunDiskEnabled");
+        skyUniforms_.zenithColor = glGetUniformLocation(skyProgram_, "uZenithColor");
+        skyUniforms_.horizonColor = glGetUniformLocation(skyProgram_, "uHorizonColor");
+        skyUniforms_.groundColor = glGetUniformLocation(skyProgram_, "uGroundColor");
+    } else {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                "Procedural sky shader unavailable; keeping the scene clear color");
+    }
 }
 
 void Renderer::releasePostProcessing() {
@@ -2896,6 +2991,36 @@ void Renderer::drawFullscreen() {
     glBindVertexArray(fullscreenVao_);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+}
+
+void Renderer::drawSky(const Mat4& view, float verticalFov, float aspectRatio) {
+    if (!frameSky_.enabled || skyProgram_ == 0 || fullscreenVao_ == 0) return;
+    const Vec3 forward{-view[2], -view[6], -view[10]};
+    const Vec3 right{view[0], view[4], view[8]};
+    const Vec3 up{view[1], view[5], view[9]};
+    const std::array<float, 3> sunDirection{
+        -frameDirectionalLighting_.direction[0],
+        -frameDirectionalLighting_.direction[1],
+        -frameDirectionalLighting_.direction[2]};
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+    glUseProgram(skyProgram_);
+    glUniform3fv(skyUniforms_.viewForward, 1, forward.data());
+    glUniform3fv(skyUniforms_.viewRight, 1, right.data());
+    glUniform3fv(skyUniforms_.viewUp, 1, up.data());
+    glUniform1f(skyUniforms_.tanHalfFov, std::tan(verticalFov * 0.5f));
+    glUniform1f(skyUniforms_.aspectRatio, aspectRatio);
+    glUniform3fv(skyUniforms_.sunDirection, 1, sunDirection.data());
+    glUniform3fv(skyUniforms_.sunColor, 1, frameSky_.sunColor.data());
+    glUniform1f(skyUniforms_.sunAngularRadius, frameSky_.sunAngularRadius);
+    glUniform1i(skyUniforms_.sunDiskEnabled, frameSky_.sunDiskEnabled ? 1 : 0);
+    glUniform3fv(skyUniforms_.zenithColor, 1, frameSky_.zenithColor.data());
+    glUniform3fv(skyUniforms_.horizonColor, 1, frameSky_.horizonColor.data());
+    glUniform3fv(skyUniforms_.groundColor, 1, frameSky_.groundColor.data());
+    drawFullscreen();
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void Renderer::renderBloom() {
@@ -3277,6 +3402,14 @@ void Renderer::initialize(AAssetManager* assetManager) {
     }
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
+    uniforms_.directionalLightColor = glGetUniformLocation(program_, "uDirectionalLightColor");
+    uniforms_.directionalLightIntensity = glGetUniformLocation(
+            program_, "uDirectionalLightIntensity");
+    uniforms_.shadowStrength = glGetUniformLocation(program_, "uShadowStrength");
+    uniforms_.fogEnabled = glGetUniformLocation(program_, "uFogEnabled");
+    uniforms_.fogColor = glGetUniformLocation(program_, "uFogColor");
+    uniforms_.fogStart = glGetUniformLocation(program_, "uFogStart");
+    uniforms_.fogEnd = glGetUniformLocation(program_, "uFogEnd");
     uniforms_.view = glGetUniformLocation(program_, "uView");
     uniforms_.lightViewProjection = {{
             glGetUniformLocation(program_, "uLightViewProjection0"),
@@ -3427,7 +3560,16 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
         glUniform2fv(uniforms_.textureMapValueRange[map], 1, baseGain.data());
     }
     glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
-    glUniform3f(uniforms_.lightDirection, -0.45f, -0.82f, -0.34f);
+    glUniform3fv(uniforms_.lightDirection, 1, frameDirectionalLighting_.direction.data());
+    glUniform3fv(uniforms_.directionalLightColor, 1,
+                 frameDirectionalLighting_.color.data());
+    glUniform1f(uniforms_.directionalLightIntensity,
+                frameDirectionalLighting_.intensity);
+    glUniform1f(uniforms_.shadowStrength, frameDirectionalLighting_.shadowStrength);
+    glUniform1i(uniforms_.fogEnabled, frameAtmosphere_.fogEnabled ? 1 : 0);
+    glUniform3fv(uniforms_.fogColor, 1, frameAtmosphere_.fogColor.data());
+    glUniform1f(uniforms_.fogStart, frameAtmosphere_.fogStart);
+    glUniform1f(uniforms_.fogEnd, frameAtmosphere_.fogEnd);
     glUniform1i(uniforms_.shadowMap, 0);
     glUniform1i(uniforms_.shadowsEnabled,
                 shadowsAvailable_ && shadowCascadesValid_ ? 1 : 0);
@@ -3571,6 +3713,47 @@ void Renderer::render(float deltaSeconds) {
         }
         if (evaluated) evaluatedSkeletalPoses_.emplace(entity.id, std::move(pose));
     }
+    frameDirectionalLighting_ = frameScene.directionalLighting();
+    float directionLengthSquared = 0.0f;
+    for (float component : frameDirectionalLighting_.direction) {
+        if (!std::isfinite(component)) {
+            directionLengthSquared = 0.0f;
+            break;
+        }
+        directionLengthSquared += component * component;
+    }
+    if (!std::isfinite(directionLengthSquared) || directionLengthSquared < 1.0e-8f
+            || directionLengthSquared > 1.0e8f) {
+        frameDirectionalLighting_.direction = DirectionalLighting{}.direction;
+    }
+    for (float& component : frameDirectionalLighting_.color) {
+        component = std::isfinite(component) ? std::clamp(component, 0.0f, 1.0f) : 1.0f;
+    }
+    frameDirectionalLighting_.intensity = std::isfinite(frameDirectionalLighting_.intensity)
+            ? std::clamp(frameDirectionalLighting_.intensity, 0.0f, 100.0f) : 1.0f;
+    frameDirectionalLighting_.shadowStrength =
+            std::isfinite(frameDirectionalLighting_.shadowStrength)
+                    ? std::clamp(frameDirectionalLighting_.shadowStrength, 0.0f, 1.0f)
+                    : 0.82f;
+    frameAtmosphere_ = frameScene.atmosphere();
+    for (float& component : frameAtmosphere_.fogColor) {
+        component = std::isfinite(component) ? std::clamp(component, 0.0f, 1.0f) : 0.12f;
+    }
+    frameAtmosphere_.fogStart = std::isfinite(frameAtmosphere_.fogStart)
+            ? std::max(frameAtmosphere_.fogStart, 0.0f) : 24.0f;
+    frameAtmosphere_.fogEnd = std::isfinite(frameAtmosphere_.fogEnd)
+            ? std::max(frameAtmosphere_.fogEnd, frameAtmosphere_.fogStart + 0.01f)
+            : frameAtmosphere_.fogStart + 48.0f;
+    frameSky_ = frameScene.sky();
+    for (float* color : {&frameSky_.zenithColor[0], &frameSky_.horizonColor[0],
+                         &frameSky_.groundColor[0], &frameSky_.sunColor[0]}) {
+        for (std::size_t channel = 0; channel < 3U; ++channel) {
+            color[channel] = std::isfinite(color[channel])
+                    ? std::clamp(color[channel], 0.0f, 1.0f) : 0.0f;
+        }
+    }
+    frameSky_.sunAngularRadius = std::isfinite(frameSky_.sunAngularRadius)
+            ? std::clamp(frameSky_.sunAngularRadius, 0.001f, 0.5f) : 0.018f;
     const auto& ambientCoefficients = frameScene.ambientLighting().sphericalHarmonics;
     const auto& defaultAmbient = AmbientLighting{}.sphericalHarmonics;
     for (std::size_t index = 0; index < ambientSphericalHarmonics_.size(); ++index) {
@@ -3650,7 +3833,7 @@ void Renderer::render(float deltaSeconds) {
                 verticalFov, aspectRatio, nearPlane, farPlane};
         std::array<DirectionalShadowCascade, kDirectionalShadowCascadeCount> cascades{};
         shadowCascadesValid_ = buildDirectionalShadowCascades(
-                shadowCamera, {-0.45f, -0.82f, -0.34f}, kShadowMapSize, cascades);
+                shadowCamera, frameDirectionalLighting_.direction, kShadowMapSize, cascades);
         if (shadowCascadesValid_) {
             for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade) {
                 shadowViewProjections_[cascade] = cascades[cascade].lightViewProjection;
@@ -3673,6 +3856,7 @@ void Renderer::render(float deltaSeconds) {
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    drawSky(view, verticalFov, aspectRatio);
     opaqueDrawItems_.clear();
     transparentDrawItems_.clear();
     const auto queueDraw = [this, &cameraFrustum](const Mesh& mesh, const Mat4& model,

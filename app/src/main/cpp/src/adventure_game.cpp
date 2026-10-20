@@ -39,6 +39,16 @@ void AdventureGame::buildScene(Scene& scene) {
     physics.floorHeight = kFloorHeight;
     physics.floorRestitution = 0.0f;
     physics.floorFriction = 0.0f;
+    scene.atmosphere().fogEnabled = true;
+    scene.atmosphere().fogColor = {0.28f, 0.22f, 0.15f};
+    scene.atmosphere().fogStart = 14.0f;
+    scene.atmosphere().fogEnd = 42.0f;
+    scene.sky().enabled = true;
+    scene.sky().zenithColor = {0.055f, 0.12f, 0.24f};
+    scene.sky().horizonColor = {0.28f, 0.22f, 0.15f};
+    scene.sky().groundColor = {0.06f, 0.07f, 0.09f};
+    scene.sky().sunColor = {1.0f, 0.72f, 0.43f};
+    scene.sky().sunAngularRadius = 0.018f;
 
     Entity& camera = scene.create("Adventure Follow Camera", Primitive::None);
     cameraId_ = camera.id;

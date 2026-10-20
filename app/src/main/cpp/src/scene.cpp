@@ -1760,6 +1760,9 @@ void Scene::clear() {
     activeCameraId_ = 0;
     elapsedSeconds_ = 0.0f;
     ambientLighting_ = AmbientLighting{};
+    directionalLighting_ = DirectionalLighting{};
+    atmosphere_ = AtmosphereSettings{};
+    sky_ = SkySettings{};
     physicsSettings_ = PhysicsSettings{};
     physicsAccumulator_ = 0.0f;
     activeTriggerPairs_.clear();

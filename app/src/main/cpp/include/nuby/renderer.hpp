@@ -199,6 +199,21 @@ private:
         float alphaCutoff = 0.5f;
     };
 
+    struct SkyUniforms {
+        GLint viewForward = -1;
+        GLint viewRight = -1;
+        GLint viewUp = -1;
+        GLint tanHalfFov = -1;
+        GLint aspectRatio = -1;
+        GLint sunDirection = -1;
+        GLint sunColor = -1;
+        GLint sunAngularRadius = -1;
+        GLint sunDiskEnabled = -1;
+        GLint zenithColor = -1;
+        GLint horizonColor = -1;
+        GLint groundColor = -1;
+    };
+
     struct PostUniforms {
         GLint extractScene = -1;
         GLint blurSource = -1;
@@ -248,6 +263,13 @@ private:
         std::array<GLint, 8> textureMapValueRange{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
+        GLint directionalLightColor = -1;
+        GLint directionalLightIntensity = -1;
+        GLint shadowStrength = -1;
+        GLint fogEnabled = -1;
+        GLint fogColor = -1;
+        GLint fogStart = -1;
+        GLint fogEnd = -1;
         GLint view = -1;
         std::array<GLint, kDirectionalShadowCascadeCount> lightViewProjection{};
         GLint cascadeFarSplits = -1;
@@ -314,6 +336,7 @@ private:
     void releasePostProcessing();
     void renderBloom();
     void drawFullscreen();
+    void drawSky(const Mat4& view, float verticalFov, float aspectRatio);
 
     AAssetManager* assetManager_ = nullptr;
     AssetMemoryCache assetMemoryCache_;
@@ -349,6 +372,7 @@ private:
     GLuint bloomExtractProgram_ = 0;
     GLuint blurProgram_ = 0;
     GLuint compositeProgram_ = 0;
+    GLuint skyProgram_ = 0;
     GLuint sceneFramebuffer_ = 0;
     GLuint sceneColorTexture_ = 0;
     GLuint sceneDepthBuffer_ = 0;
@@ -366,6 +390,7 @@ private:
     int postWidth_ = 0;
     int postHeight_ = 0;
     PostUniforms postUniforms_{};
+    SkyUniforms skyUniforms_{};
     GLint shadowProgramLightViewProjection_ = -1;
     GLint shadowProgramModel_ = -1;
     GLint shadowProgramUseInstancing_ = -1;
@@ -384,6 +409,9 @@ private:
     Uniforms uniforms_{};
     std::vector<PointLightData> pointLights_;
     std::array<float, 27> ambientSphericalHarmonics_{};
+    DirectionalLighting frameDirectionalLighting_{};
+    AtmosphereSettings frameAtmosphere_{};
+    SkySettings frameSky_{};
     std::array<float, kMaxPointLights * 4> pointLightPositionRanges_{};
     std::array<float, kMaxPointLights * 4> pointLightColorIntensities_{};
     Mesh sphere_{};

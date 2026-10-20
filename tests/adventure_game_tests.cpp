@@ -288,6 +288,12 @@ void testAdventureStreamsAcrossNineCellsWithBoundedResidency() {
                    && findEntityId(scene, "Ruin Zone 1 Pillar 1") != 0
                    && findEntityId(scene, "Ruin Zone 1 Pillar 1 East Cell") == 0,
            "adventure begins in the center cell of a nine-cell world and keeps distant scenery unloaded");
+    expect(scene.atmosphere().fogEnabled
+                   && std::fabs(scene.atmosphere().fogStart - 14.0f) < 1.0e-5f
+                   && std::fabs(scene.atmosphere().fogEnd - 42.0f) < 1.0e-5f
+                   && scene.sky().enabled
+                   && std::fabs(scene.sky().sunAngularRadius - 0.018f) < 1.0e-5f,
+           "adventure uses authored horizon fog and a procedural day sky without extra assets");
 
     const std::uint32_t playerId = game.playerId();
     const std::uint32_t cameraId = scene.activeCamera() == nullptr

@@ -220,6 +220,32 @@ struct AmbientLighting {
     };
 };
 
+// Scene-authored sun used for PBR direct lighting and cascaded shadow projection.
+// direction points along the rays (from the sun toward the world).
+struct DirectionalLighting {
+    std::array<float, 3> direction{-0.45f, -0.82f, -0.34f};
+    std::array<float, 3> color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float shadowStrength = 0.82f;
+};
+
+struct AtmosphereSettings {
+    bool fogEnabled = false;
+    std::array<float, 3> fogColor{0.12f, 0.17f, 0.24f};
+    float fogStart = 24.0f;
+    float fogEnd = 72.0f;
+};
+
+struct SkySettings {
+    bool enabled = false;
+    bool sunDiskEnabled = true;
+    std::array<float, 3> zenithColor{0.075f, 0.16f, 0.31f};
+    std::array<float, 3> horizonColor{0.48f, 0.57f, 0.66f};
+    std::array<float, 3> groundColor{0.12f, 0.14f, 0.16f};
+    std::array<float, 3> sunColor{1.0f, 0.82f, 0.58f};
+    float sunAngularRadius = 0.018f;
+};
+
 struct PhysicsSettings {
     // The implicit world floor participates in the same reciprocal layer/mask filter.
     std::array<float, 3> gravity{0.0f, -9.81f, 0.0f};
@@ -444,6 +470,12 @@ public:
     float elapsedSeconds() const { return elapsedSeconds_; }
     AmbientLighting& ambientLighting() { return ambientLighting_; }
     const AmbientLighting& ambientLighting() const { return ambientLighting_; }
+    DirectionalLighting& directionalLighting() { return directionalLighting_; }
+    const DirectionalLighting& directionalLighting() const { return directionalLighting_; }
+    AtmosphereSettings& atmosphere() { return atmosphere_; }
+    const AtmosphereSettings& atmosphere() const { return atmosphere_; }
+    SkySettings& sky() { return sky_; }
+    const SkySettings& sky() const { return sky_; }
     PhysicsSettings& physicsSettings() { return physicsSettings_; }
     const PhysicsSettings& physicsSettings() const { return physicsSettings_; }
     void consumePhysicsEvents(std::vector<PhysicsEvent>& output);
@@ -457,6 +489,9 @@ private:
     std::uint32_t activeCameraId_ = 0;
     float elapsedSeconds_ = 0.0f;
     AmbientLighting ambientLighting_;
+    DirectionalLighting directionalLighting_;
+    AtmosphereSettings atmosphere_;
+    SkySettings sky_;
     PhysicsSettings physicsSettings_;
     float physicsAccumulator_ = 0.0f;
     std::vector<std::uint64_t> activeTriggerPairs_;

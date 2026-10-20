@@ -72,8 +72,14 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 22") {
+        if (line == "NUBY_SCENE 25") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("SKY ", 0) == 0 && targetVersion < 25) {
+            continue;
+        } else if (line.rfind("ATMOSPHERE ", 0) == 0 && targetVersion < 24) {
+            continue;
+        } else if (line.rfind("DIRECTIONAL_LIGHT ", 0) == 0 && targetVersion < 23) {
+            continue;
         } else if (line.rfind("AUDIO_SOURCE ", 0) == 0 && targetVersion < 22) {
             continue;
         } else if (line.rfind("ORBIT_CAMERA_COLLISION ", 0) == 0 && targetVersion < 21) {
@@ -203,6 +209,21 @@ nuby::Scene makeScene() {
     scene.ambientLighting().sphericalHarmonics[0] = 0.7f;
     scene.ambientLighting().sphericalHarmonics[4] = -0.12f;
     scene.ambientLighting().sphericalHarmonics[26] = 0.23f;
+    scene.directionalLighting().direction = {-0.2f, -0.9f, -0.3f};
+    scene.directionalLighting().color = {1.0f, 0.72f, 0.48f};
+    scene.directionalLighting().intensity = 1.35f;
+    scene.directionalLighting().shadowStrength = 0.64f;
+    scene.atmosphere().fogEnabled = true;
+    scene.atmosphere().fogColor = {0.16f, 0.22f, 0.31f};
+    scene.atmosphere().fogStart = 11.0f;
+    scene.atmosphere().fogEnd = 48.0f;
+    scene.sky().enabled = true;
+    scene.sky().sunDiskEnabled = false;
+    scene.sky().zenithColor = {0.1f, 0.2f, 0.4f};
+    scene.sky().horizonColor = {0.7f, 0.6f, 0.5f};
+    scene.sky().groundColor = {0.08f, 0.09f, 0.1f};
+    scene.sky().sunColor = {1.0f, 0.8f, 0.5f};
+    scene.sky().sunAngularRadius = 0.025f;
     scene.physicsSettings().floorCollisionLayer = 4U;
     scene.physicsSettings().floorCollisionMask = 0x0000000CU;
     nuby::Entity& root = scene.create("root \"quoted\" \\ node", nuby::Primitive::None);
@@ -433,6 +454,23 @@ void testRoundTripAllSceneData() {
                    && near(loaded.ambientLighting().sphericalHarmonics[4], -0.12f)
                    && near(loaded.ambientLighting().sphericalHarmonics[26], 0.23f),
            "round-trip preserves the scene's spherical-harmonic environment light");
+    expect(near(loaded.directionalLighting().direction[0], -0.2f)
+                   && near(loaded.directionalLighting().direction[1], -0.9f)
+                   && near(loaded.directionalLighting().color[1], 0.72f)
+                   && near(loaded.directionalLighting().intensity, 1.35f)
+                   && near(loaded.directionalLighting().shadowStrength, 0.64f),
+           "round-trip preserves scene-authored directional light and shadow strength");
+    expect(loaded.atmosphere().fogEnabled
+                   && near(loaded.atmosphere().fogColor[2], 0.31f)
+                   && near(loaded.atmosphere().fogStart, 11.0f)
+                   && near(loaded.atmosphere().fogEnd, 48.0f),
+           "round-trip preserves distance-fog color and range");
+    expect(loaded.sky().enabled && !loaded.sky().sunDiskEnabled
+                   && near(loaded.sky().zenithColor[2], 0.4f)
+                   && near(loaded.sky().horizonColor[0], 0.7f)
+                   && near(loaded.sky().sunColor[1], 0.8f)
+                   && near(loaded.sky().sunAngularRadius, 0.025f),
+           "round-trip preserves procedural sky palette and sun-disc settings");
 
     const nuby::Entity* root = loaded.find(1);
     const nuby::Entity* mesh = loaded.find(2);
@@ -672,6 +710,42 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid ambient lighting cannot partially replace the target scene");
 
+    std::string invalidDirectionalLight = valid.str();
+    expect(replaceRecordField(invalidDirectionalLight, "DIRECTIONAL_LIGHT", 8, "1.1"),
+           "v23 scene stores bounded directional-light shadow strength");
+    std::stringstream malformedDirectionalLight(invalidDirectionalLight);
+    expect(!nuby::SceneSerializer::load(target, malformedDirectionalLight, error),
+           "directional-light shadow strength above one is rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid directional lighting cannot partially replace the target scene");
+
+    std::string invalidDirectionalColor = valid.str();
+    expect(replaceRecordField(invalidDirectionalColor, "DIRECTIONAL_LIGHT", 4, "1.1"),
+           "v23 scene stores normalized directional-light color");
+    std::stringstream malformedDirectionalColor(invalidDirectionalColor);
+    expect(!nuby::SceneSerializer::load(target, malformedDirectionalColor, error),
+           "directional-light colors outside zero-to-one are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid directional color cannot partially replace the target scene");
+
+    std::string invalidFogRange = valid.str();
+    expect(replaceRecordField(invalidFogRange, "ATMOSPHERE", 5, "50"),
+           "v24 scene stores an ordered fog range");
+    std::stringstream malformedFogRange(invalidFogRange);
+    expect(!nuby::SceneSerializer::load(target, malformedFogRange, error),
+           "fog ranges with end not beyond start are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid atmosphere settings cannot partially replace the target scene");
+
+    std::string invalidSkyRadius = valid.str();
+    expect(replaceRecordField(invalidSkyRadius, "SKY", 15, "0.8"),
+           "v25 scene stores a bounded sun angular radius");
+    std::stringstream malformedSkyRadius(invalidSkyRadius);
+    expect(!nuby::SceneSerializer::load(target, malformedSkyRadius, error),
+           "procedural sun discs wider than the supported angular bound are rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid sky settings cannot partially replace the target scene");
+
     std::string invalidSkeletalPlayback = valid.str();
     expect(replaceRecordField(invalidSkeletalPlayback, "SKELETAL_PLAYER", 6, "0", 1),
            "v17 scene stores skeletal playback duration");
@@ -726,6 +800,30 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV24(downgradeTextureSchema(valid.str(), 24, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV24, error),
+           "version-twenty-four scenes remain readable before procedural sky settings");
+    expect(!target.sky().enabled && target.sky().sunDiskEnabled
+                   && near(target.sky().sunAngularRadius, 0.018f),
+           "version-twenty-four scenes keep the procedural sky disabled by default");
+
+    std::stringstream legacyV23(downgradeTextureSchema(valid.str(), 23, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV23, error),
+           "version-twenty-three scenes remain readable before atmosphere controls");
+    expect(!target.atmosphere().fogEnabled
+                   && near(target.atmosphere().fogStart, 24.0f)
+                   && near(target.atmosphere().fogEnd, 72.0f),
+           "version-twenty-three scenes keep fog disabled with safe defaults");
+
+    std::stringstream legacyV22(downgradeTextureSchema(valid.str(), 22, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV22, error),
+           "version-twenty-two scenes remain readable before directional-light controls");
+    expect(near(target.directionalLighting().direction[0], -0.45f)
+                   && near(target.directionalLighting().direction[1], -0.82f)
+                   && near(target.directionalLighting().intensity, 1.0f)
+                   && near(target.directionalLighting().shadowStrength, 0.82f),
+           "version-twenty-two scenes receive renderer-compatible directional defaults");
 
     std::stringstream legacyV21(downgradeTextureSchema(valid.str(), 21, 8));
     expect(nuby::SceneSerializer::load(target, legacyV21, error),
