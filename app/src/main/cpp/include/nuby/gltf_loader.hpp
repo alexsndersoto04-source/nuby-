@@ -95,12 +95,14 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
 bool parseGlbStaticAsset(std::string_view bytes, GltfStaticAsset& output,
                          std::string& error);
 
-// Imports a constrained single-skin GLB subset with multiple identity-root mesh
-// nodes, parent-first skin joints, TRS intermediary ancestors, inverse-bind
-// matrices, per-vertex weights, embedded PNG PBR textures and LINEAR, STEP or
-// CUBICSPLINE animation. Intermediary ancestors are unweighted palette entries;
-// the full pose hierarchy is limited to 64 entries. Matrix-authored hierarchy
-// nodes, mesh-node transforms and multiple skins are rejected.
+// Imports a constrained single-skin GLB subset with multiple mesh nodes,
+// parent-first skin joints, TRS intermediary ancestors, inverse-bind matrices,
+// per-vertex weights, embedded PNG PBR textures and LINEAR, STEP or CUBICSPLINE
+// animation. Intermediary ancestors are unweighted palette entries; affine
+// matrix-authored ancestors are preserved as static transforms. Mesh-node
+// transforms follow the glTF skin-space convention and are not baked into the
+// vertices. The pose palette is limited to 64 entries; matrix-node animation
+// targets and multiple skins are rejected.
 bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                            std::string& error);
 

@@ -66,6 +66,14 @@ struct SkeletalJoint {
     std::array<float, 3> bindTranslation{0.0f, 0.0f, 0.0f};
     SkeletalQuaternion bindRotation;
     std::array<float, 3> bindScale{1.0f, 1.0f, 1.0f};
+    // Matrix-authored static nodes preserve affine transforms that TRS cannot encode.
+    // Such nodes cannot also carry animated TRS tracks.
+    bool bindMatrixAuthored = false;
+    SkeletalMatrix4 bindLocalMatrix{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f};
     SkeletalMatrix4 inverseBindMatrix{
         1.0f, 0.0f, 0.0f, 0.0f,
         0.0f, 1.0f, 0.0f, 0.0f,

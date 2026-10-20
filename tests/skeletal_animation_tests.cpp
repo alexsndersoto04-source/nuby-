@@ -139,6 +139,35 @@ void testStepAndCubicSplineTracks() {
            "cubic quaternion tracks Hermite-interpolate components then normalize");
 }
 
+void testMatrixAuthoredBindTransforms() {
+    std::vector<nuby::SkeletalJoint> skeleton(1U);
+    skeleton[0].bindMatrixAuthored = true;
+    skeleton[0].bindLocalMatrix[4] = 0.25f;
+    skeleton[0].bindLocalMatrix[12] = 3.0f;
+    skeleton[0].bindLocalMatrix[13] = 2.0f;
+    nuby::SkeletalAnimationClip fromClip;
+    nuby::SkeletalAnimationClip toClip;
+    fromClip.joints.resize(1U);
+    toClip.joints.resize(1U);
+    nuby::SkeletalPose pose;
+    std::string error;
+    expect(nuby::evaluateSkeletalPose(skeleton, fromClip, 0.0f, pose, error)
+                   && pose.jointMatrices.size() == 1U
+                   && near(pose.jointMatrices[0][4], 0.25f)
+                   && near(pose.jointMatrices[0][12], 3.0f)
+                   && near(pose.jointMatrices[0][13], 2.0f),
+           "matrix-authored static bind transforms remain exact in evaluated poses");
+    expect(nuby::evaluateBlendedSkeletalPose(skeleton, fromClip, 0.0f, false,
+                                               toClip, 0.0f, false, 0.5f, pose, error)
+                   && pose.jointMatrices.size() == 1U
+                   && near(pose.jointMatrices[0][4], 0.25f)
+                   && near(pose.jointMatrices[0][12], 3.0f),
+           "crossfades preserve static matrix-authored nodes without decomposing shear");
+    fromClip.joints[0].translation.addKeyframe(0.0f, {1.0f, 0.0f, 0.0f});
+    expect(!nuby::validateSkeletalAnimation(skeleton, fromClip, error),
+           "matrix-authored nodes cannot combine a static matrix with TRS tracks");
+}
+
 void testCrossfadeAndNonLoopingEvaluation() {
     std::vector<nuby::SkeletalJoint> skeleton(1);
     skeleton[0].name = "root";
@@ -277,6 +306,7 @@ int main() {
     testParentedPoseAndInverseBind();
     testLoopingAndQuaternionShortestPath();
     testStepAndCubicSplineTracks();
+    testMatrixAuthoredBindTransforms();
     testCrossfadeAndNonLoopingEvaluation();
     testLinearBlendSkinningReference();
     testTrackEditingAndInvalidData();

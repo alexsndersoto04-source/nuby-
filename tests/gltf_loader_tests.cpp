@@ -313,6 +313,36 @@ std::string makeSkeletalGlbWithIntermediaryTransform() {
     return data;
 }
 
+std::string makeSkeletalGlbWithMatrixAncestor(bool animateMatrixNode = false) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeSkeletalGlb(), json, binary, error)) return {};
+    const std::string originalNodes =
+            R"JSON("nodes":[{"name":"child_joint","translation":[1,0,0]},{"name":"root_joint","children":[0]},{"name":"mesh","mesh":0,"skin":0}],)JSON";
+    const std::string nodesWithMatrix =
+            R"JSON("nodes":[{"name":"child_joint","translation":[1,0,0]},{"name":"root_joint","children":[0]},{"name":"mesh","mesh":0,"skin":0},{"name":"armature_offset","matrix":[1,0,0,0,0.25,1,0,0,0,0,1,0,0,2,0,1],"children":[1]}],)JSON";
+    const std::size_t nodesPosition = json.find(originalNodes);
+    if (nodesPosition == std::string::npos) return {};
+    json.replace(nodesPosition, originalNodes.size(), nodesWithMatrix);
+    if (animateMatrixNode) {
+        const std::string originalTarget = R"JSON("node":1,"path":"translation")JSON";
+        const std::string invalidTarget = R"JSON("node":3,"path":"translation")JSON";
+        const std::size_t targetPosition = json.find(originalTarget);
+        if (targetPosition == std::string::npos) return {};
+        json.replace(targetPosition, originalTarget.size(), invalidTarget);
+    }
+
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, json);
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
 std::string makeMultipleMeshSkeletalGlb(bool translateSecondMesh = false) {
     std::string json;
     std::string binary;
@@ -716,11 +746,39 @@ void testSkeletalGlbImportsAnimatedNonJointAncestors() {
            "ancestor bind offset and animated motion propagate to weighted skin joints");
 }
 
-void testSkeletalGlbImportsMultipleIdentityMeshNodes() {
+void testSkeletalGlbPreservesMatrixAuthoredAncestors() {
+    nuby::GltfSkeletalAsset asset;
+    std::string error;
+    expect(nuby::parseGlbSkeletalAsset(makeSkeletalGlbWithMatrixAncestor(), asset, error),
+           "skeletal GLB preserves affine matrix-authored intermediary transforms");
+    expect(asset.skeleton.size() == 3U && asset.skeleton[0].bindMatrixAuthored
+                   && std::fabs(asset.skeleton[0].bindLocalMatrix[4] - 0.25f) < 1.0e-6f
+                   && std::fabs(asset.skeleton[0].bindLocalMatrix[13] - 2.0f) < 1.0e-6f,
+           "matrix ancestor is retained exactly as an unweighted static palette entry");
+    nuby::SkeletalPose pose;
+    expect(nuby::evaluateSkeletalPose(asset.skeleton, asset.animations[0].clip,
+                                      0.5f, pose, error),
+           "TRS animation on a child joint composes under a static matrix ancestor");
+    expect(pose.jointMatrices.size() == 3U
+                   && std::fabs(pose.jointMatrices[1][12] - 0.5f) < 1.0e-5f
+                   && std::fabs(pose.jointMatrices[1][13] - 2.0f) < 1.0e-5f
+                   && std::fabs(pose.jointMatrices[1][4] - 0.25f) < 1.0e-6f
+                   && std::fabs(pose.jointMatrices[2][13] - 2.0f) < 1.0e-5f,
+           "shear and translation from the matrix ancestor reach the skin palette");
+
+    nuby::GltfSkeletalAsset rejected;
+    rejected.skeleton.resize(1U);
+    expect(!nuby::parseGlbSkeletalAsset(makeSkeletalGlbWithMatrixAncestor(true),
+                                        rejected, error)
+                   && rejected.skeleton.empty(),
+           "animation channels targeting a matrix-authored node are rejected transactionally");
+}
+
+void testSkeletalGlbImportsMultipleMeshNodesWithTransforms() {
     nuby::GltfSkeletalAsset asset;
     std::string error;
     expect(nuby::parseGlbSkeletalAsset(makeMultipleMeshSkeletalGlb(), asset, error),
-           "one skin can drive several identity-root mesh nodes");
+           "one skin can drive several transformed mesh nodes");
     expect(asset.skeleton.size() == 2U && asset.primitives.size() == 2U
                    && asset.primitives[0].meshIndex == 0U
                    && asset.primitives[1].meshIndex == 1U
@@ -728,12 +786,20 @@ void testSkeletalGlbImportsMultipleIdentityMeshNodes() {
                    && asset.primitives[1].hasSkinAttributes,
            "each referenced skeletal mesh contributes independently skinned draw parts");
 
-    nuby::GltfSkeletalAsset rejected;
-    rejected.primitives.push_back({});
-    expect(!nuby::parseGlbSkeletalAsset(
-                   makeMultipleMeshSkeletalGlb(true), rejected, error)
-                   && rejected.primitives.empty(),
-           "skinned mesh-node transforms remain rejected transactionally");
+    nuby::GltfSkeletalAsset transformed;
+    expect(nuby::parseGlbSkeletalAsset(
+                   makeMultipleMeshSkeletalGlb(true), transformed, error),
+           "skinned mesh nodes retain the glTF skinning result with authored transforms");
+    expect(transformed.primitives.size() == 2U
+                   && transformed.primitives[1].meshIndex == 1U,
+           "translated mesh-node instances preserve their mesh identity without corrupting geometry");
+    nuby::SkeletalPose pose;
+    expect(nuby::evaluateSkeletalPose(transformed.skeleton,
+                                      transformed.animations[0].clip,
+                                      0.5f, pose, error)
+                   && pose.jointMatrices.size() == 2U
+                   && std::fabs(pose.jointMatrices[0][12] - 0.5f) < 1.0e-5f,
+           "mesh-node transform cancellation leaves the shared skin palette in mesh-independent space");
 }
 
 void testSkeletalGlbStepAndCubicSplineInterpolation() {
@@ -930,7 +996,8 @@ int main() {
     testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms();
     testSkeletalGlbImportsJointsBindMatricesAndClips();
     testSkeletalGlbImportsAnimatedNonJointAncestors();
-    testSkeletalGlbImportsMultipleIdentityMeshNodes();
+    testSkeletalGlbPreservesMatrixAuthoredAncestors();
+    testSkeletalGlbImportsMultipleMeshNodesWithTransforms();
     testSkeletalGlbStepAndCubicSplineInterpolation();
     testPackagedAlphaMaskFixture();
     testPackagedWayfarerAsset();

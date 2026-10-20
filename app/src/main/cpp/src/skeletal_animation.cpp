@@ -359,10 +359,26 @@ bool validateSkeletalAnimation(const std::vector<SkeletalJoint>& skeleton,
                 return false;
             }
         }
+        if (joint.bindMatrixAuthored) {
+            for (float value : joint.bindLocalMatrix) {
+                if (!std::isfinite(value) || std::fabs(value) > kMaximumAuthoredValue) {
+                    error = "Skeleton bind local matrix is invalid";
+                    return false;
+                }
+            }
+            if (std::fabs(joint.bindLocalMatrix[3]) > 1.0e-6f
+                    || std::fabs(joint.bindLocalMatrix[7]) > 1.0e-6f
+                    || std::fabs(joint.bindLocalMatrix[11]) > 1.0e-6f
+                    || std::fabs(joint.bindLocalMatrix[15] - 1.0f) > 1.0e-6f) {
+                error = "Skeleton bind local matrix must be affine";
+                return false;
+            }
+        }
     }
     std::size_t totalKeyframes = 0;
     constexpr std::size_t kMaximumClipKeyframes = 65536;
-    for (const SkeletalAnimationTrack& track : clip.joints) {
+    for (std::size_t index = 0; index < clip.joints.size(); ++index) {
+        const SkeletalAnimationTrack& track = clip.joints[index];
         if (track.translation.keyframes.size() > kMaximumClipKeyframes - totalKeyframes) {
             error = "Skeletal animation clip exceeds the total keyframe limit";
             return false;
@@ -381,6 +397,12 @@ bool validateSkeletalAnimation(const std::vector<SkeletalJoint>& skeleton,
         if (!validateVectorTrack(track.translation, clip.durationSeconds, error)
                 || !validateQuaternionTrack(track.rotation, clip.durationSeconds, error)
                 || !validateVectorTrack(track.scale, clip.durationSeconds, error)) return false;
+        if (skeleton[index].bindMatrixAuthored
+                && (!track.translation.keyframes.empty() || !track.rotation.keyframes.empty()
+                    || !track.scale.keyframes.empty())) {
+            error = "Matrix-authored skeletal nodes cannot have TRS animation tracks";
+            return false;
+        }
     }
     error.clear();
     return true;
@@ -495,7 +517,8 @@ bool evaluateSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
         const SkeletalQuaternion rotation = track.rotation.sample(
                 sampleTime, joint.bindRotation);
         const std::array<float, 3> scale = track.scale.sample(sampleTime, joint.bindScale);
-        const SkeletalMatrix4 local = composeTransform(translation, rotation, scale);
+        const SkeletalMatrix4 local = joint.bindMatrixAuthored
+                ? joint.bindLocalMatrix : composeTransform(translation, rotation, scale);
         worldMatrices[index] = joint.parentIndex < 0 ? local
                 : multiplyMatrix(worldMatrices[static_cast<std::size_t>(joint.parentIndex)], local);
         candidate.jointMatrices[index] = multiplyMatrix(worldMatrices[index],
@@ -559,7 +582,8 @@ bool evaluateBlendedSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
         const SkeletalQuaternion rotation = interpolateQuaternion(
                 fromTrack.rotation.sample(fromSampleTime, joint.bindRotation),
                 toTrack.rotation.sample(toSampleTime, joint.bindRotation), blendAmount);
-        const SkeletalMatrix4 local = composeTransform(translation, rotation, scale);
+        const SkeletalMatrix4 local = joint.bindMatrixAuthored
+                ? joint.bindLocalMatrix : composeTransform(translation, rotation, scale);
         worldMatrices[index] = joint.parentIndex < 0 ? local
                 : multiplyMatrix(worldMatrices[static_cast<std::size_t>(joint.parentIndex)], local);
         candidate.jointMatrices[index] = multiplyMatrix(worldMatrices[index],

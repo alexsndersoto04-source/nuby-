@@ -1075,19 +1075,7 @@ bool transformStaticPrimitive(GltfPrimitive& primitive, const Matrix4& matrix) {
     return true;
 }
 
-bool nodeHasIdentityTransform(const NodeData& node) {
-    constexpr float epsilon = 1.0e-5f;
-    return std::fabs(node.translation[0]) <= epsilon
-            && std::fabs(node.translation[1]) <= epsilon
-            && std::fabs(node.translation[2]) <= epsilon
-            && std::fabs(node.rotation.x) <= epsilon
-            && std::fabs(node.rotation.y) <= epsilon
-            && std::fabs(node.rotation.z) <= epsilon
-            && std::fabs(node.rotation.w - 1.0f) <= epsilon
-            && std::fabs(node.scale[0] - 1.0f) <= epsilon
-            && std::fabs(node.scale[1] - 1.0f) <= epsilon
-            && std::fabs(node.scale[2] - 1.0f) <= epsilon;
-}
+
 }  // namespace
 
 bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
@@ -1555,10 +1543,8 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
         std::uint32_t skinIndex = 0;
         if (meshIndexValue == nullptr || skinIndexValue == nullptr
                 || !unsignedInteger(meshIndexValue, meshIndex) || meshIndex >= meshes->arrayValue.size()
-                || !unsignedInteger(skinIndexValue, skinIndex) || skinIndex != 0U
-                || nodes[index].parentIndex != -1 || nodes[index].matrixAuthored
-                || !nodeHasIdentityTransform(nodes[index])) {
-            return fail(error, "Skeletal mesh nodes must use skin zero and identity root transforms");
+                || !unsignedInteger(skinIndexValue, skinIndex) || skinIndex != 0U) {
+            return fail(error, "Skeletal mesh nodes must reference a valid mesh and skin zero");
         }
         if (skinnedMeshIndices.size() >= 8192U) {
             return fail(error, "Skeletal GLB mesh-node instance count exceeds limits");
@@ -1587,9 +1573,6 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
             current = nodes[nodeIndex].parentIndex;
         }
         for (auto node = chain.rbegin(); node != chain.rend(); ++node) {
-            if (nodes[*node].matrixAuthored) {
-                return fail(error, "Matrix-authored nodes in a skin hierarchy are unsupported");
-            }
             visitState[*node] = 2U;
             parentFirstNodes.push_back(*node);
             if (parentFirstNodes.size() > 64U) {
@@ -1611,6 +1594,8 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
         joint.bindTranslation = node.translation;
         joint.bindRotation = node.rotation;
         joint.bindScale = node.scale;
+        joint.bindMatrixAuthored = node.matrixAuthored;
+        if (node.matrixAuthored) joint.bindLocalMatrix = node.matrix;
         if (node.parentIndex >= 0) {
             joint.parentIndex = jointIndexByNode[static_cast<std::size_t>(node.parentIndex)];
             if (joint.parentIndex < 0) return fail(error, "GLB joint order is not parent-first");
@@ -1732,6 +1717,9 @@ bool parseGlbSkeletalAsset(std::string_view bytes, GltfSkeletalAsset& output,
                 }
                 const std::int32_t jointIndex = jointIndexByNode[targetNode];
                 if (jointIndex < 0) continue;
+                if (nodes[targetNode].matrixAuthored) {
+                    return fail(error, "GLB animation cannot target a matrix-authored node");
+                }
                 const std::string& pathName = path->stringValue;
                 SkeletalAnimationTrack& track = animation.clip.joints[
                         static_cast<std::size_t>(jointIndex)];
