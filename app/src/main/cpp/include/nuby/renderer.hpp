@@ -336,7 +336,7 @@ private:
     void releasePostProcessing();
     void renderBloom();
     void drawFullscreen();
-    void drawSky(const Mat4& view, float verticalFov, float aspectRatio);
+    void drawSky(const std::array<float, 16>& view, float verticalFov, float aspectRatio);
 
     AAssetManager* assetManager_ = nullptr;
     AssetMemoryCache assetMemoryCache_;
