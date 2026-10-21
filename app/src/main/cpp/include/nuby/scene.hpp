@@ -59,6 +59,8 @@ struct Material {
     float clearcoatFactor = 0.0f;
     float clearcoatRoughness = 0.0f;
     float clearcoatNormalScale = 1.0f;
+    float specularFactor = 1.0f;
+    std::array<float, 3> specularColorFactor{1.0f, 1.0f, 1.0f};
     bool unlit = false;
     bool proceduralGrid = false;
     std::string albedoTexture;
@@ -72,6 +74,8 @@ struct Material {
     std::string clearcoatTexture;
     std::string clearcoatRoughnessTexture;
     std::string clearcoatNormalTexture;
+    std::string specularTexture;
+    std::string specularColorTexture;
     TextureMapTransform albedoMapTransform;
     TextureMapTransform normalMapTransform;
     TextureMapTransform metallicRoughnessMapTransform;
@@ -83,6 +87,8 @@ struct Material {
     TextureMapTransform clearcoatMapTransform;
     TextureMapTransform clearcoatRoughnessMapTransform;
     TextureMapTransform clearcoatNormalMapTransform;
+    TextureMapTransform specularMapTransform;
+    TextureMapTransform specularColorMapTransform;
     TextureMapValueRange albedoMapValueRange;
     TextureMapValueRange normalMapValueRange;
     TextureMapValueRange metallicRoughnessMapValueRange;

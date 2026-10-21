@@ -32,7 +32,11 @@ struct GltfMaterial {
     float clearcoatFactor = 0.0f;
     float clearcoatRoughness = 0.0f;
     float clearcoatNormalScale = 1.0f;
+    float specularFactor = 1.0f;
+    std::array<float, 3> specularColorFactor{1.0f, 1.0f, 1.0f};
     bool unlit = false;
+    GltfTextureBinding specularTexture;
+    GltfTextureBinding specularColorTexture;
     GltfTextureBinding clearcoatTexture;
     GltfTextureBinding clearcoatRoughnessTexture;
     GltfTextureBinding clearcoatNormalTexture;
@@ -94,8 +98,8 @@ bool validateGltf2Json(std::string_view json, std::string& error);
 // Imports triangle primitives from a self-contained GLB with one embedded
 // buffer. Supports float POSITION/NORMAL/TANGENT/TEXCOORD_0/1, unsigned scalar
 // indices, optional JOINTS_0/WEIGHTS_0 with four influences, glTF PBR factors and the
-// KHR_materials_unlit, KHR_materials_emissive_strength, KHR_materials_ior and
-// KHR_materials_clearcoat extensions. Standard
+// KHR_materials_unlit, KHR_materials_emissive_strength, KHR_materials_ior,
+// KHR_materials_clearcoat and KHR_materials_specular extensions. Standard
 // texture slots select UV set 0 or 1; KHR_texture_transform offset/scale/rotation
 // and its texCoord override are retained. Higher-level APIs return encoded image
 // bytes. External images, non-PNG formats, custom filters and UV sets above 1

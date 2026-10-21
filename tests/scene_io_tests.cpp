@@ -72,8 +72,11 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 30") {
+        if (line == "NUBY_SCENE 31") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("MATERIAL_SPECULAR ", 0) == 0
+                && targetVersion < 31) {
+            continue;
         } else if (line.rfind("MATERIAL_CLEARCOAT ", 0) == 0
                 && targetVersion < 30) {
             continue;
@@ -267,6 +270,8 @@ nuby::Scene makeScene() {
     mesh.material.clearcoatFactor = 0.72f;
     mesh.material.clearcoatRoughness = 0.31f;
     mesh.material.clearcoatNormalScale = 0.45f;
+    mesh.material.specularFactor = 0.63f;
+    mesh.material.specularColorFactor = {0.8f, 0.65f, 0.9f};
     mesh.material.unlit = true;
     mesh.skeletalAnimation.enabled = true;
     mesh.skeletalAnimation.playing = false;
@@ -298,6 +303,8 @@ nuby::Scene makeScene() {
     mesh.material.clearcoatTexture = "textures/hero clearcoat.tga";
     mesh.material.clearcoatRoughnessTexture = "textures/hero clearcoat rough.tga";
     mesh.material.clearcoatNormalTexture = "textures/hero clearcoat normal.tga";
+    mesh.material.specularTexture = "textures/hero specular.tga";
+    mesh.material.specularColorTexture = "textures/hero specular color.tga";
     mesh.material.opacityMapChannel = nuby::ScalarTextureChannel::Matte;
     mesh.boxCollider.enabled = true;
     mesh.boxCollider.halfExtents = {0.75f, 1.25f, 0.5f};
@@ -322,6 +329,12 @@ nuby::Scene makeScene() {
     mesh.material.clearcoatRoughnessMapTransform.uvOffset = {-0.1f, 0.2f};
     mesh.material.clearcoatNormalMapTransform.uvRotation = -0.6f;
     mesh.material.clearcoatNormalMapTransform.uvSet = 1U;
+    mesh.material.specularMapTransform.uvScale = {1.4f, 0.75f};
+    mesh.material.specularMapTransform.uvOffset = {0.1f, -0.2f};
+    mesh.material.specularMapTransform.uvRotation = 0.3f;
+    mesh.material.specularMapTransform.uvSet = 1U;
+    mesh.material.specularColorMapTransform.clampToEdge = true;
+    mesh.material.specularColorMapTransform.uvRotation = -0.25f;
     mesh.material.albedoMapValueRange = {-0.1f, 1.35f};
     mesh.material.normalMapValueRange = {0.1f, 0.8f};
     mesh.material.metallicRoughnessMapValueRange = {0.2f, 0.7f};
@@ -527,6 +540,9 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.clearcoatFactor, 0.72f)
                        && near(mesh->material.clearcoatRoughness, 0.31f)
                        && near(mesh->material.clearcoatNormalScale, 0.45f)
+                       && near(mesh->material.specularFactor, 0.63f)
+                       && near(mesh->material.specularColorFactor[0], 0.8f)
+                       && near(mesh->material.specularColorFactor[2], 0.9f)
                        && mesh->material.unlit,
                "PBR factors, IOR, clearcoat, normal scale, emissive strength and unlit state are restored");
         expect(mesh->material.albedoTexture == "textures/hero diffuse.tga"
@@ -542,8 +558,11 @@ void testRoundTripAllSceneData() {
                        && mesh->material.clearcoatRoughnessTexture
                                == "textures/hero clearcoat rough.tga"
                        && mesh->material.clearcoatNormalTexture
-                               == "textures/hero clearcoat normal.tga",
-               "PBR, opacity and clearcoat texture-map asset references are restored");
+                               == "textures/hero clearcoat normal.tga"
+                       && mesh->material.specularTexture == "textures/hero specular.tga"
+                       && mesh->material.specularColorTexture
+                               == "textures/hero specular color.tga",
+               "PBR, opacity, clearcoat and specular texture references are restored");
         expect(mesh->overrideMtlMaterials,
                "explicit entity-level override of imported MTL materials is restored");
         expect(mesh->boxCollider.enabled && mesh->boxCollider.trigger
@@ -580,6 +599,12 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.clearcoatRoughnessMapTransform.uvScale[1], 0.9f)
                        && near(mesh->material.clearcoatNormalMapTransform.uvRotation, -0.6f)
                        && mesh->material.clearcoatNormalMapTransform.uvSet == 1U
+                       && near(mesh->material.specularMapTransform.uvScale[0], 1.4f)
+                       && near(mesh->material.specularMapTransform.uvOffset[1], -0.2f)
+                       && near(mesh->material.specularMapTransform.uvRotation, 0.3f)
+                       && mesh->material.specularMapTransform.uvSet == 1U
+                       && near(mesh->material.specularColorMapTransform.uvRotation, -0.25f)
+                       && mesh->material.specularColorMapTransform.clampToEdge
                        && mesh->material.opacityMapChannel
                                == nuby::ScalarTextureChannel::Matte
                        && near(mesh->material.albedoMapValueRange.base, -0.1f)
@@ -843,6 +868,13 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream malformedClearcoatFactor(invalidClearcoatFactor);
     expect(!nuby::SceneSerializer::load(target, malformedClearcoatFactor, error),
            "clearcoat factors above one are rejected from scene files");
+    std::string invalidSpecularFactor = valid.str();
+    expect(replaceRecordField(invalidSpecularFactor, "MATERIAL_SPECULAR", 1,
+                              "1.1", 1),
+           "v31 material records persist bounded specular strength");
+    std::stringstream malformedSpecularFactor(invalidSpecularFactor);
+    expect(!nuby::SceneSerializer::load(target, malformedSpecularFactor, error),
+           "specular strength above one is rejected from scene files");
     std::string invalidIor = valid.str();
     expect(replaceRecordField(invalidIor, "MATERIAL_CLEARCOAT", 1,
                               "0.9", 1),
@@ -912,6 +944,16 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV30(downgradeTextureSchema(valid.str(), 30, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV30, error),
+           "version-thirty scenes remain readable before specular persistence");
+    const nuby::Entity* legacyV30Mesh = target.find(2);
+    expect(legacyV30Mesh != nullptr
+                   && near(legacyV30Mesh->material.specularFactor, 1.0f)
+                   && near(legacyV30Mesh->material.specularColorFactor[0], 1.0f)
+                   && near(legacyV30Mesh->material.specularColorFactor[2], 1.0f),
+           "legacy v30 materials migrate to default KHR_materials_specular values");
 
     std::stringstream legacyV29(downgradeTextureSchema(valid.str(), 29, 8));
     expect(nuby::SceneSerializer::load(target, legacyV29, error),

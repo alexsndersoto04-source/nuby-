@@ -734,8 +734,8 @@ void testGltfPbrMaterialFactors() {
                    primitives, error),
            "unknown IOR extension fields are rejected rather than ignored");
     expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
-                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":2},"KHR_materials_ior":{"ior":1.6},"KHR_materials_clearcoat":{"clearcoatFactor":0.7}})JSON",
-                   R"JSON("extensionsRequired":["KHR_materials_unlit","KHR_materials_emissive_strength","KHR_materials_ior","KHR_materials_clearcoat"],)JSON"),
+                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":2},"KHR_materials_ior":{"ior":1.6},"KHR_materials_clearcoat":{"clearcoatFactor":0.7},"KHR_materials_specular":{"specularFactor":0.8}})JSON",
+                   R"JSON("extensionsRequired":["KHR_materials_unlit","KHR_materials_emissive_strength","KHR_materials_ior","KHR_materials_clearcoat","KHR_materials_specular"],)JSON"),
                    primitives, error),
            "supported material extensions may be required by the GLB asset");
     expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb("",
@@ -780,6 +780,39 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("extensions":{"KHR_materials_clearcoat":{"clearcoatFactor":1,"clearcoatNormalTexture":{"index":0,"scale":1001}}})JSON"),
                    primitives, error),
            "extreme clearcoat normal scales are rejected");
+
+    const std::string specularMaterial = R"JSON("extensions":{"KHR_materials_specular":{"specularFactor":0.62,"specularTexture":{"index":0,"texCoord":1},"specularColorFactor":[0.75,0.8,0.9],"specularColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.2,0.4],"rotation":0.3}}}}})JSON";
+    expect(nuby::parseGlbMeshes(makeUv1TexturedTriangleGlb(specularMaterial),
+                                primitives, error)
+                   && primitives.size() == 1U
+                   && std::fabs(primitives[0].material.specularFactor - 0.62f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.specularColorFactor[0] - 0.75f)
+                            < 1.0e-6f
+                   && std::fabs(primitives[0].material.specularColorFactor[2] - 0.9f)
+                            < 1.0e-6f
+                   && primitives[0].material.specularTexture.imageIndex == 0
+                   && primitives[0].material.specularTexture.uvSet == 1U
+                   && primitives[0].material.specularColorTexture.imageIndex == 0
+                   && std::fabs(primitives[0].material.specularColorTexture.uvOffset[1]
+                                - 0.4f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.specularColorTexture.uvRotation
+                                - 0.3f) < 1.0e-6f,
+           "specular factors and both transformed texture bindings import with UV1 routing");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(specularMaterial),
+                                 primitives, error),
+           "specular textures cannot select TEXCOORD_1 when it is absent");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_specular":{"specularFactor":1.1}})JSON"),
+                   primitives, error),
+           "specular factors outside [0, 1] are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_specular":{"specularColorFactor":[1,0,-0.1]}})JSON"),
+                   primitives, error),
+           "out-of-range specular color factors are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_specular":{"ignored":1}})JSON"),
+                   primitives, error),
+           "unknown specular extension fields are rejected");
 }
 
 void testGlbAlphaMaskMaterials() {

@@ -167,23 +167,27 @@ std::size_t materialBatchHash(const Material& material) {
     hashValue(hash, material.clearcoatFactor);
     hashValue(hash, material.clearcoatRoughness);
     hashValue(hash, material.clearcoatNormalScale);
+    hashValue(hash, material.specularFactor);
+    for (float component : material.specularColorFactor) hashValue(hash, component);
     hashValue(hash, material.unlit);
     hashValue(hash, material.proceduralGrid);
-    const std::array<const std::string*, 11> texturePaths{{
+    const std::array<const std::string*, 13> texturePaths{{
             &material.albedoTexture, &material.normalTexture,
             &material.metallicRoughnessTexture, &material.metallicTexture,
             &material.roughnessTexture, &material.occlusionTexture,
             &material.opacityTexture, &material.emissiveTexture,
             &material.clearcoatTexture, &material.clearcoatRoughnessTexture,
-            &material.clearcoatNormalTexture}};
+            &material.clearcoatNormalTexture, &material.specularTexture,
+            &material.specularColorTexture}};
     for (const std::string* path : texturePaths) hashValue(hash, *path);
-    const std::array<const TextureMapTransform*, 11> transforms{{
+    const std::array<const TextureMapTransform*, 13> transforms{{
             &material.albedoMapTransform, &material.normalMapTransform,
             &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
             &material.roughnessMapTransform, &material.occlusionMapTransform,
             &material.opacityMapTransform, &material.emissiveMapTransform,
             &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
-            &material.clearcoatNormalMapTransform}};
+            &material.clearcoatNormalMapTransform, &material.specularMapTransform,
+            &material.specularColorMapTransform}};
     for (const TextureMapTransform* transform : transforms) {
         for (float value : transform->uvScale) hashValue(hash, value);
         for (float value : transform->uvOffset) hashValue(hash, value);
@@ -225,6 +229,8 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.clearcoatFactor == right.clearcoatFactor
             && left.clearcoatRoughness == right.clearcoatRoughness
             && left.clearcoatNormalScale == right.clearcoatNormalScale
+            && left.specularFactor == right.specularFactor
+            && left.specularColorFactor == right.specularColorFactor
             && left.unlit == right.unlit
             && left.proceduralGrid == right.proceduralGrid
             && left.albedoTexture == right.albedoTexture
@@ -238,6 +244,8 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.clearcoatTexture == right.clearcoatTexture
             && left.clearcoatRoughnessTexture == right.clearcoatRoughnessTexture
             && left.clearcoatNormalTexture == right.clearcoatNormalTexture
+            && left.specularTexture == right.specularTexture
+            && left.specularColorTexture == right.specularColorTexture
             && sameTransform(left.albedoMapTransform, right.albedoMapTransform)
             && sameTransform(left.normalMapTransform, right.normalMapTransform)
             && sameTransform(left.metallicRoughnessMapTransform,
@@ -252,6 +260,9 @@ bool sameMaterial(const Material& left, const Material& right) {
                              right.clearcoatRoughnessMapTransform)
             && sameTransform(left.clearcoatNormalMapTransform,
                              right.clearcoatNormalMapTransform)
+            && sameTransform(left.specularMapTransform, right.specularMapTransform)
+            && sameTransform(left.specularColorMapTransform,
+                             right.specularColorMapTransform)
             && sameRange(left.albedoMapValueRange, right.albedoMapValueRange)
             && sameRange(left.normalMapValueRange, right.normalMapValueRange)
             && sameRange(left.metallicRoughnessMapValueRange,
@@ -400,6 +411,8 @@ uniform float uIndexOfRefraction;
 uniform float uClearcoatFactor;
 uniform float uClearcoatRoughness;
 uniform float uClearcoatNormalScale;
+uniform float uSpecularFactor;
+uniform vec3 uSpecularColorFactor;
 uniform int uUnlit;
 uniform int uHasTangents;
 uniform float uAmbientOcclusion;
@@ -414,6 +427,8 @@ uniform sampler2D uEmissiveTexture;
 uniform sampler2D uClearcoatTexture;
 uniform sampler2D uClearcoatRoughnessTexture;
 uniform sampler2D uClearcoatNormalTexture;
+uniform sampler2D uSpecularTexture;
+uniform sampler2D uSpecularColorTexture;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
 uniform vec2 uAlbedoUvRotation;
@@ -447,7 +462,13 @@ uniform vec2 uClearcoatRoughnessUvRotation;
 uniform vec2 uClearcoatNormalUvScale;
 uniform vec2 uClearcoatNormalUvOffset;
 uniform vec2 uClearcoatNormalUvRotation;
-uniform int uTextureUvSet[11];
+uniform vec2 uSpecularUvScale;
+uniform vec2 uSpecularUvOffset;
+uniform vec2 uSpecularUvRotation;
+uniform vec2 uSpecularColorUvScale;
+uniform vec2 uSpecularColorUvOffset;
+uniform vec2 uSpecularColorUvRotation;
+uniform int uTextureUvSet[13];
 uniform int uOpacityMapChannel;
 uniform vec2 uAlbedoMapBaseGain;
 uniform vec2 uNormalMapBaseGain;
@@ -468,6 +489,8 @@ uniform int uHasEmissiveTexture;
 uniform int uHasClearcoatTexture;
 uniform int uHasClearcoatRoughnessTexture;
 uniform int uHasClearcoatNormalTexture;
+uniform int uHasSpecularTexture;
+uniform int uHasSpecularColorTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 uniform int uFogEnabled;
@@ -588,7 +611,7 @@ vec3 evaluateAmbientSH(vec3 normal) {
 
 vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
                          vec3 baseColor, float metallic, float roughness,
-                         float dielectricReflectance, vec3 radiance) {
+                         vec3 dielectricReflectance, vec3 radiance) {
     float normalLight = max(dot(normal, lightDirection), 0.0);
     if (normalLight <= 0.0) return vec3(0.0);
 
@@ -596,7 +619,7 @@ vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
     float normalView = max(dot(normal, viewDirection), 0.001);
     float normalHalf = max(dot(normal, halfDirection), 0.0);
     float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
-    vec3 baseReflectance = mix(vec3(dielectricReflectance), baseColor, metallic);
+    vec3 baseReflectance = mix(dielectricReflectance, baseColor, metallic);
     vec3 fresnel = fresnelSchlick(viewHalf, baseReflectance);
     float distribution = distributionGGX(normalHalf, roughness);
     float geometryTerm = geometrySchlickGGX(normalView, roughness)
@@ -721,6 +744,10 @@ void main() {
     vec2 clearcoatNormalUv = transformUv(
             selectTextureUv(uTextureUvSet[10]), uClearcoatNormalUvScale,
             uClearcoatNormalUvOffset, uClearcoatNormalUvRotation);
+    vec2 specularUv = transformUv(selectTextureUv(uTextureUvSet[11]),
+            uSpecularUvScale, uSpecularUvOffset, uSpecularUvRotation);
+    vec2 specularColorUv = transformUv(selectTextureUv(uTextureUvSet[12]),
+            uSpecularColorUvScale, uSpecularColorUvOffset, uSpecularColorUvRotation);
     if (uHasAlbedoTexture != 0) {
         baseColor *= srgbToLinear(adjustTextureValues(
                 albedoSample.rgb, uAlbedoMapBaseGain));
@@ -798,8 +825,18 @@ void main() {
     float visibility = 1.0 - shadowAmount(normal, lightDirection)
             * clamp(uShadowStrength, 0.0, 1.0);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
+    float specularFactor = clamp(uSpecularFactor, 0.0, 1.0);
+    vec3 specularColorFactor = clamp(uSpecularColorFactor, 0.0, 1.0);
+    if (uHasSpecularTexture != 0) {
+        specularFactor *= texture(uSpecularTexture, specularUv).a;
+    }
+    if (uHasSpecularColorTexture != 0) {
+        specularColorFactor *= srgbToLinear(
+                texture(uSpecularColorTexture, specularColorUv).rgb);
+    }
     float iorRatio = (uIndexOfRefraction - 1.0) / (uIndexOfRefraction + 1.0);
-    float dielectricReflectance = iorRatio * iorRatio;
+    vec3 dielectricReflectance = iorRatio * iorRatio
+            * specularFactor * specularColorFactor;
     vec3 directionalRadiance = vec3(2.3, 2.15, 1.88)
             * uDirectionalLightColor * max(uDirectionalLightIntensity, 0.0);
     vec3 directLight = evaluateDirectLight(normal, viewDirection, lightDirection,
@@ -1858,6 +1895,8 @@ void Renderer::processPendingGpuUpload() {
                 part.material.clearcoatFactor = primitive.material.clearcoatFactor;
                 part.material.clearcoatRoughness = primitive.material.clearcoatRoughness;
                 part.material.clearcoatNormalScale = primitive.material.clearcoatNormalScale;
+                part.material.specularFactor = primitive.material.specularFactor;
+                part.material.specularColorFactor = primitive.material.specularColorFactor;
                 part.material.unlit = primitive.material.unlit;
                 part.material.metallic = primitive.material.metallicFactor;
                 part.material.roughness = primitive.material.roughnessFactor;
@@ -1907,6 +1946,14 @@ void Renderer::processPendingGpuUpload() {
                     part.material.clearcoatNormalTexture = applyTextureBinding(
                             primitive.material.clearcoatNormalTexture,
                             part.material.clearcoatNormalMapTransform);
+                }
+                if (primitive.material.specularFactor > 0.0f) {
+                    part.material.specularTexture = applyTextureBinding(
+                            primitive.material.specularTexture,
+                            part.material.specularMapTransform);
+                    part.material.specularColorTexture = applyTextureBinding(
+                            primitive.material.specularColorTexture,
+                            part.material.specularColorMapTransform);
                 }
                 if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
                     part.material.opacityTexture = part.material.albedoTexture;
@@ -2658,7 +2705,7 @@ void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> requiredMeshes;
     std::unordered_set<std::string> requiredTextures;
     const auto addMaterialTextures = [this, &requiredTextures](const Material& material) {
-        const std::array<const std::string*, 11> paths{{
+        const std::array<const std::string*, 13> paths{{
                 &material.albedoTexture,
                 &material.normalTexture,
                 &material.metallicRoughnessTexture,
@@ -2669,7 +2716,9 @@ void Renderer::loadSceneAssets() {
                 &material.emissiveTexture,
                 &material.clearcoatTexture,
                 &material.clearcoatRoughnessTexture,
-                &material.clearcoatNormalTexture
+                &material.clearcoatNormalTexture,
+                &material.specularTexture,
+                &material.specularColorTexture
         }};
         for (const std::string* path : paths) {
             if (path->empty()) continue;
@@ -2886,7 +2935,7 @@ int Renderer::sceneAssetStatus() const {
     bool missingTexture = false;
     bool failed = false;
     const auto inspectMaterial = [this, &missingTexture, &failed](const Material& material) {
-        const std::array<const std::string*, 11> paths{{
+        const std::array<const std::string*, 13> paths{{
                 &material.albedoTexture,
                 &material.normalTexture,
                 &material.metallicRoughnessTexture,
@@ -2897,7 +2946,9 @@ int Renderer::sceneAssetStatus() const {
                 &material.emissiveTexture,
                 &material.clearcoatTexture,
                 &material.clearcoatRoughnessTexture,
-                &material.clearcoatNormalTexture
+                &material.clearcoatNormalTexture,
+                &material.specularTexture,
+                &material.specularColorTexture
         }};
         for (const std::string* path : paths) {
             if (path->empty()) continue;
@@ -3723,6 +3774,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.clearcoatFactor = glGetUniformLocation(program_, "uClearcoatFactor");
     uniforms_.clearcoatRoughness = glGetUniformLocation(program_, "uClearcoatRoughness");
     uniforms_.clearcoatNormalScale = glGetUniformLocation(program_, "uClearcoatNormalScale");
+    uniforms_.specularFactor = glGetUniformLocation(program_, "uSpecularFactor");
+    uniforms_.specularColorFactor = glGetUniformLocation(program_, "uSpecularColorFactor");
     uniforms_.unlit = glGetUniformLocation(program_, "uUnlit");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.ambientSphericalHarmonics = glGetUniformLocation(program_, "uAmbientSH[0]");
@@ -3739,6 +3792,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
             program_, "uClearcoatRoughnessTexture");
     uniforms_.clearcoatNormalTexture = glGetUniformLocation(
             program_, "uClearcoatNormalTexture");
+    uniforms_.specularTexture = glGetUniformLocation(program_, "uSpecularTexture");
+    uniforms_.specularColorTexture = glGetUniformLocation(program_, "uSpecularColorTexture");
     uniforms_.opacityUvScale = glGetUniformLocation(program_, "uOpacityUvScale");
     uniforms_.opacityUvOffset = glGetUniformLocation(program_, "uOpacityUvOffset");
     uniforms_.opacityUvRotation = glGetUniformLocation(program_, "uOpacityUvRotation");
@@ -3767,21 +3822,27 @@ void Renderer::initialize(AAssetManager* assetManager) {
             program_, "uHasClearcoatRoughnessTexture");
     uniforms_.hasClearcoatNormalTexture = glGetUniformLocation(
             program_, "uHasClearcoatNormalTexture");
-    const std::array<const char*, 10> uvScaleNames{{
+    uniforms_.hasSpecularTexture = glGetUniformLocation(program_, "uHasSpecularTexture");
+    uniforms_.hasSpecularColorTexture = glGetUniformLocation(
+            program_, "uHasSpecularColorTexture");
+    const std::array<const char*, 12> uvScaleNames{{
             "uAlbedoUvScale", "uNormalUvScale", "uMetallicRoughnessUvScale",
             "uMetallicUvScale", "uRoughnessUvScale", "uOcclusionUvScale",
             "uEmissiveUvScale", "uClearcoatUvScale",
-            "uClearcoatRoughnessUvScale", "uClearcoatNormalUvScale"}};
-    const std::array<const char*, 10> uvOffsetNames{{
+            "uClearcoatRoughnessUvScale", "uClearcoatNormalUvScale",
+            "uSpecularUvScale", "uSpecularColorUvScale"}};
+    const std::array<const char*, 12> uvOffsetNames{{
             "uAlbedoUvOffset", "uNormalUvOffset", "uMetallicRoughnessUvOffset",
             "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset",
             "uEmissiveUvOffset", "uClearcoatUvOffset",
-            "uClearcoatRoughnessUvOffset", "uClearcoatNormalUvOffset"}};
-    const std::array<const char*, 10> uvRotationNames{{
+            "uClearcoatRoughnessUvOffset", "uClearcoatNormalUvOffset",
+            "uSpecularUvOffset", "uSpecularColorUvOffset"}};
+    const std::array<const char*, 12> uvRotationNames{{
             "uAlbedoUvRotation", "uNormalUvRotation", "uMetallicRoughnessUvRotation",
             "uMetallicUvRotation", "uRoughnessUvRotation", "uOcclusionUvRotation",
             "uEmissiveUvRotation", "uClearcoatUvRotation",
-            "uClearcoatRoughnessUvRotation", "uClearcoatNormalUvRotation"}};
+            "uClearcoatRoughnessUvRotation", "uClearcoatNormalUvRotation",
+            "uSpecularUvRotation", "uSpecularColorUvRotation"}};
     for (std::size_t map = 0; map < uniforms_.textureUvScale.size(); ++map) {
         uniforms_.textureUvScale[map] = glGetUniformLocation(program_, uvScaleNames[map]);
         uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
@@ -3889,6 +3950,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.clearcoatFactor, material.clearcoatFactor);
     glUniform1f(uniforms_.clearcoatRoughness, material.clearcoatRoughness);
     glUniform1f(uniforms_.clearcoatNormalScale, material.clearcoatNormalScale);
+    glUniform1f(uniforms_.specularFactor, material.specularFactor);
+    glUniform3fv(uniforms_.specularColorFactor, 1, material.specularColorFactor.data());
     glUniform1i(uniforms_.unlit, material.unlit ? 1 : 0);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
@@ -3911,6 +3974,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const GLuint clearcoatRoughnessTexture =
             textureFor(material.clearcoatRoughnessTexture);
     const GLuint clearcoatNormalTexture = textureFor(material.clearcoatNormalTexture);
+    const GLuint specularTexture = textureFor(material.specularTexture);
+    const GLuint specularColorTexture = textureFor(material.specularColorTexture);
     glUniform1i(uniforms_.albedoTexture, 1);
     glUniform1i(uniforms_.normalTexture, 2);
     glUniform1i(uniforms_.metallicRoughnessTexture, 3);
@@ -3922,6 +3987,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.clearcoatTexture, 9);
     glUniform1i(uniforms_.clearcoatRoughnessTexture, 10);
     glUniform1i(uniforms_.clearcoatNormalTexture, 11);
+    glUniform1i(uniforms_.specularTexture, 12);
+    glUniform1i(uniforms_.specularColorTexture, 13);
     glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasMetallicRoughnessTexture,
@@ -3936,6 +4003,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                 clearcoatRoughnessTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasClearcoatNormalTexture,
                 clearcoatNormalTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasSpecularTexture, specularTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasSpecularColorTexture,
+                specularColorTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.opacityMapChannel,
                 static_cast<GLint>(material.opacityMapChannel));
     glUniform2fv(uniforms_.opacityUvScale, 1,
@@ -3945,7 +4015,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const std::array<float, 2> opacityUvRotation =
             textureRotationPair(material.opacityMapTransform.uvRotation);
     glUniform2fv(uniforms_.opacityUvRotation, 1, opacityUvRotation.data());
-    const std::array<const TextureMapTransform*, 10> mapTransforms{{
+    const std::array<const TextureMapTransform*, 12> mapTransforms{{
             &material.albedoMapTransform,
             &material.normalMapTransform,
             &material.metallicRoughnessMapTransform,
@@ -3955,7 +4025,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
             &material.emissiveMapTransform,
             &material.clearcoatMapTransform,
             &material.clearcoatRoughnessMapTransform,
-            &material.clearcoatNormalMapTransform
+            &material.clearcoatNormalMapTransform,
+            &material.specularMapTransform,
+            &material.specularColorMapTransform
     }};
     for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
         glUniform2fv(uniforms_.textureUvScale[map], 1,
@@ -3966,14 +4038,15 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                 textureRotationPair(mapTransforms[map]->uvRotation);
         glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
     }
-    const std::array<const TextureMapTransform*, 11> uvSetTransforms{{
+    const std::array<const TextureMapTransform*, 13> uvSetTransforms{{
             &material.albedoMapTransform, &material.normalMapTransform,
             &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
             &material.roughnessMapTransform, &material.occlusionMapTransform,
             &material.opacityMapTransform, &material.emissiveMapTransform,
             &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
-            &material.clearcoatNormalMapTransform}};
-    std::array<GLint, 11> uvSets{};
+            &material.clearcoatNormalMapTransform, &material.specularMapTransform,
+            &material.specularColorMapTransform}};
+    std::array<GLint, 13> uvSets{};
     for (std::size_t map = 0; map < uvSetTransforms.size(); ++map) {
         uvSets[map] = static_cast<GLint>(uvSetTransforms[map]->uvSet);
     }
@@ -4044,6 +4117,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindTexture(GL_TEXTURE_2D, clearcoatRoughnessTexture);
     glActiveTexture(GL_TEXTURE11);
     glBindTexture(GL_TEXTURE_2D, clearcoatNormalTexture);
+    glActiveTexture(GL_TEXTURE12);
+    glBindTexture(GL_TEXTURE_2D, specularTexture);
+    glActiveTexture(GL_TEXTURE13);
+    glBindTexture(GL_TEXTURE_2D, specularColorTexture);
     const auto samplerFor = [this](const TextureMapTransform& map) {
         return map.clampToEdge ? clampSampler_ : repeatSampler_;
     };
@@ -4058,6 +4135,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindSampler(9, samplerFor(material.clearcoatMapTransform));
     glBindSampler(10, samplerFor(material.clearcoatRoughnessMapTransform));
     glBindSampler(11, samplerFor(material.clearcoatNormalMapTransform));
+    glBindSampler(12, samplerFor(material.specularMapTransform));
+    glBindSampler(13, samplerFor(material.specularColorMapTransform));
     glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(mesh.vao);

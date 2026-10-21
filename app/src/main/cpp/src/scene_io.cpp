@@ -174,6 +174,8 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.clearcoatTexture)
             || !validTexturePath(entity.material.clearcoatRoughnessTexture)
             || !validTexturePath(entity.material.clearcoatNormalTexture)
+            || !validTexturePath(entity.material.specularTexture)
+            || !validTexturePath(entity.material.specularColorTexture)
             || static_cast<unsigned int>(entity.material.opacityMapChannel)
                     > static_cast<unsigned int>(ScalarTextureChannel::Luminance)
             || static_cast<unsigned int>(entity.primitive)
@@ -191,6 +193,8 @@ bool validEntity(const Entity& entity) {
             || !validTextureMapTransform(entity.material.clearcoatMapTransform)
             || !validTextureMapTransform(entity.material.clearcoatRoughnessMapTransform)
             || !validTextureMapTransform(entity.material.clearcoatNormalMapTransform)
+            || !validTextureMapTransform(entity.material.specularMapTransform)
+            || !validTextureMapTransform(entity.material.specularColorMapTransform)
             || !validTextureMapValueRange(entity.material.albedoMapValueRange)
             || !validTextureMapValueRange(entity.material.normalMapValueRange)
             || !validTextureMapValueRange(entity.material.metallicRoughnessMapValueRange)
@@ -229,6 +233,16 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.material.clearcoatNormalScale)
             || entity.material.clearcoatNormalScale < 0.0f
             || entity.material.clearcoatNormalScale > 1000.0f
+            || !finite(entity.material.specularFactor)
+            || entity.material.specularFactor < 0.0f
+            || entity.material.specularFactor > 1.0f
+            || !finite3(entity.material.specularColorFactor)
+            || entity.material.specularColorFactor[0] < 0.0f
+            || entity.material.specularColorFactor[0] > 1.0f
+            || entity.material.specularColorFactor[1] < 0.0f
+            || entity.material.specularColorFactor[1] > 1.0f
+            || entity.material.specularColorFactor[2] < 0.0f
+            || entity.material.specularColorFactor[2] > 1.0f
             || !finite3(entity.spin.radiansPerSecond) || !finite3(entity.orbit.center)
             || !finite(entity.orbit.radius) || !finite(entity.orbit.angularSpeed)
             || !finite(entity.orbit.phase) || !finite(entity.orbit.verticalAmplitude)
@@ -563,6 +577,13 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTextureMapTransform(output, entity.material.clearcoatRoughnessMapTransform);
     writeTextureMapTransform(output, entity.material.clearcoatNormalMapTransform);
     output << '\n';
+    output << "MATERIAL_SPECULAR " << entity.material.specularFactor;
+    writeFloatArray(output, entity.material.specularColorFactor);
+    output << ' ' << std::quoted(entity.material.specularTexture)
+           << ' ' << std::quoted(entity.material.specularColorTexture);
+    writeTextureMapTransform(output, entity.material.specularMapTransform);
+    writeTextureMapTransform(output, entity.material.specularColorMapTransform);
+    output << '\n';
     output << "OPACITY_MAP_CHANNEL "
            << static_cast<unsigned int>(entity.material.opacityMapChannel) << '\n';
     output << "MATERIAL_MAP_MM";
@@ -850,6 +871,30 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !readTextureMapTransform(input,
                         entity.material.clearcoatNormalMapTransform, true, true, true)) {
             return fail(error, "Entity clearcoat material settings are invalid");
+        }
+    }
+    if (version >= 31) {
+        if (!readTag(input, "MATERIAL_SPECULAR", error)
+                || !(input >> entity.material.specularFactor)
+                || !readFloatArray(input, entity.material.specularColorFactor)
+                || !(input >> std::quoted(entity.material.specularTexture)
+                            >> std::quoted(entity.material.specularColorTexture))
+                || !validTexturePath(entity.material.specularTexture)
+                || !validTexturePath(entity.material.specularColorTexture)
+                || !std::isfinite(entity.material.specularFactor)
+                || entity.material.specularFactor < 0.0f
+                || entity.material.specularFactor > 1.0f
+                || entity.material.specularColorFactor[0] < 0.0f
+                || entity.material.specularColorFactor[0] > 1.0f
+                || entity.material.specularColorFactor[1] < 0.0f
+                || entity.material.specularColorFactor[1] > 1.0f
+                || entity.material.specularColorFactor[2] < 0.0f
+                || entity.material.specularColorFactor[2] > 1.0f
+                || !readTextureMapTransform(input,
+                        entity.material.specularMapTransform, true, true, true)
+                || !readTextureMapTransform(input,
+                        entity.material.specularColorMapTransform, true, true, true)) {
+            return fail(error, "Entity specular material settings are invalid");
         }
     }
     if (version >= 10) {

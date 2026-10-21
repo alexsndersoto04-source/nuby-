@@ -826,7 +826,8 @@ bool validateRequiredGltfExtensions(const JsonValue& root, std::string& error) {
                 && extension.stringValue != "KHR_materials_unlit"
                 && extension.stringValue != "KHR_materials_emissive_strength"
                 && extension.stringValue != "KHR_materials_ior"
-                && extension.stringValue != "KHR_materials_clearcoat") {
+                && extension.stringValue != "KHR_materials_clearcoat"
+                && extension.stringValue != "KHR_materials_specular") {
             return fail(error, "GLB requires an unsupported extension");
         }
     }
@@ -958,6 +959,41 @@ bool parseGltfMaterials(const JsonValue& root,
                                 || material.clearcoatNormalScale < 0.0f
                                 || material.clearcoatNormalScale > 1000.0f) {
                             return fail(error, "clearcoatNormalTexture scale must be finite and in [0, 1000]");
+                        }
+                    }
+                } else if (extension.first == "KHR_materials_specular") {
+                    if (extension.second.type != JsonValue::Type::Object
+                            || extension.second.objectValue.size() > 4U) {
+                        return fail(error, "KHR_materials_specular is invalid");
+                    }
+                    for (const auto& property : extension.second.objectValue) {
+                        if (property.first != "specularFactor"
+                                && property.first != "specularTexture"
+                                && property.first != "specularColorFactor"
+                                && property.first != "specularColorTexture") {
+                            return fail(error, "KHR_materials_specular contains an unsupported property");
+                        }
+                    }
+                    if (!optionalFloat(extension.second, "specularFactor", 1.0f,
+                                       material.specularFactor)
+                            || material.specularFactor < 0.0f
+                            || material.specularFactor > 1.0f
+                            || !parseTextureInfo(member(extension.second, "specularTexture"),
+                                    textureSources, material.specularTexture, error)
+                            || !parseTextureInfo(member(extension.second,
+                                    "specularColorTexture"), textureSources,
+                                    material.specularColorTexture, error)) {
+                        return fail(error, "KHR_materials_specular factor or texture binding is invalid");
+                    }
+                    const JsonValue* specularColor =
+                            member(extension.second, "specularColorFactor");
+                    if (specularColor != nullptr
+                            && !jsonFloatArray(specularColor, material.specularColorFactor)) {
+                        return fail(error, "specularColorFactor must contain three finite values");
+                    }
+                    for (float component : material.specularColorFactor) {
+                        if (component < 0.0f || component > 1.0f) {
+                            return fail(error, "specularColorFactor components must be in [0, 1]");
                         }
                     }
                 } else {
@@ -1345,12 +1381,13 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
             }
             if (parsed.hasMaterial && texCoord1 == nullptr) {
                 const GltfMaterial& material = parsed.material;
-                const std::array<const GltfTextureBinding*, 8> bindings{{
+                const std::array<const GltfTextureBinding*, 10> bindings{{
                         &material.baseColorTexture, &material.metallicRoughnessTexture,
                         &material.normalTexture, &material.occlusionTexture,
                         &material.emissiveTexture, &material.clearcoatTexture,
                         &material.clearcoatRoughnessTexture,
-                        &material.clearcoatNormalTexture}};
+                        &material.clearcoatNormalTexture, &material.specularTexture,
+                        &material.specularColorTexture}};
                 for (const GltfTextureBinding* binding : bindings) {
                     if (binding->imageIndex >= 0 && binding->uvSet == 1U) {
                         return fail(error, "GLB material selects TEXCOORD_1 but the primitive has no such accessor");
