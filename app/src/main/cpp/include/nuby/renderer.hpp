@@ -249,7 +249,7 @@ private:
         GLint clearcoatNormalScale = -1;
         GLint specularFactor = -1;
         GLint specularColorFactor = -1;
-        GLint sheenRoughness = -1;
+        GLint sheenRoughnessFactor = -1;
         GLint sheenColorFactor = -1;
         GLint unlit = -1;
         GLint ambientOcclusion = -1;
