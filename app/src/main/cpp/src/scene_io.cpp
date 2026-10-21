@@ -176,6 +176,8 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.clearcoatNormalTexture)
             || !validTexturePath(entity.material.specularTexture)
             || !validTexturePath(entity.material.specularColorTexture)
+            || !validTexturePath(entity.material.sheenColorTexture)
+            || !validTexturePath(entity.material.sheenRoughnessTexture)
             || static_cast<unsigned int>(entity.material.opacityMapChannel)
                     > static_cast<unsigned int>(ScalarTextureChannel::Luminance)
             || static_cast<unsigned int>(entity.primitive)
@@ -195,6 +197,8 @@ bool validEntity(const Entity& entity) {
             || !validTextureMapTransform(entity.material.clearcoatNormalMapTransform)
             || !validTextureMapTransform(entity.material.specularMapTransform)
             || !validTextureMapTransform(entity.material.specularColorMapTransform)
+            || !validTextureMapTransform(entity.material.sheenColorMapTransform)
+            || !validTextureMapTransform(entity.material.sheenRoughnessMapTransform)
             || !validTextureMapValueRange(entity.material.albedoMapValueRange)
             || !validTextureMapValueRange(entity.material.normalMapValueRange)
             || !validTextureMapValueRange(entity.material.metallicRoughnessMapValueRange)
@@ -243,6 +247,16 @@ bool validEntity(const Entity& entity) {
             || entity.material.specularColorFactor[1] > 1.0f
             || entity.material.specularColorFactor[2] < 0.0f
             || entity.material.specularColorFactor[2] > 1.0f
+            || !finite3(entity.material.sheenColorFactor)
+            || entity.material.sheenColorFactor[0] < 0.0f
+            || entity.material.sheenColorFactor[0] > 1.0f
+            || entity.material.sheenColorFactor[1] < 0.0f
+            || entity.material.sheenColorFactor[1] > 1.0f
+            || entity.material.sheenColorFactor[2] < 0.0f
+            || entity.material.sheenColorFactor[2] > 1.0f
+            || !finite(entity.material.sheenRoughness)
+            || entity.material.sheenRoughness < 0.0f
+            || entity.material.sheenRoughness > 1.0f
             || !finite3(entity.spin.radiansPerSecond) || !finite3(entity.orbit.center)
             || !finite(entity.orbit.radius) || !finite(entity.orbit.angularSpeed)
             || !finite(entity.orbit.phase) || !finite(entity.orbit.verticalAmplitude)
@@ -584,6 +598,14 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTextureMapTransform(output, entity.material.specularMapTransform);
     writeTextureMapTransform(output, entity.material.specularColorMapTransform);
     output << '\n';
+    output << "MATERIAL_SHEEN ";
+    writeFloatArray(output, entity.material.sheenColorFactor);
+    output << ' ' << entity.material.sheenRoughness
+           << ' ' << std::quoted(entity.material.sheenColorTexture)
+           << ' ' << std::quoted(entity.material.sheenRoughnessTexture);
+    writeTextureMapTransform(output, entity.material.sheenColorMapTransform);
+    writeTextureMapTransform(output, entity.material.sheenRoughnessMapTransform);
+    output << '\n';
     output << "OPACITY_MAP_CHANNEL "
            << static_cast<unsigned int>(entity.material.opacityMapChannel) << '\n';
     output << "MATERIAL_MAP_MM";
@@ -895,6 +917,30 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                 || !readTextureMapTransform(input,
                         entity.material.specularColorMapTransform, true, true, true)) {
             return fail(error, "Entity specular material settings are invalid");
+        }
+    }
+    if (version >= 32) {
+        if (!readTag(input, "MATERIAL_SHEEN", error)
+                || !readFloatArray(input, entity.material.sheenColorFactor)
+                || !(input >> entity.material.sheenRoughness
+                            >> std::quoted(entity.material.sheenColorTexture)
+                            >> std::quoted(entity.material.sheenRoughnessTexture))
+                || !validTexturePath(entity.material.sheenColorTexture)
+                || !validTexturePath(entity.material.sheenRoughnessTexture)
+                || entity.material.sheenColorFactor[0] < 0.0f
+                || entity.material.sheenColorFactor[0] > 1.0f
+                || entity.material.sheenColorFactor[1] < 0.0f
+                || entity.material.sheenColorFactor[1] > 1.0f
+                || entity.material.sheenColorFactor[2] < 0.0f
+                || entity.material.sheenColorFactor[2] > 1.0f
+                || !std::isfinite(entity.material.sheenRoughness)
+                || entity.material.sheenRoughness < 0.0f
+                || entity.material.sheenRoughness > 1.0f
+                || !readTextureMapTransform(input,
+                        entity.material.sheenColorMapTransform, true, true, true)
+                || !readTextureMapTransform(input,
+                        entity.material.sheenRoughnessMapTransform, true, true, true)) {
+            return fail(error, "Entity sheen material settings are invalid");
         }
     }
     if (version >= 10) {

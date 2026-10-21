@@ -169,25 +169,29 @@ std::size_t materialBatchHash(const Material& material) {
     hashValue(hash, material.clearcoatNormalScale);
     hashValue(hash, material.specularFactor);
     for (float component : material.specularColorFactor) hashValue(hash, component);
+    for (float component : material.sheenColorFactor) hashValue(hash, component);
+    hashValue(hash, material.sheenRoughness);
     hashValue(hash, material.unlit);
     hashValue(hash, material.proceduralGrid);
-    const std::array<const std::string*, 13> texturePaths{{
+    const std::array<const std::string*, 15> texturePaths{{
             &material.albedoTexture, &material.normalTexture,
             &material.metallicRoughnessTexture, &material.metallicTexture,
             &material.roughnessTexture, &material.occlusionTexture,
             &material.opacityTexture, &material.emissiveTexture,
             &material.clearcoatTexture, &material.clearcoatRoughnessTexture,
             &material.clearcoatNormalTexture, &material.specularTexture,
-            &material.specularColorTexture}};
+            &material.specularColorTexture, &material.sheenColorTexture,
+            &material.sheenRoughnessTexture}};
     for (const std::string* path : texturePaths) hashValue(hash, *path);
-    const std::array<const TextureMapTransform*, 13> transforms{{
+    const std::array<const TextureMapTransform*, 15> transforms{{
             &material.albedoMapTransform, &material.normalMapTransform,
             &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
             &material.roughnessMapTransform, &material.occlusionMapTransform,
             &material.opacityMapTransform, &material.emissiveMapTransform,
             &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
             &material.clearcoatNormalMapTransform, &material.specularMapTransform,
-            &material.specularColorMapTransform}};
+            &material.specularColorMapTransform, &material.sheenColorMapTransform,
+            &material.sheenRoughnessMapTransform}};
     for (const TextureMapTransform* transform : transforms) {
         for (float value : transform->uvScale) hashValue(hash, value);
         for (float value : transform->uvOffset) hashValue(hash, value);
@@ -231,6 +235,8 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.clearcoatNormalScale == right.clearcoatNormalScale
             && left.specularFactor == right.specularFactor
             && left.specularColorFactor == right.specularColorFactor
+            && left.sheenColorFactor == right.sheenColorFactor
+            && left.sheenRoughness == right.sheenRoughness
             && left.unlit == right.unlit
             && left.proceduralGrid == right.proceduralGrid
             && left.albedoTexture == right.albedoTexture
@@ -246,6 +252,8 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.clearcoatNormalTexture == right.clearcoatNormalTexture
             && left.specularTexture == right.specularTexture
             && left.specularColorTexture == right.specularColorTexture
+            && left.sheenColorTexture == right.sheenColorTexture
+            && left.sheenRoughnessTexture == right.sheenRoughnessTexture
             && sameTransform(left.albedoMapTransform, right.albedoMapTransform)
             && sameTransform(left.normalMapTransform, right.normalMapTransform)
             && sameTransform(left.metallicRoughnessMapTransform,
@@ -263,6 +271,9 @@ bool sameMaterial(const Material& left, const Material& right) {
             && sameTransform(left.specularMapTransform, right.specularMapTransform)
             && sameTransform(left.specularColorMapTransform,
                              right.specularColorMapTransform)
+            && sameTransform(left.sheenColorMapTransform, right.sheenColorMapTransform)
+            && sameTransform(left.sheenRoughnessMapTransform,
+                             right.sheenRoughnessMapTransform)
             && sameRange(left.albedoMapValueRange, right.albedoMapValueRange)
             && sameRange(left.normalMapValueRange, right.normalMapValueRange)
             && sameRange(left.metallicRoughnessMapValueRange,
@@ -413,6 +424,8 @@ uniform float uClearcoatRoughness;
 uniform float uClearcoatNormalScale;
 uniform float uSpecularFactor;
 uniform vec3 uSpecularColorFactor;
+uniform float uSheenRoughnessFactor;
+uniform vec3 uSheenColorFactor;
 uniform int uUnlit;
 uniform int uHasTangents;
 uniform float uAmbientOcclusion;
@@ -429,6 +442,8 @@ uniform sampler2D uClearcoatRoughnessTexture;
 uniform sampler2D uClearcoatNormalTexture;
 uniform sampler2D uSpecularTexture;
 uniform sampler2D uSpecularColorTexture;
+uniform sampler2D uSheenColorTexture;
+uniform sampler2D uSheenRoughnessTexture;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
 uniform vec2 uAlbedoUvRotation;
@@ -468,7 +483,13 @@ uniform vec2 uSpecularUvRotation;
 uniform vec2 uSpecularColorUvScale;
 uniform vec2 uSpecularColorUvOffset;
 uniform vec2 uSpecularColorUvRotation;
-uniform int uTextureUvSet[13];
+uniform vec2 uSheenColorUvScale;
+uniform vec2 uSheenColorUvOffset;
+uniform vec2 uSheenColorUvRotation;
+uniform vec2 uSheenRoughnessUvScale;
+uniform vec2 uSheenRoughnessUvOffset;
+uniform vec2 uSheenRoughnessUvRotation;
+uniform int uTextureUvSet[15];
 uniform int uOpacityMapChannel;
 uniform vec2 uAlbedoMapBaseGain;
 uniform vec2 uNormalMapBaseGain;
@@ -491,6 +512,8 @@ uniform int uHasClearcoatRoughnessTexture;
 uniform int uHasClearcoatNormalTexture;
 uniform int uHasSpecularTexture;
 uniform int uHasSpecularColorTexture;
+uniform int uHasSheenColorTexture;
+uniform int uHasSheenRoughnessTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 uniform int uFogEnabled;
@@ -649,6 +672,27 @@ vec3 evaluateClearcoatDirectLight(vec3 normal, vec3 viewDirection,
     return radiance * normalLight * specular;
 }
 
+vec3 evaluateSheenDirectLight(vec3 normal, vec3 viewDirection,
+                              vec3 lightDirection, float roughness,
+                              vec3 sheenColor, vec3 radiance) {
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    float normalView = max(dot(normal, viewDirection), 0.001);
+    if (normalLight <= 0.0) return vec3(0.0);
+    vec3 halfVector = lightDirection + viewDirection;
+    float halfLengthSquared = dot(halfVector, halfVector);
+    if (halfLengthSquared <= 0.000001) return vec3(0.0);
+    vec3 halfDirection = halfVector * inversesqrt(halfLengthSquared);
+    float normalHalf = max(dot(normal, halfDirection), 0.0);
+    float alpha = max(roughness * roughness, 0.0001);
+    float inverseAlpha = 1.0 / alpha;
+    float sineSquaredHalf = max(1.0 - normalHalf * normalHalf, 0.0);
+    float distribution = (2.0 + inverseAlpha)
+            * pow(sineSquaredHalf, 0.5 * inverseAlpha) / (2.0 * 3.14159265);
+    float visibility = 1.0 / max(4.0 * (normalLight + normalView
+            - normalLight * normalView), 0.001);
+    return sheenColor * radiance * normalLight * distribution * visibility;
+}
+
 vec3 applyTangentNormal(vec3 geometricNormal, vec3 tangentNormal, vec2 uv,
                         bool useAuthoredTangent) {
     if (useAuthoredTangent) {
@@ -748,6 +792,11 @@ void main() {
             uSpecularUvScale, uSpecularUvOffset, uSpecularUvRotation);
     vec2 specularColorUv = transformUv(selectTextureUv(uTextureUvSet[12]),
             uSpecularColorUvScale, uSpecularColorUvOffset, uSpecularColorUvRotation);
+    vec2 sheenColorUv = transformUv(selectTextureUv(uTextureUvSet[13]),
+            uSheenColorUvScale, uSheenColorUvOffset, uSheenColorUvRotation);
+    vec2 sheenRoughnessUv = transformUv(selectTextureUv(uTextureUvSet[14]),
+            uSheenRoughnessUvScale, uSheenRoughnessUvOffset,
+            uSheenRoughnessUvRotation);
     if (uHasAlbedoTexture != 0) {
         baseColor *= srgbToLinear(adjustTextureValues(
                 albedoSample.rgb, uAlbedoMapBaseGain));
@@ -822,6 +871,18 @@ void main() {
                 uHasTangents != 0 && defaultClearcoatNormalUv);
     }
 
+    vec3 sheenColor = clamp(uSheenColorFactor, 0.0, 1.0);
+    float sheenColorStrength = max(max(sheenColor.r, sheenColor.g), sheenColor.b);
+    if (sheenColorStrength > 0.0 && uHasSheenColorTexture != 0) {
+        sheenColor *= srgbToLinear(texture(uSheenColorTexture, sheenColorUv).rgb);
+    }
+    float sheenRoughness = clamp(uSheenRoughnessFactor, 0.0, 1.0);
+    if (sheenColorStrength > 0.0 && uHasSheenRoughnessTexture != 0) {
+        sheenRoughness *= texture(uSheenRoughnessTexture, sheenRoughnessUv).a;
+    }
+    sheenColorStrength = max(max(sheenColor.r, sheenColor.g), sheenColor.b);
+    sheenRoughness = clamp(sheenRoughness, 0.0, 1.0);
+
     float visibility = 1.0 - shadowAmount(normal, lightDirection)
             * clamp(uShadowStrength, 0.0, 1.0);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
@@ -848,6 +909,12 @@ void main() {
                 viewDirection, lightDirection, clearcoatRoughness,
                 directionalRadiance) * visibility;
     }
+    vec3 sheenDirectLight = vec3(0.0);
+    if (sheenColorStrength > 0.0) {
+        sheenDirectLight = evaluateSheenDirectLight(normal, viewDirection,
+                lightDirection, max(sheenRoughness, 0.07), sheenColor,
+                directionalRadiance) * visibility;
+    }
 
     for (int index = 0; index < 4; ++index) {
         if (index >= uPointLightCount) break;
@@ -869,6 +936,11 @@ void main() {
             clearcoatDirectLight += evaluateClearcoatDirectLight(clearcoatNormal,
                     viewDirection, pointDirection, clearcoatRoughness, pointRadiance);
         }
+        if (sheenColorStrength > 0.0) {
+            sheenDirectLight += evaluateSheenDirectLight(normal, viewDirection,
+                    pointDirection, max(sheenRoughness, 0.07), sheenColor,
+                    pointRadiance);
+        }
     }
 
     vec3 ambientLight = max(evaluateAmbientSH(normal), vec3(0.0));
@@ -886,7 +958,15 @@ void main() {
         emission *= srgbToLinear(adjustTextureValues(
                 emissiveSample, uEmissiveMapBaseGain));
     }
-    vec3 layeredLighting = ambient + directLight;
+    vec3 baseLayerLighting = ambient + directLight;
+    if (sheenColorStrength > 0.0) {
+        float sheenView = max(dot(normal, viewDirection), 0.0);
+        float sheenEnergyCompensation = clamp(sheenColorStrength * 0.5
+                * pow(1.0 - sheenView, 5.0), 0.0, 0.8);
+        baseLayerLighting *= 1.0 - sheenEnergyCompensation;
+        baseLayerLighting += sheenDirectLight;
+    }
+    vec3 layeredLighting = baseLayerLighting;
     if (clearcoatFactor > 0.0) {
         float coatView = max(dot(clearcoatNormal, viewDirection), 0.0);
         float coatFresnel = 0.04 + 0.96 * pow(1.0 - coatView, 5.0);
@@ -1897,6 +1977,8 @@ void Renderer::processPendingGpuUpload() {
                 part.material.clearcoatNormalScale = primitive.material.clearcoatNormalScale;
                 part.material.specularFactor = primitive.material.specularFactor;
                 part.material.specularColorFactor = primitive.material.specularColorFactor;
+                part.material.sheenColorFactor = primitive.material.sheenColorFactor;
+                part.material.sheenRoughness = primitive.material.sheenRoughness;
                 part.material.unlit = primitive.material.unlit;
                 part.material.metallic = primitive.material.metallicFactor;
                 part.material.roughness = primitive.material.roughnessFactor;
@@ -1946,6 +2028,16 @@ void Renderer::processPendingGpuUpload() {
                     part.material.clearcoatNormalTexture = applyTextureBinding(
                             primitive.material.clearcoatNormalTexture,
                             part.material.clearcoatNormalMapTransform);
+                }
+                if (primitive.material.sheenColorFactor[0] > 0.0f
+                        || primitive.material.sheenColorFactor[1] > 0.0f
+                        || primitive.material.sheenColorFactor[2] > 0.0f) {
+                    part.material.sheenColorTexture = applyTextureBinding(
+                            primitive.material.sheenColorTexture,
+                            part.material.sheenColorMapTransform);
+                    part.material.sheenRoughnessTexture = applyTextureBinding(
+                            primitive.material.sheenRoughnessTexture,
+                            part.material.sheenRoughnessMapTransform);
                 }
                 if (primitive.material.specularFactor > 0.0f) {
                     part.material.specularTexture = applyTextureBinding(
@@ -2705,7 +2797,7 @@ void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> requiredMeshes;
     std::unordered_set<std::string> requiredTextures;
     const auto addMaterialTextures = [this, &requiredTextures](const Material& material) {
-        const std::array<const std::string*, 13> paths{{
+        const std::array<const std::string*, 15> paths{{
                 &material.albedoTexture,
                 &material.normalTexture,
                 &material.metallicRoughnessTexture,
@@ -2718,7 +2810,9 @@ void Renderer::loadSceneAssets() {
                 &material.clearcoatRoughnessTexture,
                 &material.clearcoatNormalTexture,
                 &material.specularTexture,
-                &material.specularColorTexture
+                &material.specularColorTexture,
+                &material.sheenColorTexture,
+                &material.sheenRoughnessTexture
         }};
         for (const std::string* path : paths) {
             if (path->empty()) continue;
@@ -2935,7 +3029,7 @@ int Renderer::sceneAssetStatus() const {
     bool missingTexture = false;
     bool failed = false;
     const auto inspectMaterial = [this, &missingTexture, &failed](const Material& material) {
-        const std::array<const std::string*, 13> paths{{
+        const std::array<const std::string*, 15> paths{{
                 &material.albedoTexture,
                 &material.normalTexture,
                 &material.metallicRoughnessTexture,
@@ -2948,7 +3042,9 @@ int Renderer::sceneAssetStatus() const {
                 &material.clearcoatRoughnessTexture,
                 &material.clearcoatNormalTexture,
                 &material.specularTexture,
-                &material.specularColorTexture
+                &material.specularColorTexture,
+                &material.sheenColorTexture,
+                &material.sheenRoughnessTexture
         }};
         for (const std::string* path : paths) {
             if (path->empty()) continue;
@@ -3776,6 +3872,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.clearcoatNormalScale = glGetUniformLocation(program_, "uClearcoatNormalScale");
     uniforms_.specularFactor = glGetUniformLocation(program_, "uSpecularFactor");
     uniforms_.specularColorFactor = glGetUniformLocation(program_, "uSpecularColorFactor");
+    uniforms_.sheenColorFactor = glGetUniformLocation(program_, "uSheenColorFactor");
+    uniforms_.sheenRoughnessFactor = glGetUniformLocation(program_, "uSheenRoughnessFactor");
     uniforms_.unlit = glGetUniformLocation(program_, "uUnlit");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.ambientSphericalHarmonics = glGetUniformLocation(program_, "uAmbientSH[0]");
@@ -3794,6 +3892,9 @@ void Renderer::initialize(AAssetManager* assetManager) {
             program_, "uClearcoatNormalTexture");
     uniforms_.specularTexture = glGetUniformLocation(program_, "uSpecularTexture");
     uniforms_.specularColorTexture = glGetUniformLocation(program_, "uSpecularColorTexture");
+    uniforms_.sheenColorTexture = glGetUniformLocation(program_, "uSheenColorTexture");
+    uniforms_.sheenRoughnessTexture = glGetUniformLocation(
+            program_, "uSheenRoughnessTexture");
     uniforms_.opacityUvScale = glGetUniformLocation(program_, "uOpacityUvScale");
     uniforms_.opacityUvOffset = glGetUniformLocation(program_, "uOpacityUvOffset");
     uniforms_.opacityUvRotation = glGetUniformLocation(program_, "uOpacityUvRotation");
@@ -3825,24 +3926,31 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.hasSpecularTexture = glGetUniformLocation(program_, "uHasSpecularTexture");
     uniforms_.hasSpecularColorTexture = glGetUniformLocation(
             program_, "uHasSpecularColorTexture");
-    const std::array<const char*, 12> uvScaleNames{{
+    uniforms_.hasSheenColorTexture = glGetUniformLocation(
+            program_, "uHasSheenColorTexture");
+    uniforms_.hasSheenRoughnessTexture = glGetUniformLocation(
+            program_, "uHasSheenRoughnessTexture");
+    const std::array<const char*, 14> uvScaleNames{{
             "uAlbedoUvScale", "uNormalUvScale", "uMetallicRoughnessUvScale",
             "uMetallicUvScale", "uRoughnessUvScale", "uOcclusionUvScale",
             "uEmissiveUvScale", "uClearcoatUvScale",
             "uClearcoatRoughnessUvScale", "uClearcoatNormalUvScale",
-            "uSpecularUvScale", "uSpecularColorUvScale"}};
-    const std::array<const char*, 12> uvOffsetNames{{
+            "uSpecularUvScale", "uSpecularColorUvScale",
+            "uSheenColorUvScale", "uSheenRoughnessUvScale"}};
+    const std::array<const char*, 14> uvOffsetNames{{
             "uAlbedoUvOffset", "uNormalUvOffset", "uMetallicRoughnessUvOffset",
             "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset",
             "uEmissiveUvOffset", "uClearcoatUvOffset",
             "uClearcoatRoughnessUvOffset", "uClearcoatNormalUvOffset",
-            "uSpecularUvOffset", "uSpecularColorUvOffset"}};
-    const std::array<const char*, 12> uvRotationNames{{
+            "uSpecularUvOffset", "uSpecularColorUvOffset",
+            "uSheenColorUvOffset", "uSheenRoughnessUvOffset"}};
+    const std::array<const char*, 14> uvRotationNames{{
             "uAlbedoUvRotation", "uNormalUvRotation", "uMetallicRoughnessUvRotation",
             "uMetallicUvRotation", "uRoughnessUvRotation", "uOcclusionUvRotation",
             "uEmissiveUvRotation", "uClearcoatUvRotation",
             "uClearcoatRoughnessUvRotation", "uClearcoatNormalUvRotation",
-            "uSpecularUvRotation", "uSpecularColorUvRotation"}};
+            "uSpecularUvRotation", "uSpecularColorUvRotation",
+            "uSheenColorUvRotation", "uSheenRoughnessUvRotation"}};
     for (std::size_t map = 0; map < uniforms_.textureUvScale.size(); ++map) {
         uniforms_.textureUvScale[map] = glGetUniformLocation(program_, uvScaleNames[map]);
         uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
@@ -3952,6 +4060,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.clearcoatNormalScale, material.clearcoatNormalScale);
     glUniform1f(uniforms_.specularFactor, material.specularFactor);
     glUniform3fv(uniforms_.specularColorFactor, 1, material.specularColorFactor.data());
+    glUniform3fv(uniforms_.sheenColorFactor, 1, material.sheenColorFactor.data());
+    glUniform1f(uniforms_.sheenRoughnessFactor, material.sheenRoughness);
     glUniform1i(uniforms_.unlit, material.unlit ? 1 : 0);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
@@ -3976,6 +4086,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const GLuint clearcoatNormalTexture = textureFor(material.clearcoatNormalTexture);
     const GLuint specularTexture = textureFor(material.specularTexture);
     const GLuint specularColorTexture = textureFor(material.specularColorTexture);
+    const GLuint sheenColorTexture = textureFor(material.sheenColorTexture);
+    const GLuint sheenRoughnessTexture = textureFor(material.sheenRoughnessTexture);
     glUniform1i(uniforms_.albedoTexture, 1);
     glUniform1i(uniforms_.normalTexture, 2);
     glUniform1i(uniforms_.metallicRoughnessTexture, 3);
@@ -3989,6 +4101,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.clearcoatNormalTexture, 11);
     glUniform1i(uniforms_.specularTexture, 12);
     glUniform1i(uniforms_.specularColorTexture, 13);
+    glUniform1i(uniforms_.sheenColorTexture, 14);
+    glUniform1i(uniforms_.sheenRoughnessTexture, 15);
     glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasMetallicRoughnessTexture,
@@ -4006,6 +4120,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.hasSpecularTexture, specularTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasSpecularColorTexture,
                 specularColorTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasSheenColorTexture, sheenColorTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasSheenRoughnessTexture,
+                sheenRoughnessTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.opacityMapChannel,
                 static_cast<GLint>(material.opacityMapChannel));
     glUniform2fv(uniforms_.opacityUvScale, 1,
@@ -4015,7 +4132,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const std::array<float, 2> opacityUvRotation =
             textureRotationPair(material.opacityMapTransform.uvRotation);
     glUniform2fv(uniforms_.opacityUvRotation, 1, opacityUvRotation.data());
-    const std::array<const TextureMapTransform*, 12> mapTransforms{{
+    const std::array<const TextureMapTransform*, 14> mapTransforms{{
             &material.albedoMapTransform,
             &material.normalMapTransform,
             &material.metallicRoughnessMapTransform,
@@ -4027,7 +4144,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
             &material.clearcoatRoughnessMapTransform,
             &material.clearcoatNormalMapTransform,
             &material.specularMapTransform,
-            &material.specularColorMapTransform
+            &material.specularColorMapTransform,
+            &material.sheenColorMapTransform,
+            &material.sheenRoughnessMapTransform
     }};
     for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
         glUniform2fv(uniforms_.textureUvScale[map], 1,
@@ -4038,15 +4157,16 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                 textureRotationPair(mapTransforms[map]->uvRotation);
         glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
     }
-    const std::array<const TextureMapTransform*, 13> uvSetTransforms{{
+    const std::array<const TextureMapTransform*, 15> uvSetTransforms{{
             &material.albedoMapTransform, &material.normalMapTransform,
             &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
             &material.roughnessMapTransform, &material.occlusionMapTransform,
             &material.opacityMapTransform, &material.emissiveMapTransform,
             &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
             &material.clearcoatNormalMapTransform, &material.specularMapTransform,
-            &material.specularColorMapTransform}};
-    std::array<GLint, 13> uvSets{};
+            &material.specularColorMapTransform, &material.sheenColorMapTransform,
+            &material.sheenRoughnessMapTransform}};
+    std::array<GLint, 15> uvSets{};
     for (std::size_t map = 0; map < uvSetTransforms.size(); ++map) {
         uvSets[map] = static_cast<GLint>(uvSetTransforms[map]->uvSet);
     }
@@ -4121,6 +4241,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindTexture(GL_TEXTURE_2D, specularTexture);
     glActiveTexture(GL_TEXTURE13);
     glBindTexture(GL_TEXTURE_2D, specularColorTexture);
+    glActiveTexture(GL_TEXTURE14);
+    glBindTexture(GL_TEXTURE_2D, sheenColorTexture);
+    glActiveTexture(GL_TEXTURE15);
+    glBindTexture(GL_TEXTURE_2D, sheenRoughnessTexture);
     const auto samplerFor = [this](const TextureMapTransform& map) {
         return map.clampToEdge ? clampSampler_ : repeatSampler_;
     };
@@ -4137,6 +4261,8 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindSampler(11, samplerFor(material.clearcoatNormalMapTransform));
     glBindSampler(12, samplerFor(material.specularMapTransform));
     glBindSampler(13, samplerFor(material.specularColorMapTransform));
+    glBindSampler(14, samplerFor(material.sheenColorMapTransform));
+    glBindSampler(15, samplerFor(material.sheenRoughnessMapTransform));
     glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(mesh.vao);

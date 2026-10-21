@@ -734,8 +734,8 @@ void testGltfPbrMaterialFactors() {
                    primitives, error),
            "unknown IOR extension fields are rejected rather than ignored");
     expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
-                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":2},"KHR_materials_ior":{"ior":1.6},"KHR_materials_clearcoat":{"clearcoatFactor":0.7},"KHR_materials_specular":{"specularFactor":0.8}})JSON",
-                   R"JSON("extensionsRequired":["KHR_materials_unlit","KHR_materials_emissive_strength","KHR_materials_ior","KHR_materials_clearcoat","KHR_materials_specular"],)JSON"),
+                   R"JSON("extensions":{"KHR_materials_emissive_strength":{"emissiveStrength":2},"KHR_materials_ior":{"ior":1.6},"KHR_materials_clearcoat":{"clearcoatFactor":0.7},"KHR_materials_specular":{"specularFactor":0.8},"KHR_materials_sheen":{"sheenColorFactor":[0,0,0]}})JSON",
+                   R"JSON("extensionsRequired":["KHR_materials_emissive_strength","KHR_materials_ior","KHR_materials_clearcoat","KHR_materials_specular","KHR_materials_sheen"],)JSON"),
                    primitives, error),
            "supported material extensions may be required by the GLB asset");
     expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb("",
@@ -813,6 +813,45 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("extensions":{"KHR_materials_specular":{"ignored":1}})JSON"),
                    primitives, error),
            "unknown specular extension fields are rejected");
+
+    const std::string sheenMaterial = R"JSON("extensions":{"KHR_materials_sheen":{"sheenColorFactor":[0.25,0.5,0.75],"sheenColorTexture":{"index":0,"texCoord":1,"extensions":{"KHR_texture_transform":{"offset":[0.1,0.2],"scale":[2,3],"rotation":0.4}}},"sheenRoughnessFactor":0.35,"sheenRoughnessTexture":{"index":0,"texCoord":1}}})JSON";
+    expect(nuby::parseGlbMeshes(makeUv1TexturedTriangleGlb(sheenMaterial),
+                                primitives, error)
+                   && primitives.size() == 1U
+                   && std::fabs(primitives[0].material.sheenColorFactor[0] - 0.25f)
+                           < 1.0e-6f
+                   && std::fabs(primitives[0].material.sheenColorFactor[2] - 0.75f)
+                           < 1.0e-6f
+                   && std::fabs(primitives[0].material.sheenRoughness - 0.35f)
+                           < 1.0e-6f
+                   && primitives[0].material.sheenColorTexture.imageIndex == 0
+                   && primitives[0].material.sheenColorTexture.uvSet == 1U
+                   && std::fabs(primitives[0].material.sheenColorTexture.uvScale[1] - 3.0f)
+                           < 1.0e-6f
+                   && std::fabs(primitives[0].material.sheenColorTexture.uvRotation - 0.4f)
+                           < 1.0e-6f
+                   && primitives[0].material.sheenRoughnessTexture.imageIndex == 0
+                   && primitives[0].material.sheenRoughnessTexture.uvSet == 1U,
+           "sheen factors and both texture bindings import with UV1 and transforms");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(sheenMaterial),
+                                 primitives, error),
+           "sheen textures cannot select TEXCOORD_1 when it is absent");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_sheen":{"sheenColorFactor":[1,0,-0.1]}})JSON"),
+                   primitives, error),
+           "out-of-range sheen color factors are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_sheen":{"sheenRoughnessFactor":1.1}})JSON"),
+                   primitives, error),
+           "out-of-range sheen roughness factors are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_sheen":{"unexpected":1}})JSON"),
+                   primitives, error),
+           "unknown sheen extension fields are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_sheen":{"sheenColorFactor":[1,1,1]}})JSON"),
+                   primitives, error),
+           "unlit and sheen materials are rejected as incompatible");
 }
 
 void testGlbAlphaMaskMaterials() {

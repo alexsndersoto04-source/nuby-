@@ -827,7 +827,8 @@ bool validateRequiredGltfExtensions(const JsonValue& root, std::string& error) {
                 && extension.stringValue != "KHR_materials_emissive_strength"
                 && extension.stringValue != "KHR_materials_ior"
                 && extension.stringValue != "KHR_materials_clearcoat"
-                && extension.stringValue != "KHR_materials_specular") {
+                && extension.stringValue != "KHR_materials_specular"
+                && extension.stringValue != "KHR_materials_sheen") {
             return fail(error, "GLB requires an unsupported extension");
         }
     }
@@ -884,6 +885,7 @@ bool parseGltfMaterials(const JsonValue& root,
                 return fail(error, "GLB normalTexture scale must be finite and in [0, 1000]");
             }
         }
+        bool hasSheenExtension = false;
         if (const JsonValue* extensions = member(source, "extensions"); extensions != nullptr) {
             if (extensions->type != JsonValue::Type::Object) {
                 return fail(error, "GLB material extensions must be an object");
@@ -996,10 +998,47 @@ bool parseGltfMaterials(const JsonValue& root,
                             return fail(error, "specularColorFactor components must be in [0, 1]");
                         }
                     }
+                } else if (extension.first == "KHR_materials_sheen") {
+                    hasSheenExtension = true;
+                    if (extension.second.type != JsonValue::Type::Object
+                            || extension.second.objectValue.size() > 4U) {
+                        return fail(error, "KHR_materials_sheen is invalid");
+                    }
+                    for (const auto& property : extension.second.objectValue) {
+                        if (property.first != "sheenColorFactor"
+                                && property.first != "sheenColorTexture"
+                                && property.first != "sheenRoughnessFactor"
+                                && property.first != "sheenRoughnessTexture") {
+                            return fail(error, "KHR_materials_sheen contains an unsupported property");
+                        }
+                    }
+                    const JsonValue* sheenColor =
+                            member(extension.second, "sheenColorFactor");
+                    if ((sheenColor != nullptr
+                                && !jsonFloatArray(sheenColor, material.sheenColorFactor))
+                            || !optionalFloat(extension.second, "sheenRoughnessFactor", 0.0f,
+                                              material.sheenRoughness)
+                            || material.sheenRoughness < 0.0f
+                            || material.sheenRoughness > 1.0f
+                            || !parseTextureInfo(member(extension.second, "sheenColorTexture"),
+                                    textureSources, material.sheenColorTexture, error)
+                            || !parseTextureInfo(member(extension.second,
+                                    "sheenRoughnessTexture"), textureSources,
+                                    material.sheenRoughnessTexture, error)) {
+                        return fail(error, "KHR_materials_sheen factors or texture bindings are invalid");
+                    }
+                    for (float component : material.sheenColorFactor) {
+                        if (component < 0.0f || component > 1.0f) {
+                            return fail(error, "sheenColorFactor components must be in [0, 1]");
+                        }
+                    }
                 } else {
                     return fail(error, "GLB material uses an unsupported extension");
                 }
             }
+        }
+        if (material.unlit && hasSheenExtension) {
+            return fail(error, "KHR_materials_sheen cannot be combined with KHR_materials_unlit");
         }
         if (const JsonValue* occlusion = member(source, "occlusionTexture"); occlusion != nullptr) {
             if (!optionalFloat(*occlusion, "strength", 1.0f, material.occlusionStrength)
@@ -1381,13 +1420,14 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
             }
             if (parsed.hasMaterial && texCoord1 == nullptr) {
                 const GltfMaterial& material = parsed.material;
-                const std::array<const GltfTextureBinding*, 10> bindings{{
+                const std::array<const GltfTextureBinding*, 12> bindings{{
                         &material.baseColorTexture, &material.metallicRoughnessTexture,
                         &material.normalTexture, &material.occlusionTexture,
                         &material.emissiveTexture, &material.clearcoatTexture,
                         &material.clearcoatRoughnessTexture,
                         &material.clearcoatNormalTexture, &material.specularTexture,
-                        &material.specularColorTexture}};
+                        &material.specularColorTexture, &material.sheenColorTexture,
+                        &material.sheenRoughnessTexture}};
                 for (const GltfTextureBinding* binding : bindings) {
                     if (binding->imageIndex >= 0 && binding->uvSet == 1U) {
                         return fail(error, "GLB material selects TEXCOORD_1 but the primitive has no such accessor");

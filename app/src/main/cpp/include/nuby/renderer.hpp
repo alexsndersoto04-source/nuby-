@@ -249,6 +249,8 @@ private:
         GLint clearcoatNormalScale = -1;
         GLint specularFactor = -1;
         GLint specularColorFactor = -1;
+        GLint sheenRoughness = -1;
+        GLint sheenColorFactor = -1;
         GLint unlit = -1;
         GLint ambientOcclusion = -1;
         GLint ambientSphericalHarmonics = -1;
@@ -265,6 +267,8 @@ private:
         GLint clearcoatNormalTexture = -1;
         GLint specularTexture = -1;
         GLint specularColorTexture = -1;
+        GLint sheenColorTexture = -1;
+        GLint sheenRoughnessTexture = -1;
         GLint hasAlbedoTexture = -1;
         GLint hasNormalTexture = -1;
         GLint hasMetallicRoughnessTexture = -1;
@@ -278,15 +282,17 @@ private:
         GLint hasClearcoatNormalTexture = -1;
         GLint hasSpecularTexture = -1;
         GLint hasSpecularColorTexture = -1;
+        GLint hasSheenColorTexture = -1;
+        GLint hasSheenRoughnessTexture = -1;
         GLint opacityMapChannel = -1;
         GLint emissiveUvScale = -1;
         GLint emissiveUvOffset = -1;
         GLint opacityUvScale = -1;
         GLint opacityUvOffset = -1;
         GLint opacityUvRotation = -1;
-        std::array<GLint, 12> textureUvScale{};
-        std::array<GLint, 12> textureUvOffset{};
-        std::array<GLint, 12> textureUvRotation{};
+        std::array<GLint, 14> textureUvScale{};
+        std::array<GLint, 14> textureUvOffset{};
+        std::array<GLint, 14> textureUvRotation{};
         GLint textureUvSet = -1;
         GLint albedoUvSet = -1;
         std::array<GLint, 8> textureMapValueRange{};

@@ -72,8 +72,11 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 31") {
+        if (line == "NUBY_SCENE 32") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("MATERIAL_SHEEN ", 0) == 0
+                && targetVersion < 32) {
+            continue;
         } else if (line.rfind("MATERIAL_SPECULAR ", 0) == 0
                 && targetVersion < 31) {
             continue;
@@ -272,6 +275,8 @@ nuby::Scene makeScene() {
     mesh.material.clearcoatNormalScale = 0.45f;
     mesh.material.specularFactor = 0.63f;
     mesh.material.specularColorFactor = {0.8f, 0.65f, 0.9f};
+    mesh.material.sheenColorFactor = {0.2f, 0.35f, 0.5f};
+    mesh.material.sheenRoughness = 0.4f;
     mesh.material.unlit = true;
     mesh.skeletalAnimation.enabled = true;
     mesh.skeletalAnimation.playing = false;
@@ -305,6 +310,8 @@ nuby::Scene makeScene() {
     mesh.material.clearcoatNormalTexture = "textures/hero clearcoat normal.tga";
     mesh.material.specularTexture = "textures/hero specular.tga";
     mesh.material.specularColorTexture = "textures/hero specular color.tga";
+    mesh.material.sheenColorTexture = "textures/hero sheen color.tga";
+    mesh.material.sheenRoughnessTexture = "textures/hero sheen rough.tga";
     mesh.material.opacityMapChannel = nuby::ScalarTextureChannel::Matte;
     mesh.boxCollider.enabled = true;
     mesh.boxCollider.halfExtents = {0.75f, 1.25f, 0.5f};
@@ -335,6 +342,11 @@ nuby::Scene makeScene() {
     mesh.material.specularMapTransform.uvSet = 1U;
     mesh.material.specularColorMapTransform.clampToEdge = true;
     mesh.material.specularColorMapTransform.uvRotation = -0.25f;
+    mesh.material.sheenColorMapTransform.uvSet = 1U;
+    mesh.material.sheenColorMapTransform.uvScale = {1.3f, 0.7f};
+    mesh.material.sheenColorMapTransform.uvOffset = {0.15f, -0.1f};
+    mesh.material.sheenRoughnessMapTransform.uvRotation = 0.55f;
+    mesh.material.sheenRoughnessMapTransform.clampToEdge = true;
     mesh.material.albedoMapValueRange = {-0.1f, 1.35f};
     mesh.material.normalMapValueRange = {0.1f, 0.8f};
     mesh.material.metallicRoughnessMapValueRange = {0.2f, 0.7f};
@@ -543,6 +555,9 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.specularFactor, 0.63f)
                        && near(mesh->material.specularColorFactor[0], 0.8f)
                        && near(mesh->material.specularColorFactor[2], 0.9f)
+                       && near(mesh->material.sheenColorFactor[1], 0.35f)
+                       && near(mesh->material.sheenColorFactor[2], 0.5f)
+                       && near(mesh->material.sheenRoughness, 0.4f)
                        && mesh->material.unlit,
                "PBR factors, IOR, clearcoat, normal scale, emissive strength and unlit state are restored");
         expect(mesh->material.albedoTexture == "textures/hero diffuse.tga"
@@ -561,8 +576,12 @@ void testRoundTripAllSceneData() {
                                == "textures/hero clearcoat normal.tga"
                        && mesh->material.specularTexture == "textures/hero specular.tga"
                        && mesh->material.specularColorTexture
-                               == "textures/hero specular color.tga",
-               "PBR, opacity, clearcoat and specular texture references are restored");
+                               == "textures/hero specular color.tga"
+                       && mesh->material.sheenColorTexture
+                               == "textures/hero sheen color.tga"
+                       && mesh->material.sheenRoughnessTexture
+                               == "textures/hero sheen rough.tga",
+               "PBR, opacity, clearcoat, specular and sheen texture references are restored");
         expect(mesh->overrideMtlMaterials,
                "explicit entity-level override of imported MTL materials is restored");
         expect(mesh->boxCollider.enabled && mesh->boxCollider.trigger
@@ -605,6 +624,11 @@ void testRoundTripAllSceneData() {
                        && mesh->material.specularMapTransform.uvSet == 1U
                        && near(mesh->material.specularColorMapTransform.uvRotation, -0.25f)
                        && mesh->material.specularColorMapTransform.clampToEdge
+                       && mesh->material.sheenColorMapTransform.uvSet == 1U
+                       && near(mesh->material.sheenColorMapTransform.uvScale[0], 1.3f)
+                       && near(mesh->material.sheenColorMapTransform.uvOffset[1], -0.1f)
+                       && near(mesh->material.sheenRoughnessMapTransform.uvRotation, 0.55f)
+                       && mesh->material.sheenRoughnessMapTransform.clampToEdge
                        && mesh->material.opacityMapChannel
                                == nuby::ScalarTextureChannel::Matte
                        && near(mesh->material.albedoMapValueRange.base, -0.1f)
@@ -743,6 +767,15 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid opacity channel cannot partially replace target scene");
 
+    std::string invalidSheen = valid.str();
+    expect(replaceRecordField(invalidSheen, "MATERIAL_SHEEN", 4, "1.1"),
+           "v32 scene stores bounded sheen roughness");
+    std::stringstream malformedSheen(invalidSheen);
+    expect(!nuby::SceneSerializer::load(target, malformedSheen, error),
+           "out-of-range serialized sheen roughness is rejected");
+    expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
+           "invalid sheen data cannot partially replace target scene");
+
     std::string invalidBoxCollider = valid.str();
     const std::string boxDimensions = "BOX_COLLIDER 1 0.75";
     const std::size_t boxPosition = invalidBoxCollider.find(boxDimensions);
@@ -868,6 +901,13 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream malformedClearcoatFactor(invalidClearcoatFactor);
     expect(!nuby::SceneSerializer::load(target, malformedClearcoatFactor, error),
            "clearcoat factors above one are rejected from scene files");
+    std::string invalidSheenRoughness = valid.str();
+    expect(replaceRecordField(invalidSheenRoughness, "MATERIAL_SHEEN", 4,
+                              "1.1", 1),
+           "v32 material records persist bounded sheen roughness");
+    std::stringstream malformedSheenRoughness(invalidSheenRoughness);
+    expect(!nuby::SceneSerializer::load(target, malformedSheenRoughness, error),
+           "sheen roughness above one is rejected from scene files");
     std::string invalidSpecularFactor = valid.str();
     expect(replaceRecordField(invalidSpecularFactor, "MATERIAL_SPECULAR", 1,
                               "1.1", 1),
@@ -944,6 +984,16 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV31(downgradeTextureSchema(valid.str(), 31, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV31, error),
+           "version-thirty-one scenes remain readable before sheen persistence");
+    const nuby::Entity* legacyV31Mesh = target.find(2);
+    expect(legacyV31Mesh != nullptr
+                   && near(legacyV31Mesh->material.sheenColorFactor[0], 0.0f)
+                   && near(legacyV31Mesh->material.sheenColorFactor[2], 0.0f)
+                   && near(legacyV31Mesh->material.sheenRoughness, 0.0f),
+           "legacy v31 materials migrate to disabled sheen defaults");
 
     std::stringstream legacyV30(downgradeTextureSchema(valid.str(), 30, 8));
     expect(nuby::SceneSerializer::load(target, legacyV30, error),
