@@ -163,19 +163,27 @@ std::size_t materialBatchHash(const Material& material) {
     hashValue(hash, material.ambientOcclusion);
     hashValue(hash, material.normalMapScale);
     hashValue(hash, material.emissiveStrength);
+    hashValue(hash, material.indexOfRefraction);
+    hashValue(hash, material.clearcoatFactor);
+    hashValue(hash, material.clearcoatRoughness);
+    hashValue(hash, material.clearcoatNormalScale);
     hashValue(hash, material.unlit);
     hashValue(hash, material.proceduralGrid);
-    const std::array<const std::string*, 8> texturePaths{{
+    const std::array<const std::string*, 11> texturePaths{{
             &material.albedoTexture, &material.normalTexture,
             &material.metallicRoughnessTexture, &material.metallicTexture,
             &material.roughnessTexture, &material.occlusionTexture,
-            &material.opacityTexture, &material.emissiveTexture}};
+            &material.opacityTexture, &material.emissiveTexture,
+            &material.clearcoatTexture, &material.clearcoatRoughnessTexture,
+            &material.clearcoatNormalTexture}};
     for (const std::string* path : texturePaths) hashValue(hash, *path);
-    const std::array<const TextureMapTransform*, 8> transforms{{
+    const std::array<const TextureMapTransform*, 11> transforms{{
             &material.albedoMapTransform, &material.normalMapTransform,
             &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
             &material.roughnessMapTransform, &material.occlusionMapTransform,
-            &material.opacityMapTransform, &material.emissiveMapTransform}};
+            &material.opacityMapTransform, &material.emissiveMapTransform,
+            &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
+            &material.clearcoatNormalMapTransform}};
     for (const TextureMapTransform* transform : transforms) {
         for (float value : transform->uvScale) hashValue(hash, value);
         for (float value : transform->uvOffset) hashValue(hash, value);
@@ -213,6 +221,10 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.ambientOcclusion == right.ambientOcclusion
             && left.normalMapScale == right.normalMapScale
             && left.emissiveStrength == right.emissiveStrength
+            && left.indexOfRefraction == right.indexOfRefraction
+            && left.clearcoatFactor == right.clearcoatFactor
+            && left.clearcoatRoughness == right.clearcoatRoughness
+            && left.clearcoatNormalScale == right.clearcoatNormalScale
             && left.unlit == right.unlit
             && left.proceduralGrid == right.proceduralGrid
             && left.albedoTexture == right.albedoTexture
@@ -223,6 +235,9 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.occlusionTexture == right.occlusionTexture
             && left.opacityTexture == right.opacityTexture
             && left.emissiveTexture == right.emissiveTexture
+            && left.clearcoatTexture == right.clearcoatTexture
+            && left.clearcoatRoughnessTexture == right.clearcoatRoughnessTexture
+            && left.clearcoatNormalTexture == right.clearcoatNormalTexture
             && sameTransform(left.albedoMapTransform, right.albedoMapTransform)
             && sameTransform(left.normalMapTransform, right.normalMapTransform)
             && sameTransform(left.metallicRoughnessMapTransform,
@@ -232,6 +247,11 @@ bool sameMaterial(const Material& left, const Material& right) {
             && sameTransform(left.occlusionMapTransform, right.occlusionMapTransform)
             && sameTransform(left.opacityMapTransform, right.opacityMapTransform)
             && sameTransform(left.emissiveMapTransform, right.emissiveMapTransform)
+            && sameTransform(left.clearcoatMapTransform, right.clearcoatMapTransform)
+            && sameTransform(left.clearcoatRoughnessMapTransform,
+                             right.clearcoatRoughnessMapTransform)
+            && sameTransform(left.clearcoatNormalMapTransform,
+                             right.clearcoatNormalMapTransform)
             && sameRange(left.albedoMapValueRange, right.albedoMapValueRange)
             && sameRange(left.normalMapValueRange, right.normalMapValueRange)
             && sameRange(left.metallicRoughnessMapValueRange,
@@ -376,6 +396,10 @@ uniform int uAlphaMaskEnabled;
 uniform float uAlphaCutoff;
 uniform float uNormalMapScale;
 uniform float uEmissiveStrength;
+uniform float uIndexOfRefraction;
+uniform float uClearcoatFactor;
+uniform float uClearcoatRoughness;
+uniform float uClearcoatNormalScale;
 uniform int uUnlit;
 uniform int uHasTangents;
 uniform float uAmbientOcclusion;
@@ -387,6 +411,9 @@ uniform sampler2D uRoughnessTexture;
 uniform sampler2D uOcclusionTexture;
 uniform sampler2D uOpacityTexture;
 uniform sampler2D uEmissiveTexture;
+uniform sampler2D uClearcoatTexture;
+uniform sampler2D uClearcoatRoughnessTexture;
+uniform sampler2D uClearcoatNormalTexture;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
 uniform vec2 uAlbedoUvRotation;
@@ -411,7 +438,16 @@ uniform vec2 uOpacityUvRotation;
 uniform vec2 uEmissiveUvScale;
 uniform vec2 uEmissiveUvOffset;
 uniform vec2 uEmissiveUvRotation;
-uniform int uTextureUvSet[8];
+uniform vec2 uClearcoatUvScale;
+uniform vec2 uClearcoatUvOffset;
+uniform vec2 uClearcoatUvRotation;
+uniform vec2 uClearcoatRoughnessUvScale;
+uniform vec2 uClearcoatRoughnessUvOffset;
+uniform vec2 uClearcoatRoughnessUvRotation;
+uniform vec2 uClearcoatNormalUvScale;
+uniform vec2 uClearcoatNormalUvOffset;
+uniform vec2 uClearcoatNormalUvRotation;
+uniform int uTextureUvSet[11];
 uniform int uOpacityMapChannel;
 uniform vec2 uAlbedoMapBaseGain;
 uniform vec2 uNormalMapBaseGain;
@@ -429,6 +465,9 @@ uniform int uHasRoughnessTexture;
 uniform int uHasOcclusionTexture;
 uniform int uHasOpacityTexture;
 uniform int uHasEmissiveTexture;
+uniform int uHasClearcoatTexture;
+uniform int uHasClearcoatRoughnessTexture;
+uniform int uHasClearcoatNormalTexture;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
 uniform int uFogEnabled;
@@ -548,7 +587,8 @@ vec3 evaluateAmbientSH(vec3 normal) {
 }
 
 vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
-                         vec3 baseColor, float metallic, float roughness, vec3 radiance) {
+                         vec3 baseColor, float metallic, float roughness,
+                         float dielectricReflectance, vec3 radiance) {
     float normalLight = max(dot(normal, lightDirection), 0.0);
     if (normalLight <= 0.0) return vec3(0.0);
 
@@ -556,7 +596,7 @@ vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
     float normalView = max(dot(normal, viewDirection), 0.001);
     float normalHalf = max(dot(normal, halfDirection), 0.0);
     float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
-    vec3 baseReflectance = mix(vec3(0.04), baseColor, metallic);
+    vec3 baseReflectance = mix(vec3(dielectricReflectance), baseColor, metallic);
     vec3 fresnel = fresnelSchlick(viewHalf, baseReflectance);
     float distribution = distributionGGX(normalHalf, roughness);
     float geometryTerm = geometrySchlickGGX(normalView, roughness)
@@ -566,6 +606,52 @@ vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
     vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
     return (diffuseWeight * baseColor / 3.14159265 + specular)
             * radiance * normalLight;
+}
+
+vec3 evaluateClearcoatDirectLight(vec3 normal, vec3 viewDirection,
+                                  vec3 lightDirection, float roughness,
+                                  vec3 radiance) {
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    if (normalLight <= 0.0) return vec3(0.0);
+    vec3 halfDirection = normalize(lightDirection + viewDirection);
+    float normalView = max(dot(normal, viewDirection), 0.001);
+    float normalHalf = max(dot(normal, halfDirection), 0.0);
+    float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - viewHalf, 5.0);
+    float distribution = distributionGGX(normalHalf, roughness);
+    float geometry = geometrySchlickGGX(normalView, roughness)
+            * geometrySchlickGGX(max(normalLight, 0.001), roughness);
+    float specular = distribution * geometry * fresnel
+            / max(4.0 * normalView * max(normalLight, 0.001), 0.001);
+    return radiance * normalLight * specular;
+}
+
+vec3 applyTangentNormal(vec3 geometricNormal, vec3 tangentNormal, vec2 uv,
+                        bool useAuthoredTangent) {
+    if (useAuthoredTangent) {
+        vec3 tangent = vWorldTangent.xyz
+                - geometricNormal * dot(geometricNormal, vWorldTangent.xyz);
+        float tangentLengthSquared = dot(tangent, tangent);
+        if (tangentLengthSquared > 0.000001) {
+            tangent *= inversesqrt(tangentLengthSquared);
+            vec3 bitangent = normalize(cross(geometricNormal, tangent))
+                    * vWorldTangent.w;
+            return normalize(mat3(tangent, bitangent, geometricNormal) * tangentNormal);
+        }
+    }
+    vec3 positionDx = dFdx(vWorldPosition);
+    vec3 positionDy = dFdy(vWorldPosition);
+    vec2 uvDx = dFdx(uv);
+    vec2 uvDy = dFdy(uv);
+    float uvDeterminant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+    if (abs(uvDeterminant) > 0.00001) {
+        vec3 tangent = normalize((positionDx * uvDy.y - positionDy * uvDx.y)
+                / uvDeterminant);
+        vec3 bitangent = normalize((-positionDx * uvDy.x + positionDy * uvDx.x)
+                / uvDeterminant);
+        return normalize(mat3(tangent, bitangent, geometricNormal) * tangentNormal);
+    }
+    return geometricNormal;
 }
 
 vec2 selectTextureUv(int uvSet) {
@@ -580,6 +666,7 @@ vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
 
 void main() {
     vec3 normal = normalize(vWorldNormal);
+    vec3 geometricNormal = normal;
     vec3 lightDirection = normalize(-uLightDirection);
     vec2 opacityUv = transformUv(selectTextureUv(uTextureUvSet[6]), uOpacityUvScale, uOpacityUvOffset, uOpacityUvRotation);
     float opacity = clamp(uOpacity, 0.0, 1.0);
@@ -626,6 +713,14 @@ void main() {
     vec2 roughnessUv = transformUv(selectTextureUv(uTextureUvSet[4]), uRoughnessUvScale, uRoughnessUvOffset, uRoughnessUvRotation);
     vec2 occlusionUv = transformUv(selectTextureUv(uTextureUvSet[5]), uOcclusionUvScale, uOcclusionUvOffset, uOcclusionUvRotation);
     vec2 emissiveUv = transformUv(selectTextureUv(uTextureUvSet[7]), uEmissiveUvScale, uEmissiveUvOffset, uEmissiveUvRotation);
+    vec2 clearcoatUv = transformUv(selectTextureUv(uTextureUvSet[8]), uClearcoatUvScale,
+            uClearcoatUvOffset, uClearcoatUvRotation);
+    vec2 clearcoatRoughnessUv = transformUv(
+            selectTextureUv(uTextureUvSet[9]), uClearcoatRoughnessUvScale,
+            uClearcoatRoughnessUvOffset, uClearcoatRoughnessUvRotation);
+    vec2 clearcoatNormalUv = transformUv(
+            selectTextureUv(uTextureUvSet[10]), uClearcoatNormalUvScale,
+            uClearcoatNormalUvOffset, uClearcoatNormalUvRotation);
     if (uHasAlbedoTexture != 0) {
         baseColor *= srgbToLinear(adjustTextureValues(
                 albedoSample.rgb, uAlbedoMapBaseGain));
@@ -639,27 +734,11 @@ void main() {
         tangentNormal = tangentLengthSquared > 0.000001
                 ? tangentNormal * inversesqrt(tangentLengthSquared)
                 : vec3(0.0, 0.0, 1.0);
-        vec3 authoredTangent = vWorldTangent.xyz
-                - normal * dot(normal, vWorldTangent.xyz);
-        float authoredTangentLengthSquared = dot(authoredTangent, authoredTangent);
-        if (uHasTangents != 0 && authoredTangentLengthSquared > 0.000001) {
-            vec3 tangent = authoredTangent * inversesqrt(authoredTangentLengthSquared);
-            vec3 bitangent = normalize(cross(normal, tangent)) * vWorldTangent.w;
-            normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
-        } else {
-            vec3 positionDx = dFdx(vWorldPosition);
-            vec3 positionDy = dFdy(vWorldPosition);
-            vec2 uvDx = dFdx(normalUv);
-            vec2 uvDy = dFdy(normalUv);
-            float uvDeterminant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
-            if (abs(uvDeterminant) > 0.00001) {
-                vec3 tangent = normalize((positionDx * uvDy.y - positionDy * uvDx.y)
-                        / uvDeterminant);
-                vec3 bitangent = normalize((-positionDx * uvDy.x + positionDy * uvDx.x)
-                        / uvDeterminant);
-                normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
-            }
-        }
+        bool defaultNormalUv = uTextureUvSet[1] == 0
+                && all(lessThan(abs(uNormalUvScale - vec2(1.0)), vec2(0.00001)))
+                && all(lessThan(abs(uNormalUvRotation - vec2(1.0, 0.0)), vec2(0.00001)));
+        normal = applyTangentNormal(normal, tangentNormal, normalUv,
+                uHasTangents != 0 && defaultNormalUv);
     }
 
     float roughness = clamp(uRoughness, 0.06, 1.0);
@@ -687,13 +766,51 @@ void main() {
                 texture(uOcclusionTexture, occlusionUv).r, uOcclusionMapBaseGain);
     }
 
+    float clearcoatFactor = clamp(uClearcoatFactor, 0.0, 1.0);
+    float clearcoatRoughness = clamp(uClearcoatRoughness, 0.06, 1.0);
+    if (clearcoatFactor > 0.0 && uHasClearcoatTexture != 0) {
+        clearcoatFactor *= texture(uClearcoatTexture, clearcoatUv).r;
+    }
+    if (clearcoatFactor > 0.0 && uHasClearcoatRoughnessTexture != 0) {
+        clearcoatRoughness *= texture(uClearcoatRoughnessTexture,
+                                      clearcoatRoughnessUv).g;
+    }
+    clearcoatFactor = clamp(clearcoatFactor, 0.0, 1.0);
+    clearcoatRoughness = clamp(clearcoatRoughness, 0.06, 1.0);
+    vec3 clearcoatNormal = geometricNormal;
+    if (clearcoatFactor > 0.0 && uHasClearcoatNormalTexture != 0) {
+        vec3 clearcoatTangentNormal = texture(uClearcoatNormalTexture,
+                                              clearcoatNormalUv).rgb * 2.0 - 1.0;
+        clearcoatTangentNormal.xy *= uClearcoatNormalScale;
+        float clearcoatNormalLengthSquared = dot(clearcoatTangentNormal,
+                                                  clearcoatTangentNormal);
+        clearcoatTangentNormal = clearcoatNormalLengthSquared > 0.000001
+                ? clearcoatTangentNormal * inversesqrt(clearcoatNormalLengthSquared)
+                : vec3(0.0, 0.0, 1.0);
+        bool defaultClearcoatNormalUv = uTextureUvSet[10] == 0
+                && all(lessThan(abs(uClearcoatNormalUvScale - vec2(1.0)), vec2(0.00001)))
+                && all(lessThan(abs(uClearcoatNormalUvRotation - vec2(1.0, 0.0)), vec2(0.00001)));
+        clearcoatNormal = applyTangentNormal(geometricNormal,
+                clearcoatTangentNormal, clearcoatNormalUv,
+                uHasTangents != 0 && defaultClearcoatNormalUv);
+    }
+
     float visibility = 1.0 - shadowAmount(normal, lightDirection)
             * clamp(uShadowStrength, 0.0, 1.0);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
+    float iorRatio = (uIndexOfRefraction - 1.0) / (uIndexOfRefraction + 1.0);
+    float dielectricReflectance = iorRatio * iorRatio;
+    vec3 directionalRadiance = vec3(2.3, 2.15, 1.88)
+            * uDirectionalLightColor * max(uDirectionalLightIntensity, 0.0);
     vec3 directLight = evaluateDirectLight(normal, viewDirection, lightDirection,
-            baseColor, metallic, roughness,
-            vec3(2.3, 2.15, 1.88) * uDirectionalLightColor
-                    * max(uDirectionalLightIntensity, 0.0)) * visibility;
+            baseColor, metallic, roughness, dielectricReflectance,
+            directionalRadiance) * visibility;
+    vec3 clearcoatDirectLight = vec3(0.0);
+    if (clearcoatFactor > 0.0) {
+        clearcoatDirectLight = evaluateClearcoatDirectLight(clearcoatNormal,
+                viewDirection, lightDirection, clearcoatRoughness,
+                directionalRadiance) * visibility;
+    }
 
     for (int index = 0; index < 4; ++index) {
         if (index >= uPointLightCount) break;
@@ -707,9 +824,14 @@ void main() {
         float attenuation = rangeFade * rangeFade / distanceSquared;
         vec4 colorIntensity = uPointLightColorIntensity[index];
         vec3 pointRadiance = colorIntensity.rgb * colorIntensity.a * attenuation;
+        vec3 pointDirection = toLight / max(distanceToLight, 0.001);
         directLight += evaluateDirectLight(normal, viewDirection,
-                toLight / max(distanceToLight, 0.001), baseColor, metallic, roughness,
-                pointRadiance);
+                pointDirection, baseColor, metallic, roughness,
+                dielectricReflectance, pointRadiance);
+        if (clearcoatFactor > 0.0) {
+            clearcoatDirectLight += evaluateClearcoatDirectLight(clearcoatNormal,
+                    viewDirection, pointDirection, clearcoatRoughness, pointRadiance);
+        }
     }
 
     vec3 ambientLight = max(evaluateAmbientSH(normal), vec3(0.0));
@@ -727,7 +849,14 @@ void main() {
         emission *= srgbToLinear(adjustTextureValues(
                 emissiveSample, uEmissiveMapBaseGain));
     }
-    vec3 color = uUnlit != 0 ? baseColor + emission : ambient + directLight + emission;
+    vec3 layeredLighting = ambient + directLight;
+    if (clearcoatFactor > 0.0) {
+        float coatView = max(dot(clearcoatNormal, viewDirection), 0.0);
+        float coatFresnel = 0.04 + 0.96 * pow(1.0 - coatView, 5.0);
+        layeredLighting = layeredLighting * (1.0 - clearcoatFactor * coatFresnel)
+                + clearcoatDirectLight * clearcoatFactor;
+    }
+    vec3 color = uUnlit != 0 ? baseColor + emission : layeredLighting + emission;
     if (uFogEnabled != 0) {
         float viewDistance = vViewDepth;
         float fogAmount = clamp((viewDistance - uFogStart)
@@ -1725,6 +1854,10 @@ void Renderer::processPendingGpuUpload() {
                 part.material.emission = primitive.material.emissiveFactor;
                 part.material.emissiveStrength = primitive.material.emissiveStrength;
                 part.material.normalMapScale = primitive.material.normalScale;
+                part.material.indexOfRefraction = primitive.material.indexOfRefraction;
+                part.material.clearcoatFactor = primitive.material.clearcoatFactor;
+                part.material.clearcoatRoughness = primitive.material.clearcoatRoughness;
+                part.material.clearcoatNormalScale = primitive.material.clearcoatNormalScale;
                 part.material.unlit = primitive.material.unlit;
                 part.material.metallic = primitive.material.metallicFactor;
                 part.material.roughness = primitive.material.roughnessFactor;
@@ -1764,6 +1897,17 @@ void Renderer::processPendingGpuUpload() {
                         primitive.material.occlusionTexture, part.material.occlusionMapTransform);
                 part.material.emissiveTexture = applyTextureBinding(
                         primitive.material.emissiveTexture, part.material.emissiveMapTransform);
+                if (primitive.material.clearcoatFactor > 0.0f) {
+                    part.material.clearcoatTexture = applyTextureBinding(
+                            primitive.material.clearcoatTexture,
+                            part.material.clearcoatMapTransform);
+                    part.material.clearcoatRoughnessTexture = applyTextureBinding(
+                            primitive.material.clearcoatRoughnessTexture,
+                            part.material.clearcoatRoughnessMapTransform);
+                    part.material.clearcoatNormalTexture = applyTextureBinding(
+                            primitive.material.clearcoatNormalTexture,
+                            part.material.clearcoatNormalMapTransform);
+                }
                 if (primitive.material.alphaBlend && !part.material.albedoTexture.empty()) {
                     part.material.opacityTexture = part.material.albedoTexture;
                     part.material.opacityMapTransform = part.material.albedoMapTransform;
@@ -2514,7 +2658,7 @@ void Renderer::loadSceneAssets() {
     std::unordered_set<std::string> requiredMeshes;
     std::unordered_set<std::string> requiredTextures;
     const auto addMaterialTextures = [this, &requiredTextures](const Material& material) {
-        const std::array<const std::string*, 8> paths{{
+        const std::array<const std::string*, 11> paths{{
                 &material.albedoTexture,
                 &material.normalTexture,
                 &material.metallicRoughnessTexture,
@@ -2522,7 +2666,10 @@ void Renderer::loadSceneAssets() {
                 &material.metallicTexture,
                 &material.roughnessTexture,
                 &material.opacityTexture,
-                &material.emissiveTexture
+                &material.emissiveTexture,
+                &material.clearcoatTexture,
+                &material.clearcoatRoughnessTexture,
+                &material.clearcoatNormalTexture
         }};
         for (const std::string* path : paths) {
             if (path->empty()) continue;
@@ -2739,7 +2886,7 @@ int Renderer::sceneAssetStatus() const {
     bool missingTexture = false;
     bool failed = false;
     const auto inspectMaterial = [this, &missingTexture, &failed](const Material& material) {
-        const std::array<const std::string*, 8> paths{{
+        const std::array<const std::string*, 11> paths{{
                 &material.albedoTexture,
                 &material.normalTexture,
                 &material.metallicRoughnessTexture,
@@ -2747,7 +2894,10 @@ int Renderer::sceneAssetStatus() const {
                 &material.metallicTexture,
                 &material.roughnessTexture,
                 &material.opacityTexture,
-                &material.emissiveTexture
+                &material.emissiveTexture,
+                &material.clearcoatTexture,
+                &material.clearcoatRoughnessTexture,
+                &material.clearcoatNormalTexture
         }};
         for (const std::string* path : paths) {
             if (path->empty()) continue;
@@ -3569,6 +3719,10 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.alphaCutoff = glGetUniformLocation(program_, "uAlphaCutoff");
     uniforms_.normalMapScale = glGetUniformLocation(program_, "uNormalMapScale");
     uniforms_.emissiveStrength = glGetUniformLocation(program_, "uEmissiveStrength");
+    uniforms_.indexOfRefraction = glGetUniformLocation(program_, "uIndexOfRefraction");
+    uniforms_.clearcoatFactor = glGetUniformLocation(program_, "uClearcoatFactor");
+    uniforms_.clearcoatRoughness = glGetUniformLocation(program_, "uClearcoatRoughness");
+    uniforms_.clearcoatNormalScale = glGetUniformLocation(program_, "uClearcoatNormalScale");
     uniforms_.unlit = glGetUniformLocation(program_, "uUnlit");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.ambientSphericalHarmonics = glGetUniformLocation(program_, "uAmbientSH[0]");
@@ -3580,6 +3734,11 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.occlusionTexture = glGetUniformLocation(program_, "uOcclusionTexture");
     uniforms_.opacityTexture = glGetUniformLocation(program_, "uOpacityTexture");
     uniforms_.emissiveTexture = glGetUniformLocation(program_, "uEmissiveTexture");
+    uniforms_.clearcoatTexture = glGetUniformLocation(program_, "uClearcoatTexture");
+    uniforms_.clearcoatRoughnessTexture = glGetUniformLocation(
+            program_, "uClearcoatRoughnessTexture");
+    uniforms_.clearcoatNormalTexture = glGetUniformLocation(
+            program_, "uClearcoatNormalTexture");
     uniforms_.opacityUvScale = glGetUniformLocation(program_, "uOpacityUvScale");
     uniforms_.opacityUvOffset = glGetUniformLocation(program_, "uOpacityUvOffset");
     uniforms_.opacityUvRotation = glGetUniformLocation(program_, "uOpacityUvRotation");
@@ -3603,18 +3762,26 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.hasOcclusionTexture = glGetUniformLocation(program_, "uHasOcclusionTexture");
     uniforms_.hasOpacityTexture = glGetUniformLocation(program_, "uHasOpacityTexture");
     uniforms_.hasEmissiveTexture = glGetUniformLocation(program_, "uHasEmissiveTexture");
-    const std::array<const char*, 7> uvScaleNames{{
+    uniforms_.hasClearcoatTexture = glGetUniformLocation(program_, "uHasClearcoatTexture");
+    uniforms_.hasClearcoatRoughnessTexture = glGetUniformLocation(
+            program_, "uHasClearcoatRoughnessTexture");
+    uniforms_.hasClearcoatNormalTexture = glGetUniformLocation(
+            program_, "uHasClearcoatNormalTexture");
+    const std::array<const char*, 10> uvScaleNames{{
             "uAlbedoUvScale", "uNormalUvScale", "uMetallicRoughnessUvScale",
             "uMetallicUvScale", "uRoughnessUvScale", "uOcclusionUvScale",
-            "uEmissiveUvScale"}};
-    const std::array<const char*, 7> uvOffsetNames{{
+            "uEmissiveUvScale", "uClearcoatUvScale",
+            "uClearcoatRoughnessUvScale", "uClearcoatNormalUvScale"}};
+    const std::array<const char*, 10> uvOffsetNames{{
             "uAlbedoUvOffset", "uNormalUvOffset", "uMetallicRoughnessUvOffset",
             "uMetallicUvOffset", "uRoughnessUvOffset", "uOcclusionUvOffset",
-            "uEmissiveUvOffset"}};
-    const std::array<const char*, 7> uvRotationNames{{
+            "uEmissiveUvOffset", "uClearcoatUvOffset",
+            "uClearcoatRoughnessUvOffset", "uClearcoatNormalUvOffset"}};
+    const std::array<const char*, 10> uvRotationNames{{
             "uAlbedoUvRotation", "uNormalUvRotation", "uMetallicRoughnessUvRotation",
             "uMetallicUvRotation", "uRoughnessUvRotation", "uOcclusionUvRotation",
-            "uEmissiveUvRotation"}};
+            "uEmissiveUvRotation", "uClearcoatUvRotation",
+            "uClearcoatRoughnessUvRotation", "uClearcoatNormalUvRotation"}};
     for (std::size_t map = 0; map < uniforms_.textureUvScale.size(); ++map) {
         uniforms_.textureUvScale[map] = glGetUniformLocation(program_, uvScaleNames[map]);
         uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
@@ -3718,6 +3885,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.alphaCutoff, alphaCutoff);
     glUniform1f(uniforms_.normalMapScale, material.normalMapScale);
     glUniform1f(uniforms_.emissiveStrength, material.emissiveStrength);
+    glUniform1f(uniforms_.indexOfRefraction, material.indexOfRefraction);
+    glUniform1f(uniforms_.clearcoatFactor, material.clearcoatFactor);
+    glUniform1f(uniforms_.clearcoatRoughness, material.clearcoatRoughness);
+    glUniform1f(uniforms_.clearcoatNormalScale, material.clearcoatNormalScale);
     glUniform1i(uniforms_.unlit, material.unlit ? 1 : 0);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
@@ -3736,6 +3907,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const GLuint occlusionTexture = textureFor(material.occlusionTexture);
     const GLuint opacityTexture = textureFor(material.opacityTexture);
     const GLuint emissiveTexture = textureFor(material.emissiveTexture);
+    const GLuint clearcoatTexture = textureFor(material.clearcoatTexture);
+    const GLuint clearcoatRoughnessTexture =
+            textureFor(material.clearcoatRoughnessTexture);
+    const GLuint clearcoatNormalTexture = textureFor(material.clearcoatNormalTexture);
     glUniform1i(uniforms_.albedoTexture, 1);
     glUniform1i(uniforms_.normalTexture, 2);
     glUniform1i(uniforms_.metallicRoughnessTexture, 3);
@@ -3744,6 +3919,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.roughnessTexture, 6);
     glUniform1i(uniforms_.opacityTexture, 7);
     glUniform1i(uniforms_.emissiveTexture, 8);
+    glUniform1i(uniforms_.clearcoatTexture, 9);
+    glUniform1i(uniforms_.clearcoatRoughnessTexture, 10);
+    glUniform1i(uniforms_.clearcoatNormalTexture, 11);
     glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasMetallicRoughnessTexture,
@@ -3753,6 +3931,11 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasOpacityTexture, opacityTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.hasEmissiveTexture, emissiveTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasClearcoatTexture, clearcoatTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasClearcoatRoughnessTexture,
+                clearcoatRoughnessTexture != 0U ? 1 : 0);
+    glUniform1i(uniforms_.hasClearcoatNormalTexture,
+                clearcoatNormalTexture != 0U ? 1 : 0);
     glUniform1i(uniforms_.opacityMapChannel,
                 static_cast<GLint>(material.opacityMapChannel));
     glUniform2fv(uniforms_.opacityUvScale, 1,
@@ -3762,14 +3945,17 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     const std::array<float, 2> opacityUvRotation =
             textureRotationPair(material.opacityMapTransform.uvRotation);
     glUniform2fv(uniforms_.opacityUvRotation, 1, opacityUvRotation.data());
-    const std::array<const TextureMapTransform*, 7> mapTransforms{{
+    const std::array<const TextureMapTransform*, 10> mapTransforms{{
             &material.albedoMapTransform,
             &material.normalMapTransform,
             &material.metallicRoughnessMapTransform,
             &material.metallicMapTransform,
             &material.roughnessMapTransform,
             &material.occlusionMapTransform,
-            &material.emissiveMapTransform
+            &material.emissiveMapTransform,
+            &material.clearcoatMapTransform,
+            &material.clearcoatRoughnessMapTransform,
+            &material.clearcoatNormalMapTransform
     }};
     for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
         glUniform2fv(uniforms_.textureUvScale[map], 1,
@@ -3780,12 +3966,14 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                 textureRotationPair(mapTransforms[map]->uvRotation);
         glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
     }
-    const std::array<const TextureMapTransform*, 8> uvSetTransforms{{
+    const std::array<const TextureMapTransform*, 11> uvSetTransforms{{
             &material.albedoMapTransform, &material.normalMapTransform,
             &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
             &material.roughnessMapTransform, &material.occlusionMapTransform,
-            &material.opacityMapTransform, &material.emissiveMapTransform}};
-    std::array<GLint, 8> uvSets{};
+            &material.opacityMapTransform, &material.emissiveMapTransform,
+            &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
+            &material.clearcoatNormalMapTransform}};
+    std::array<GLint, 11> uvSets{};
     for (std::size_t map = 0; map < uvSetTransforms.size(); ++map) {
         uvSets[map] = static_cast<GLint>(uvSetTransforms[map]->uvSet);
     }
@@ -3850,6 +4038,12 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindTexture(GL_TEXTURE_2D, opacityTexture);
     glActiveTexture(GL_TEXTURE8);
     glBindTexture(GL_TEXTURE_2D, emissiveTexture);
+    glActiveTexture(GL_TEXTURE9);
+    glBindTexture(GL_TEXTURE_2D, clearcoatTexture);
+    glActiveTexture(GL_TEXTURE10);
+    glBindTexture(GL_TEXTURE_2D, clearcoatRoughnessTexture);
+    glActiveTexture(GL_TEXTURE11);
+    glBindTexture(GL_TEXTURE_2D, clearcoatNormalTexture);
     const auto samplerFor = [this](const TextureMapTransform& map) {
         return map.clampToEdge ? clampSampler_ : repeatSampler_;
     };
@@ -3861,6 +4055,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glBindSampler(6, samplerFor(material.roughnessMapTransform));
     glBindSampler(7, samplerFor(material.opacityMapTransform));
     glBindSampler(8, samplerFor(material.emissiveMapTransform));
+    glBindSampler(9, samplerFor(material.clearcoatMapTransform));
+    glBindSampler(10, samplerFor(material.clearcoatRoughnessMapTransform));
+    glBindSampler(11, samplerFor(material.clearcoatNormalMapTransform));
     glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(mesh.vao);

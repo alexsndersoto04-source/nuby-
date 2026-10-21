@@ -628,6 +628,9 @@ void testGltfPbrMaterialFactors() {
                        && std::fabs(parsed.metallicFactor - 0.7f) < 1.0e-6f
                        && std::fabs(parsed.roughnessFactor - 0.3f) < 1.0e-6f
                        && std::fabs(parsed.emissiveFactor[1] - 0.2f) < 1.0e-6f
+                       && std::fabs(parsed.indexOfRefraction - 1.5f) < 1.0e-6f
+                       && parsed.clearcoatFactor == 0.0f
+                       && parsed.clearcoatRoughness == 0.0f
                        && parsed.alphaBlend,
                "PBR color, metalness, roughness, emission and alpha mode are retained");
     }
@@ -716,23 +719,67 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("extensions":{"KHR_materials_emissive_strength":{}})JSON"),
                    primitives, error),
            "missing emissive-strength values are rejected");
-    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
-                   R"JSON("extensions":{"KHR_materials_ior":{"ior":1.5}})JSON"),
-                   primitives, error),
-           "unsupported material extensions are rejected instead of ignored");
     expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
-                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":2}})JSON",
-                   R"JSON("extensionsRequired":["KHR_materials_unlit","KHR_materials_emissive_strength"],)JSON"),
+                   R"JSON("extensions":{"KHR_materials_ior":{"ior":1.5}})JSON"),
+                   primitives, error)
+                   && primitives.size() == 1U
+                   && std::fabs(primitives[0].material.indexOfRefraction - 1.5f) < 1.0e-6f,
+           "KHR_materials_ior retains the authored dielectric index");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_ior":{"ior":0.9}})JSON"),
+                   primitives, error),
+           "out-of-range material IOR values are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_ior":{"other":1.5}})JSON"),
+                   primitives, error),
+           "unknown IOR extension fields are rejected rather than ignored");
+    expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":2},"KHR_materials_ior":{"ior":1.6},"KHR_materials_clearcoat":{"clearcoatFactor":0.7}})JSON",
+                   R"JSON("extensionsRequired":["KHR_materials_unlit","KHR_materials_emissive_strength","KHR_materials_ior","KHR_materials_clearcoat"],)JSON"),
                    primitives, error),
            "supported material extensions may be required by the GLB asset");
     expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb("",
-                   R"JSON("extensionsRequired":["KHR_materials_ior"],)JSON"),
+                   R"JSON("extensionsRequired":["EXT_vendor_required"],)JSON"),
                    primitives, error),
            "unknown required glTF extensions are rejected before import");
     expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb("",
                    R"JSON("extensionsRequired":"KHR_materials_unlit",)JSON"),
                    primitives, error),
            "malformed required-extension declarations are rejected");
+
+    const std::string clearcoatMaterial = R"JSON("extensions":{"KHR_materials_ior":{"ior":1.33},"KHR_materials_clearcoat":{"clearcoatFactor":0.72,"clearcoatRoughnessFactor":0.31,"clearcoatTexture":{"index":0,"texCoord":1},"clearcoatRoughnessTexture":{"index":0},"clearcoatNormalTexture":{"index":0,"scale":0.45,"extensions":{"KHR_texture_transform":{"offset":[0.2,0.3],"rotation":0.25}}}}})JSON";
+    expect(nuby::parseGlbMeshes(makeUv1TexturedTriangleGlb(clearcoatMaterial),
+                                primitives, error)
+                   && primitives.size() == 1U
+                   && std::fabs(primitives[0].material.indexOfRefraction - 1.33f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.clearcoatFactor - 0.72f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.clearcoatRoughness - 0.31f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.clearcoatNormalScale - 0.45f) < 1.0e-6f
+                   && primitives[0].material.clearcoatTexture.imageIndex == 0
+                   && primitives[0].material.clearcoatTexture.uvSet == 1U
+                   && primitives[0].material.clearcoatNormalTexture.imageIndex == 0
+                   && std::fabs(primitives[0].material.clearcoatNormalTexture.uvRotation
+                                - 0.25f) < 1.0e-6f,
+           "clearcoat factors, all texture slots, UV1 routing, normal scale and transform import");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(clearcoatMaterial),
+                                 primitives, error),
+           "clearcoat maps cannot select TEXCOORD_1 when the primitive lacks it");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_clearcoat":{"clearcoatFactor":1.1}})JSON"),
+                   primitives, error),
+           "clearcoat factors outside [0, 1] are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_clearcoat":{"clearcoatRoughnessFactor":-0.1}})JSON"),
+                   primitives, error),
+           "negative clearcoat roughness is rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_clearcoat":{"unexpected":1}})JSON"),
+                   primitives, error),
+           "unsupported clearcoat fields are rejected");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+                   R"JSON("extensions":{"KHR_materials_clearcoat":{"clearcoatFactor":1,"clearcoatNormalTexture":{"index":0,"scale":1001}}})JSON"),
+                   primitives, error),
+           "extreme clearcoat normal scales are rejected");
 }
 
 void testGlbAlphaMaskMaterials() {

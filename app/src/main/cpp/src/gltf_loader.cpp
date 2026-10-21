@@ -824,7 +824,9 @@ bool validateRequiredGltfExtensions(const JsonValue& root, std::string& error) {
         }
         if (extension.stringValue != "KHR_texture_transform"
                 && extension.stringValue != "KHR_materials_unlit"
-                && extension.stringValue != "KHR_materials_emissive_strength") {
+                && extension.stringValue != "KHR_materials_emissive_strength"
+                && extension.stringValue != "KHR_materials_ior"
+                && extension.stringValue != "KHR_materials_clearcoat") {
             return fail(error, "GLB requires an unsupported extension");
         }
     }
@@ -900,6 +902,63 @@ bool parseGltfMaterials(const JsonValue& root,
                             || material.emissiveStrength < 0.0f
                             || material.emissiveStrength > 10000.0f) {
                         return fail(error, "KHR_materials_emissive_strength is invalid");
+                    }
+                } else if (extension.first == "KHR_materials_ior") {
+                    if (extension.second.type != JsonValue::Type::Object
+                            || extension.second.objectValue.size() > 1U) {
+                        return fail(error, "KHR_materials_ior is invalid");
+                    }
+                    for (const auto& property : extension.second.objectValue) {
+                        if (property.first != "ior") {
+                            return fail(error, "KHR_materials_ior contains an unsupported property");
+                        }
+                    }
+                    if (!optionalFloat(extension.second, "ior", 1.5f,
+                                       material.indexOfRefraction)
+                            || material.indexOfRefraction < 1.0f
+                            || material.indexOfRefraction > 2.333f) {
+                        return fail(error, "KHR_materials_ior must be in [1, 2.333]");
+                    }
+                } else if (extension.first == "KHR_materials_clearcoat") {
+                    if (extension.second.type != JsonValue::Type::Object
+                            || extension.second.objectValue.size() > 5U) {
+                        return fail(error, "KHR_materials_clearcoat is invalid");
+                    }
+                    for (const auto& property : extension.second.objectValue) {
+                        if (property.first != "clearcoatFactor"
+                                && property.first != "clearcoatTexture"
+                                && property.first != "clearcoatRoughnessFactor"
+                                && property.first != "clearcoatRoughnessTexture"
+                                && property.first != "clearcoatNormalTexture") {
+                            return fail(error, "KHR_materials_clearcoat contains an unsupported property");
+                        }
+                    }
+                    if (!optionalFloat(extension.second, "clearcoatFactor", 0.0f,
+                                       material.clearcoatFactor)
+                            || !optionalFloat(extension.second, "clearcoatRoughnessFactor", 0.0f,
+                                              material.clearcoatRoughness)
+                            || material.clearcoatFactor < 0.0f
+                            || material.clearcoatFactor > 1.0f
+                            || material.clearcoatRoughness < 0.0f
+                            || material.clearcoatRoughness > 1.0f
+                            || !parseTextureInfo(member(extension.second, "clearcoatTexture"),
+                                    textureSources, material.clearcoatTexture, error)
+                            || !parseTextureInfo(member(extension.second,
+                                    "clearcoatRoughnessTexture"), textureSources,
+                                    material.clearcoatRoughnessTexture, error)
+                            || !parseTextureInfo(member(extension.second,
+                                    "clearcoatNormalTexture"), textureSources,
+                                    material.clearcoatNormalTexture, error)) {
+                        return fail(error, "KHR_materials_clearcoat factors or texture bindings are invalid");
+                    }
+                    if (const JsonValue* normal = member(extension.second,
+                            "clearcoatNormalTexture"); normal != nullptr) {
+                        if (!optionalFloat(*normal, "scale", 1.0f,
+                                           material.clearcoatNormalScale)
+                                || material.clearcoatNormalScale < 0.0f
+                                || material.clearcoatNormalScale > 1000.0f) {
+                            return fail(error, "clearcoatNormalTexture scale must be finite and in [0, 1000]");
+                        }
                     }
                 } else {
                     return fail(error, "GLB material uses an unsupported extension");
@@ -1286,10 +1345,12 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
             }
             if (parsed.hasMaterial && texCoord1 == nullptr) {
                 const GltfMaterial& material = parsed.material;
-                const std::array<const GltfTextureBinding*, 5> bindings{{
+                const std::array<const GltfTextureBinding*, 8> bindings{{
                         &material.baseColorTexture, &material.metallicRoughnessTexture,
                         &material.normalTexture, &material.occlusionTexture,
-                        &material.emissiveTexture}};
+                        &material.emissiveTexture, &material.clearcoatTexture,
+                        &material.clearcoatRoughnessTexture,
+                        &material.clearcoatNormalTexture}};
                 for (const GltfTextureBinding* binding : bindings) {
                     if (binding->imageIndex >= 0 && binding->uvSet == 1U) {
                         return fail(error, "GLB material selects TEXCOORD_1 but the primitive has no such accessor");

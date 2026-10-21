@@ -55,6 +55,10 @@ struct Material {
     float ambientOcclusion = 1.0f;
     float normalMapScale = 1.0f;
     float emissiveStrength = 1.0f;
+    float indexOfRefraction = 1.5f;
+    float clearcoatFactor = 0.0f;
+    float clearcoatRoughness = 0.0f;
+    float clearcoatNormalScale = 1.0f;
     bool unlit = false;
     bool proceduralGrid = false;
     std::string albedoTexture;
@@ -65,6 +69,9 @@ struct Material {
     std::string occlusionTexture;
     std::string opacityTexture;
     std::string emissiveTexture;
+    std::string clearcoatTexture;
+    std::string clearcoatRoughnessTexture;
+    std::string clearcoatNormalTexture;
     TextureMapTransform albedoMapTransform;
     TextureMapTransform normalMapTransform;
     TextureMapTransform metallicRoughnessMapTransform;
@@ -73,6 +80,9 @@ struct Material {
     TextureMapTransform occlusionMapTransform;
     TextureMapTransform opacityMapTransform;
     TextureMapTransform emissiveMapTransform;
+    TextureMapTransform clearcoatMapTransform;
+    TextureMapTransform clearcoatRoughnessMapTransform;
+    TextureMapTransform clearcoatNormalMapTransform;
     TextureMapValueRange albedoMapValueRange;
     TextureMapValueRange normalMapValueRange;
     TextureMapValueRange metallicRoughnessMapValueRange;

@@ -72,8 +72,11 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 29") {
+        if (line == "NUBY_SCENE 30") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("MATERIAL_CLEARCOAT ", 0) == 0
+                && targetVersion < 30) {
+            continue;
         } else if (line.rfind("MATERIAL_PBR_EXT ", 0) == 0 && targetVersion < 28) {
             continue;
         } else if (line.rfind("SKY_AMBIENT ", 0) == 0 && targetVersion < 26) {
@@ -260,6 +263,10 @@ nuby::Scene makeScene() {
     mesh.material.opacity = 0.42f;
     mesh.material.normalMapScale = 0.35f;
     mesh.material.emissiveStrength = 3.5f;
+    mesh.material.indexOfRefraction = 1.33f;
+    mesh.material.clearcoatFactor = 0.72f;
+    mesh.material.clearcoatRoughness = 0.31f;
+    mesh.material.clearcoatNormalScale = 0.45f;
     mesh.material.unlit = true;
     mesh.skeletalAnimation.enabled = true;
     mesh.skeletalAnimation.playing = false;
@@ -288,6 +295,9 @@ nuby::Scene makeScene() {
     mesh.material.roughnessTexture = "textures/hero roughness.tga";
     mesh.material.opacityTexture = "textures/hero opacity.tga";
     mesh.material.emissiveTexture = "textures/hero emission.tga";
+    mesh.material.clearcoatTexture = "textures/hero clearcoat.tga";
+    mesh.material.clearcoatRoughnessTexture = "textures/hero clearcoat rough.tga";
+    mesh.material.clearcoatNormalTexture = "textures/hero clearcoat normal.tga";
     mesh.material.opacityMapChannel = nuby::ScalarTextureChannel::Matte;
     mesh.boxCollider.enabled = true;
     mesh.boxCollider.halfExtents = {0.75f, 1.25f, 0.5f};
@@ -303,6 +313,15 @@ nuby::Scene makeScene() {
     mesh.material.emissiveMapTransform.uvScale = {1.25f, 0.75f};
     mesh.material.emissiveMapTransform.uvOffset = {-0.2f, 0.15f};
     mesh.material.emissiveMapTransform.clampToEdge = true;
+    mesh.material.clearcoatMapTransform.uvScale = {0.65f, 1.25f};
+    mesh.material.clearcoatMapTransform.uvOffset = {0.12f, -0.3f};
+    mesh.material.clearcoatMapTransform.uvRotation = 0.4f;
+    mesh.material.clearcoatMapTransform.uvSet = 1U;
+    mesh.material.clearcoatMapTransform.clampToEdge = true;
+    mesh.material.clearcoatRoughnessMapTransform.uvScale = {0.8f, 0.9f};
+    mesh.material.clearcoatRoughnessMapTransform.uvOffset = {-0.1f, 0.2f};
+    mesh.material.clearcoatNormalMapTransform.uvRotation = -0.6f;
+    mesh.material.clearcoatNormalMapTransform.uvSet = 1U;
     mesh.material.albedoMapValueRange = {-0.1f, 1.35f};
     mesh.material.normalMapValueRange = {0.1f, 0.8f};
     mesh.material.metallicRoughnessMapValueRange = {0.2f, 0.7f};
@@ -504,8 +523,12 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.opacity, 0.42f)
                        && near(mesh->material.normalMapScale, 0.35f)
                        && near(mesh->material.emissiveStrength, 3.5f)
+                       && near(mesh->material.indexOfRefraction, 1.33f)
+                       && near(mesh->material.clearcoatFactor, 0.72f)
+                       && near(mesh->material.clearcoatRoughness, 0.31f)
+                       && near(mesh->material.clearcoatNormalScale, 0.45f)
                        && mesh->material.unlit,
-               "PBR factors, normal scale, emissive strength and unlit state are restored");
+               "PBR factors, IOR, clearcoat, normal scale, emissive strength and unlit state are restored");
         expect(mesh->material.albedoTexture == "textures/hero diffuse.tga"
                        && mesh->material.normalTexture == "textures/hero normal.tga"
                        && mesh->material.metallicRoughnessTexture
@@ -514,8 +537,13 @@ void testRoundTripAllSceneData() {
                        && mesh->material.metallicTexture == "textures/hero metallic.tga"
                        && mesh->material.roughnessTexture == "textures/hero roughness.tga"
                        && mesh->material.opacityTexture == "textures/hero opacity.tga"
-                       && mesh->material.emissiveTexture == "textures/hero emission.tga",
-               "PBR and opacity texture-map asset references are restored");
+                       && mesh->material.emissiveTexture == "textures/hero emission.tga"
+                       && mesh->material.clearcoatTexture == "textures/hero clearcoat.tga"
+                       && mesh->material.clearcoatRoughnessTexture
+                               == "textures/hero clearcoat rough.tga"
+                       && mesh->material.clearcoatNormalTexture
+                               == "textures/hero clearcoat normal.tga",
+               "PBR, opacity and clearcoat texture-map asset references are restored");
         expect(mesh->overrideMtlMaterials,
                "explicit entity-level override of imported MTL materials is restored");
         expect(mesh->boxCollider.enabled && mesh->boxCollider.trigger
@@ -544,6 +572,14 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.emissiveMapTransform.uvScale[0], 1.25f)
                        && near(mesh->material.emissiveMapTransform.uvOffset[1], 0.15f)
                        && mesh->material.emissiveMapTransform.clampToEdge
+                       && near(mesh->material.clearcoatMapTransform.uvScale[0], 0.65f)
+                       && near(mesh->material.clearcoatMapTransform.uvOffset[1], -0.3f)
+                       && near(mesh->material.clearcoatMapTransform.uvRotation, 0.4f)
+                       && mesh->material.clearcoatMapTransform.uvSet == 1U
+                       && mesh->material.clearcoatMapTransform.clampToEdge
+                       && near(mesh->material.clearcoatRoughnessMapTransform.uvScale[1], 0.9f)
+                       && near(mesh->material.clearcoatNormalMapTransform.uvRotation, -0.6f)
+                       && mesh->material.clearcoatNormalMapTransform.uvSet == 1U
                        && mesh->material.opacityMapChannel
                                == nuby::ScalarTextureChannel::Matte
                        && near(mesh->material.albedoMapValueRange.base, -0.1f)
@@ -800,6 +836,20 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     std::stringstream malformedEmissiveStrength(invalidEmissiveStrength);
     expect(!nuby::SceneSerializer::load(target, malformedEmissiveStrength, error),
            "excessive emissive strengths are rejected from scene files");
+    std::string invalidClearcoatFactor = valid.str();
+    expect(replaceRecordField(invalidClearcoatFactor, "MATERIAL_CLEARCOAT", 2,
+                              "1.1", 1),
+           "v30 material records persist bounded clearcoat factors");
+    std::stringstream malformedClearcoatFactor(invalidClearcoatFactor);
+    expect(!nuby::SceneSerializer::load(target, malformedClearcoatFactor, error),
+           "clearcoat factors above one are rejected from scene files");
+    std::string invalidIor = valid.str();
+    expect(replaceRecordField(invalidIor, "MATERIAL_CLEARCOAT", 1,
+                              "0.9", 1),
+           "v30 material records persist dielectric IOR");
+    std::stringstream malformedIor(invalidIor);
+    expect(!nuby::SceneSerializer::load(target, malformedIor, error),
+           "out-of-range IOR values are rejected from scene files");
     std::string invalidUnlitFlag = valid.str();
     expect(replaceRecordField(invalidUnlitFlag, "MATERIAL_PBR_EXT", 1,
                               "2", 1),
@@ -862,6 +912,16 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV29(downgradeTextureSchema(valid.str(), 29, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV29, error),
+           "version-twenty-nine scenes remain readable before clearcoat persistence");
+    const nuby::Entity* legacyV29Mesh = target.find(2);
+    expect(legacyV29Mesh != nullptr
+                   && near(legacyV29Mesh->material.indexOfRefraction, 1.5f)
+                   && near(legacyV29Mesh->material.clearcoatFactor, 0.0f)
+                   && near(legacyV29Mesh->material.clearcoatRoughness, 0.0f),
+           "legacy v29 materials migrate to default IOR and no clearcoat");
 
     std::stringstream legacyV28(downgradeTextureSchema(valid.str(), 28, 8));
     expect(nuby::SceneSerializer::load(target, legacyV28, error),

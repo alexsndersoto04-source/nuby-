@@ -171,6 +171,9 @@ bool validEntity(const Entity& entity) {
             || !validTexturePath(entity.material.occlusionTexture)
             || !validTexturePath(entity.material.opacityTexture)
             || !validTexturePath(entity.material.emissiveTexture)
+            || !validTexturePath(entity.material.clearcoatTexture)
+            || !validTexturePath(entity.material.clearcoatRoughnessTexture)
+            || !validTexturePath(entity.material.clearcoatNormalTexture)
             || static_cast<unsigned int>(entity.material.opacityMapChannel)
                     > static_cast<unsigned int>(ScalarTextureChannel::Luminance)
             || static_cast<unsigned int>(entity.primitive)
@@ -185,6 +188,9 @@ bool validEntity(const Entity& entity) {
             || !validTextureMapTransform(entity.material.occlusionMapTransform)
             || !validTextureMapTransform(entity.material.opacityMapTransform)
             || !validTextureMapTransform(entity.material.emissiveMapTransform)
+            || !validTextureMapTransform(entity.material.clearcoatMapTransform)
+            || !validTextureMapTransform(entity.material.clearcoatRoughnessMapTransform)
+            || !validTextureMapTransform(entity.material.clearcoatNormalMapTransform)
             || !validTextureMapValueRange(entity.material.albedoMapValueRange)
             || !validTextureMapValueRange(entity.material.normalMapValueRange)
             || !validTextureMapValueRange(entity.material.metallicRoughnessMapValueRange)
@@ -211,6 +217,18 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.material.emissiveStrength)
             || entity.material.emissiveStrength < 0.0f
             || entity.material.emissiveStrength > 10000.0f
+            || !finite(entity.material.indexOfRefraction)
+            || entity.material.indexOfRefraction < 1.0f
+            || entity.material.indexOfRefraction > 2.333f
+            || !finite(entity.material.clearcoatFactor)
+            || entity.material.clearcoatFactor < 0.0f
+            || entity.material.clearcoatFactor > 1.0f
+            || !finite(entity.material.clearcoatRoughness)
+            || entity.material.clearcoatRoughness < 0.0f
+            || entity.material.clearcoatRoughness > 1.0f
+            || !finite(entity.material.clearcoatNormalScale)
+            || entity.material.clearcoatNormalScale < 0.0f
+            || entity.material.clearcoatNormalScale > 1000.0f
             || !finite3(entity.spin.radiansPerSecond) || !finite3(entity.orbit.center)
             || !finite(entity.orbit.radius) || !finite(entity.orbit.angularSpeed)
             || !finite(entity.orbit.phase) || !finite(entity.orbit.verticalAmplitude)
@@ -534,6 +552,17 @@ void writeEntity(std::ostream& output, const Entity& entity) {
     writeTextureMapTransform(output, entity.material.opacityMapTransform);
     writeTextureMapTransform(output, entity.material.emissiveMapTransform);
     output << '\n';
+    output << "MATERIAL_CLEARCOAT " << entity.material.indexOfRefraction << ' '
+           << entity.material.clearcoatFactor << ' '
+           << entity.material.clearcoatRoughness << ' '
+           << entity.material.clearcoatNormalScale << ' '
+           << std::quoted(entity.material.clearcoatTexture) << ' '
+           << std::quoted(entity.material.clearcoatRoughnessTexture) << ' '
+           << std::quoted(entity.material.clearcoatNormalTexture);
+    writeTextureMapTransform(output, entity.material.clearcoatMapTransform);
+    writeTextureMapTransform(output, entity.material.clearcoatRoughnessMapTransform);
+    writeTextureMapTransform(output, entity.material.clearcoatNormalMapTransform);
+    output << '\n';
     output << "OPACITY_MAP_CHANNEL "
            << static_cast<unsigned int>(entity.material.opacityMapChannel) << '\n';
     output << "MATERIAL_MAP_MM";
@@ -789,6 +818,39 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
                     && !readTextureMapTransform(input,
                             entity.material.emissiveMapTransform, true, version >= 27, version >= 29)))) {
         return fail(error, "Material UV transform or sampler settings are invalid");
+    }
+    if (version >= 30) {
+        if (!readTag(input, "MATERIAL_CLEARCOAT", error)
+                || !(input >> entity.material.indexOfRefraction
+                            >> entity.material.clearcoatFactor
+                            >> entity.material.clearcoatRoughness
+                            >> entity.material.clearcoatNormalScale
+                            >> std::quoted(entity.material.clearcoatTexture)
+                            >> std::quoted(entity.material.clearcoatRoughnessTexture)
+                            >> std::quoted(entity.material.clearcoatNormalTexture))
+                || !validTexturePath(entity.material.clearcoatTexture)
+                || !validTexturePath(entity.material.clearcoatRoughnessTexture)
+                || !validTexturePath(entity.material.clearcoatNormalTexture)
+                || !std::isfinite(entity.material.indexOfRefraction)
+                || entity.material.indexOfRefraction < 1.0f
+                || entity.material.indexOfRefraction > 2.333f
+                || !std::isfinite(entity.material.clearcoatFactor)
+                || entity.material.clearcoatFactor < 0.0f
+                || entity.material.clearcoatFactor > 1.0f
+                || !std::isfinite(entity.material.clearcoatRoughness)
+                || entity.material.clearcoatRoughness < 0.0f
+                || entity.material.clearcoatRoughness > 1.0f
+                || !std::isfinite(entity.material.clearcoatNormalScale)
+                || entity.material.clearcoatNormalScale < 0.0f
+                || entity.material.clearcoatNormalScale > 1000.0f
+                || !readTextureMapTransform(input,
+                        entity.material.clearcoatMapTransform, true, true, true)
+                || !readTextureMapTransform(input,
+                        entity.material.clearcoatRoughnessMapTransform, true, true, true)
+                || !readTextureMapTransform(input,
+                        entity.material.clearcoatNormalMapTransform, true, true, true)) {
+            return fail(error, "Entity clearcoat material settings are invalid");
+        }
     }
     if (version >= 10) {
         int opacityMapChannel = -1;
