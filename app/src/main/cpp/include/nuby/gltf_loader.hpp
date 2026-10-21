@@ -25,6 +25,9 @@ struct GltfMaterial {
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
     float occlusionStrength = 1.0f;
+    float normalScale = 1.0f;
+    float emissiveStrength = 1.0f;
+    bool unlit = false;
     GltfTextureBinding baseColorTexture;
     GltfTextureBinding metallicRoughnessTexture;
     GltfTextureBinding normalTexture;

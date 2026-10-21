@@ -809,10 +809,31 @@ bool parseTextureInfo(const JsonValue* info,
     return true;
 }
 
+bool validateRequiredGltfExtensions(const JsonValue& root, std::string& error) {
+    const JsonValue* required = member(root, "extensionsRequired");
+    if (required == nullptr) return true;
+    if (required->type != JsonValue::Type::Array || required->arrayValue.size() > 64U) {
+        return fail(error, "GLB extensionsRequired must be a bounded array");
+    }
+    for (const JsonValue& extension : required->arrayValue) {
+        if (extension.type != JsonValue::Type::String || extension.stringValue.empty()
+                || extension.stringValue.size() > 128U) {
+            return fail(error, "GLB required extension name is invalid");
+        }
+        if (extension.stringValue != "KHR_texture_transform"
+                && extension.stringValue != "KHR_materials_unlit"
+                && extension.stringValue != "KHR_materials_emissive_strength") {
+            return fail(error, "GLB requires an unsupported extension");
+        }
+    }
+    return true;
+}
+
 bool parseGltfMaterials(const JsonValue& root,
                         const std::vector<GltfTextureSource>& textureSources,
                         std::vector<GltfMaterial>& output, std::string& error) {
     output.clear();
+    if (!validateRequiredGltfExtensions(root, error)) return false;
     const JsonValue* materials = member(root, "materials");
     if (materials == nullptr) return true;
     if (materials->type != JsonValue::Type::Array || materials->arrayValue.size() > 4096U) {
@@ -853,9 +874,34 @@ bool parseGltfMaterials(const JsonValue& root,
                 || !parseTextureInfo(member(source, "emissiveTexture"), textureSources,
                                      material.emissiveTexture, error)) return false;
         if (const JsonValue* normal = member(source, "normalTexture"); normal != nullptr) {
-            float scale = 1.0f;
-            if (!optionalFloat(*normal, "scale", 1.0f, scale) || scale != 1.0f) {
-                return fail(error, "GLB normalTexture scale values other than one are unsupported");
+            if (!optionalFloat(*normal, "scale", 1.0f, material.normalScale)
+                    || material.normalScale < 0.0f || material.normalScale > 1000.0f) {
+                return fail(error, "GLB normalTexture scale must be finite and in [0, 1000]");
+            }
+        }
+        if (const JsonValue* extensions = member(source, "extensions"); extensions != nullptr) {
+            if (extensions->type != JsonValue::Type::Object) {
+                return fail(error, "GLB material extensions must be an object");
+            }
+            for (const auto& extension : extensions->objectValue) {
+                if (extension.first == "KHR_materials_unlit") {
+                    if (extension.second.type != JsonValue::Type::Object
+                            || !extension.second.objectValue.empty()) {
+                        return fail(error, "KHR_materials_unlit must be an empty object");
+                    }
+                    material.unlit = true;
+                } else if (extension.first == "KHR_materials_emissive_strength") {
+                    if (extension.second.type != JsonValue::Type::Object
+                            || extension.second.objectValue.size() != 1U
+                            || !optionalFloat(extension.second, "emissiveStrength",
+                                              1.0f, material.emissiveStrength)
+                            || material.emissiveStrength < 0.0f
+                            || material.emissiveStrength > 10000.0f) {
+                        return fail(error, "KHR_materials_emissive_strength is invalid");
+                    }
+                } else {
+                    return fail(error, "GLB material uses an unsupported extension");
+                }
             }
         }
         if (const JsonValue* occlusion = member(source, "occlusionTexture"); occlusion != nullptr) {
@@ -878,7 +924,9 @@ bool parseGltfMaterials(const JsonValue& root,
             return fail(error, "GLB metallic and roughness factors must be in [0, 1]");
         }
         for (float value : material.emissiveFactor) {
-            if (value < 0.0f) return fail(error, "GLB emissiveFactor cannot be negative");
+            if (value < 0.0f || value > 1.0f) {
+                return fail(error, "GLB emissiveFactor components must be in [0, 1]");
+            }
         }
         if (!optionalFloat(source, "alphaCutoff", 0.5f, material.alphaCutoff)
                 || material.alphaCutoff < 0.0f || material.alphaCutoff > 1.0f) {

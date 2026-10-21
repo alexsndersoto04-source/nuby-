@@ -52,6 +52,9 @@ struct Material {
     float roughness = 0.58f;
     float opacity = 1.0f;
     float ambientOcclusion = 1.0f;
+    float normalMapScale = 1.0f;
+    float emissiveStrength = 1.0f;
+    bool unlit = false;
     bool proceduralGrid = false;
     std::string albedoTexture;
     std::string normalTexture;

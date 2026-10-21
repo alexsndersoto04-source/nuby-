@@ -198,6 +198,12 @@ bool validEntity(const Entity& entity) {
             || !finite(entity.material.roughness) || !finite(entity.material.opacity)
             || entity.material.opacity < 0.0f || entity.material.opacity > 1.0f
             || !finite(entity.material.ambientOcclusion)
+            || !finite(entity.material.normalMapScale)
+            || entity.material.normalMapScale < 0.0f
+            || entity.material.normalMapScale > 1000.0f
+            || !finite(entity.material.emissiveStrength)
+            || entity.material.emissiveStrength < 0.0f
+            || entity.material.emissiveStrength > 10000.0f
             || !finite3(entity.spin.radiansPerSecond) || !finite3(entity.orbit.center)
             || !finite(entity.orbit.radius) || !finite(entity.orbit.angularSpeed)
             || !finite(entity.orbit.phase) || !finite(entity.orbit.verticalAmplitude)
@@ -506,6 +512,9 @@ void writeEntity(std::ostream& output, const Entity& entity) {
            << std::quoted(entity.material.roughnessTexture) << ' '
            << std::quoted(entity.material.opacityTexture) << ' '
            << std::quoted(entity.material.emissiveTexture) << '\n';
+    output << "MATERIAL_PBR_EXT " << (entity.material.unlit ? 1 : 0) << ' '
+           << entity.material.normalMapScale << ' '
+           << entity.material.emissiveStrength << '\n';
     output << "OVERRIDE_MTL_MATERIALS "
            << (entity.overrideMtlMaterials ? 1 : 0) << '\n';
     output << "MATERIAL_MAP_UV";
@@ -726,6 +735,22 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
             && (!(input >> std::quoted(entity.material.emissiveTexture))
                 || !validTexturePath(entity.material.emissiveTexture))) {
         return fail(error, "Entity emissive texture path is invalid");
+    }
+    if (version >= 28) {
+        int unlit = -1;
+        if (!readTag(input, "MATERIAL_PBR_EXT", error)
+                || !(input >> unlit >> entity.material.normalMapScale
+                            >> entity.material.emissiveStrength)
+                || (unlit != 0 && unlit != 1)
+                || !std::isfinite(entity.material.normalMapScale)
+                || entity.material.normalMapScale < 0.0f
+                || entity.material.normalMapScale > 1000.0f
+                || !std::isfinite(entity.material.emissiveStrength)
+                || entity.material.emissiveStrength < 0.0f
+                || entity.material.emissiveStrength > 10000.0f) {
+            return fail(error, "Entity PBR extension settings are invalid");
+        }
+        entity.material.unlit = unlit != 0;
     }
     if (version >= 6) {
         int overrideMtlMaterials = -1;

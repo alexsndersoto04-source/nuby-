@@ -108,7 +108,8 @@ std::string makeTriangleGlb(std::uint16_t thirdIndex = 2, bool includeSkin = fal
     return data;
 }
 
-std::string makeTriangleWithMaterialGlb(const std::string& materialJson) {
+std::string makeTriangleWithMaterialGlb(const std::string& materialJson,
+                                        const std::string& rootProperties = {}) {
     std::string json;
     std::string binary;
     std::string error;
@@ -119,7 +120,7 @@ std::string makeTriangleWithMaterialGlb(const std::string& materialJson) {
     if (primitive == std::string::npos || meshes == std::string::npos) return {};
     json.replace(primitive, primitiveEnd.size(), "\"indices\":1,\"material\":0}]");
     const std::size_t updatedMeshes = json.find("\"meshes\":");
-    json.insert(updatedMeshes, "\"materials\":[{" + materialJson + "}],");
+    json.insert(updatedMeshes, "\"materials\":[{" + materialJson + "}]," + rootProperties);
     std::string data;
     appendU32(data, 0x46546C67U);
     appendU32(data, 2U);
@@ -522,6 +523,10 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("pbrMetallicRoughness":{"baseColorFactor":[-0.1,0,0,1]})JSON"),
                    primitives, error),
            "out-of-range glTF base color factors are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("emissiveFactor":[1.1,0,0],"extensions":{"KHR_materials_emissive_strength":{"emissiveStrength":2}})JSON"),
+                   primitives, error),
+           "emissive strength extension does not bypass core emissive-factor bounds");
     expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
                    R"JSON("alphaMode":"MASK")JSON"), primitives, error)
                    && primitives.size() == 1U && primitives[0].material.alphaMask
@@ -557,6 +562,43 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0}})JSON"),
                    primitives, error),
            "unsupported glTF material textures are not silently discarded");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+                   R"JSON("normalTexture":{"index":0,"scale":-0.1})JSON"),
+                   primitives, error),
+           "negative glTF normal-map scales are rejected");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
+                   R"JSON("normalTexture":{"index":0,"scale":1001})JSON"),
+                   primitives, error),
+           "extreme glTF normal-map scales are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_unlit":{"unexpected":true}})JSON"),
+                   primitives, error),
+           "malformed KHR_materials_unlit payloads are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_emissive_strength":{"emissiveStrength":-1}})JSON"),
+                   primitives, error),
+           "negative emissive-strength values are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_emissive_strength":{}})JSON"),
+                   primitives, error),
+           "missing emissive-strength values are rejected");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_ior":{"ior":1.5}})JSON"),
+                   primitives, error),
+           "unsupported material extensions are rejected instead of ignored");
+    expect(nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
+                   R"JSON("extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":2}})JSON",
+                   R"JSON("extensionsRequired":["KHR_materials_unlit","KHR_materials_emissive_strength"],)JSON"),
+                   primitives, error),
+           "supported material extensions may be required by the GLB asset");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb("",
+                   R"JSON("extensionsRequired":["KHR_materials_ior"],)JSON"),
+                   primitives, error),
+           "unknown required glTF extensions are rejected before import");
+    expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb("",
+                   R"JSON("extensionsRequired":"KHR_materials_unlit",)JSON"),
+                   primitives, error),
+           "malformed required-extension declarations are rejected");
 }
 
 void testGlbAlphaMaskMaterials() {
@@ -581,7 +623,7 @@ void testGlbAlphaMaskMaterials() {
 }
 
 void testGlbMaterialsBindEmbeddedPngTextures() {
-    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.8,0.7,0.6,0.5],"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.25,0.5],"scale":[2,3],"rotation":0.5}}},"metallicRoughnessTexture":{"index":0},"metallicFactor":0.3,"roughnessFactor":0.4},"normalTexture":{"index":0},"occlusionTexture":{"index":0,"strength":0.45},"emissiveTexture":{"index":0},"emissiveFactor":[0.1,0.2,0.3],"alphaMode":"BLEND")JSON";
+    const std::string material = R"JSON("pbrMetallicRoughness":{"baseColorFactor":[0.8,0.7,0.6,0.5],"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.25,0.5],"scale":[2,3],"rotation":0.5}}},"metallicRoughnessTexture":{"index":0},"metallicFactor":0.3,"roughnessFactor":0.4},"normalTexture":{"index":0,"scale":0.35},"occlusionTexture":{"index":0,"strength":0.45},"emissiveTexture":{"index":0},"emissiveFactor":[0.1,0.2,0.3],"extensions":{"KHR_materials_unlit":{},"KHR_materials_emissive_strength":{"emissiveStrength":3.5}},"alphaMode":"BLEND")JSON";
     const std::string glb = makeTexturedTriangleGlb(material);
     std::vector<nuby::GltfPrimitive> primitives;
     std::string error;
@@ -594,6 +636,9 @@ void testGlbMaterialsBindEmbeddedPngTextures() {
                    && primitives[0].material.occlusionTexture.imageIndex == 0
                    && primitives[0].material.emissiveTexture.imageIndex == 0
                    && primitives[0].material.alphaBlend
+                   && primitives[0].material.unlit
+                   && std::fabs(primitives[0].material.normalScale - 0.35f) < 1.0e-6f
+                   && std::fabs(primitives[0].material.emissiveStrength - 3.5f) < 1.0e-6f
                    && std::fabs(primitives[0].material.occlusionStrength - 0.45f) < 1.0e-6f
                    && std::fabs(primitives[0].material.baseColorTexture.uvOffset[0] - 0.25f) < 1.0e-6f
                    && std::fabs(primitives[0].material.baseColorTexture.uvOffset[1] - 0.5f) < 1.0e-6f
@@ -601,7 +646,7 @@ void testGlbMaterialsBindEmbeddedPngTextures() {
                    && std::fabs(primitives[0].material.baseColorTexture.uvScale[1] - 3.0f) < 1.0e-6f
                    && std::fabs(primitives[0].material.baseColorTexture.uvRotation - 0.5f)
                             < 1.0e-6f,
-           "all supported glTF PBR texture references, transforms and blend factors are retained");
+           "PBR textures, normal scale, material extensions, transforms and blend factors are retained");
 
     nuby::GltfStaticAsset asset;
     expect(nuby::parseGlbStaticAsset(glb, asset, error)

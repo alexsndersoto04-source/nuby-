@@ -161,6 +161,9 @@ std::size_t materialBatchHash(const Material& material) {
     hashValue(hash, material.roughness);
     hashValue(hash, material.opacity);
     hashValue(hash, material.ambientOcclusion);
+    hashValue(hash, material.normalMapScale);
+    hashValue(hash, material.emissiveStrength);
+    hashValue(hash, material.unlit);
     hashValue(hash, material.proceduralGrid);
     const std::array<const std::string*, 8> texturePaths{{
             &material.albedoTexture, &material.normalTexture,
@@ -206,6 +209,9 @@ bool sameMaterial(const Material& left, const Material& right) {
             && left.metallic == right.metallic && left.roughness == right.roughness
             && left.opacity == right.opacity
             && left.ambientOcclusion == right.ambientOcclusion
+            && left.normalMapScale == right.normalMapScale
+            && left.emissiveStrength == right.emissiveStrength
+            && left.unlit == right.unlit
             && left.proceduralGrid == right.proceduralGrid
             && left.albedoTexture == right.albedoTexture
             && left.normalTexture == right.normalTexture
@@ -344,6 +350,9 @@ uniform float uRoughness;
 uniform float uOpacity;
 uniform int uAlphaMaskEnabled;
 uniform float uAlphaCutoff;
+uniform float uNormalMapScale;
+uniform float uEmissiveStrength;
+uniform int uUnlit;
 uniform float uAmbientOcclusion;
 uniform sampler2D uAlbedoTexture;
 uniform sampler2D uNormalTexture;
@@ -595,6 +604,11 @@ void main() {
         vec3 normalSample = texture(uNormalTexture, normalUv).rgb;
         vec3 tangentNormal = adjustTextureValues(normalSample, uNormalMapBaseGain)
                            * 2.0 - 1.0;
+        tangentNormal.xy *= uNormalMapScale;
+        float tangentLengthSquared = dot(tangentNormal, tangentNormal);
+        tangentNormal = tangentLengthSquared > 0.000001
+                ? tangentNormal * inversesqrt(tangentLengthSquared)
+                : vec3(0.0, 0.0, 1.0);
         vec3 positionDx = dFdx(vWorldPosition);
         vec3 positionDy = dFdy(vWorldPosition);
         vec2 uvDx = dFdx(normalUv);
@@ -668,13 +682,13 @@ void main() {
             + uSkyHorizonColor * horizonWeight;
     ambientLight += skyAmbient * max(uSkyAmbientStrength, 0.0);
     vec3 ambient = baseColor * ambientLight * occlusion * (1.0 - metallic * 0.55);
-    vec3 emission = uEmission;
+    vec3 emission = uEmission * uEmissiveStrength;
     if (uHasEmissiveTexture != 0) {
         vec3 emissiveSample = texture(uEmissiveTexture, emissiveUv).rgb;
         emission *= srgbToLinear(adjustTextureValues(
                 emissiveSample, uEmissiveMapBaseGain));
     }
-    vec3 color = ambient + directLight + emission;
+    vec3 color = uUnlit != 0 ? baseColor + emission : ambient + directLight + emission;
     if (uFogEnabled != 0) {
         float viewDistance = vViewDepth;
         float fogAmount = clamp((viewDistance - uFogStart)
@@ -747,6 +761,8 @@ uniform float uDirectionalLightIntensity;
 uniform float uOpacity;
 uniform int uAlphaMaskEnabled;
 uniform float uAlphaCutoff;
+uniform float uEmissiveStrength;
+uniform int uUnlit;
 uniform sampler2D uAlbedoTexture;
 uniform int uHasAlbedoTexture;
 uniform vec2 uAlbedoUvScale;
@@ -761,12 +777,13 @@ vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
 
 void main() {
     float opacity = clamp(uOpacity, 0.0, 1.0);
+    vec4 albedoSample = vec4(1.0);
+    if (uHasAlbedoTexture != 0) {
+        albedoSample = texture(uAlbedoTexture,
+                transformUv(vFallbackUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation));
+    }
     if (uAlphaMaskEnabled != 0) {
-        if (uHasAlbedoTexture != 0) {
-            opacity *= texture(uAlbedoTexture,
-                    transformUv(vFallbackUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation)).a;
-        }
-        if (opacity < uAlphaCutoff) discard;
+        if (opacity * albedoSample.a < uAlphaCutoff) discard;
         opacity = 1.0;
     }
     vec3 normal = normalize(vFallbackNormal);
@@ -781,7 +798,9 @@ void main() {
     vec3 lighting = vec3(0.28) + 0.72 * diffuse * uDirectionalLightColor
             * max(uDirectionalLightIntensity, 0.0)
             + skyAmbient * max(uSkyAmbientStrength, 0.0);
-    vec3 color = uColor * lighting + uEmission;
+    vec3 baseColor = uColor * albedoSample.rgb;
+    vec3 color = uUnlit != 0 ? baseColor + uEmission * uEmissiveStrength
+                             : baseColor * lighting + uEmission * uEmissiveStrength;
     if (uFogEnabled != 0) {
         float viewDistance = length(uCameraPosition - vFallbackWorldPosition);
         float fogAmount = clamp((viewDistance - uFogStart)
@@ -1606,6 +1625,9 @@ void Renderer::processPendingGpuUpload() {
                 part.alphaMask = primitive.material.alphaMask;
                 part.alphaCutoff = primitive.material.alphaCutoff;
                 part.material.emission = primitive.material.emissiveFactor;
+                part.material.emissiveStrength = primitive.material.emissiveStrength;
+                part.material.normalMapScale = primitive.material.normalScale;
+                part.material.unlit = primitive.material.unlit;
                 part.material.metallic = primitive.material.metallicFactor;
                 part.material.roughness = primitive.material.roughnessFactor;
                 part.material.ambientOcclusion = primitive.material.occlusionStrength;
@@ -3416,6 +3438,9 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.opacity = glGetUniformLocation(program_, "uOpacity");
     uniforms_.alphaMaskEnabled = glGetUniformLocation(program_, "uAlphaMaskEnabled");
     uniforms_.alphaCutoff = glGetUniformLocation(program_, "uAlphaCutoff");
+    uniforms_.normalMapScale = glGetUniformLocation(program_, "uNormalMapScale");
+    uniforms_.emissiveStrength = glGetUniformLocation(program_, "uEmissiveStrength");
+    uniforms_.unlit = glGetUniformLocation(program_, "uUnlit");
     uniforms_.ambientOcclusion = glGetUniformLocation(program_, "uAmbientOcclusion");
     uniforms_.ambientSphericalHarmonics = glGetUniformLocation(program_, "uAmbientSH[0]");
     uniforms_.albedoTexture = glGetUniformLocation(program_, "uAlbedoTexture");
@@ -3559,6 +3584,9 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     glUniform1f(uniforms_.opacity, material.opacity);
     glUniform1i(uniforms_.alphaMaskEnabled, alphaMask ? 1 : 0);
     glUniform1f(uniforms_.alphaCutoff, alphaCutoff);
+    glUniform1f(uniforms_.normalMapScale, material.normalMapScale);
+    glUniform1f(uniforms_.emissiveStrength, material.emissiveStrength);
+    glUniform1i(uniforms_.unlit, material.unlit ? 1 : 0);
     glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
     glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
                  ambientSphericalHarmonics_.data());

@@ -72,8 +72,10 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 27") {
+        if (line == "NUBY_SCENE 28") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
+        } else if (line.rfind("MATERIAL_PBR_EXT ", 0) == 0 && targetVersion < 28) {
+            continue;
         } else if (line.rfind("SKY_AMBIENT ", 0) == 0 && targetVersion < 26) {
             continue;
         } else if (line.rfind("SKY ", 0) == 0 && targetVersion < 25) {
@@ -132,6 +134,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
                 for (std::size_t component = 0; component < 4U; ++component) {
                     legacy << ' ' << fields[base + component];
                 }
+                if (targetVersion >= 27) legacy << ' ' << fields[base + 4U];
                 if (keepSamplerSettings) legacy << ' ' << fields[base + 5U];
             }
             legacy << '\n';
@@ -254,6 +257,9 @@ nuby::Scene makeScene() {
     mesh.transform.scale = {0.5f, 0.6f, 0.7f};
     mesh.material.roughness = 0.3f;
     mesh.material.opacity = 0.42f;
+    mesh.material.normalMapScale = 0.35f;
+    mesh.material.emissiveStrength = 3.5f;
+    mesh.material.unlit = true;
     mesh.skeletalAnimation.enabled = true;
     mesh.skeletalAnimation.playing = false;
     mesh.skeletalAnimation.looping = true;
@@ -493,8 +499,11 @@ void testRoundTripAllSceneData() {
                "primitive type is restored");
         expect(near(mesh->transform.rotation[1], 0.2f), "transform rotation is restored");
         expect(near(mesh->material.roughness, 0.3f)
-                       && near(mesh->material.opacity, 0.42f),
-               "roughness and opacity are restored");
+                       && near(mesh->material.opacity, 0.42f)
+                       && near(mesh->material.normalMapScale, 0.35f)
+                       && near(mesh->material.emissiveStrength, 3.5f)
+                       && mesh->material.unlit,
+               "PBR factors, normal scale, emissive strength and unlit state are restored");
         expect(mesh->material.albedoTexture == "textures/hero diffuse.tga"
                        && mesh->material.normalTexture == "textures/hero normal.tga"
                        && mesh->material.metallicRoughnessTexture
@@ -766,6 +775,28 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid UV rotations cannot partially replace a scene");
 
+    std::string invalidNormalMapScale = valid.str();
+    expect(replaceRecordField(invalidNormalMapScale, "MATERIAL_PBR_EXT", 2,
+                              "-0.1", 1),
+           "v28 material extension records include bounded normal-map scale");
+    std::stringstream malformedNormalMapScale(invalidNormalMapScale);
+    expect(!nuby::SceneSerializer::load(target, malformedNormalMapScale, error),
+           "negative normal-map scales are rejected from scene files");
+    std::string invalidEmissiveStrength = valid.str();
+    expect(replaceRecordField(invalidEmissiveStrength, "MATERIAL_PBR_EXT", 3,
+                              "10001", 1),
+           "v28 material extension records include bounded emissive strength");
+    std::stringstream malformedEmissiveStrength(invalidEmissiveStrength);
+    expect(!nuby::SceneSerializer::load(target, malformedEmissiveStrength, error),
+           "excessive emissive strengths are rejected from scene files");
+    std::string invalidUnlitFlag = valid.str();
+    expect(replaceRecordField(invalidUnlitFlag, "MATERIAL_PBR_EXT", 1,
+                              "2", 1),
+           "v28 unlit state is encoded as a strict boolean");
+    std::stringstream malformedUnlitFlag(invalidUnlitFlag);
+    expect(!nuby::SceneSerializer::load(target, malformedUnlitFlag, error),
+           "invalid serialized unlit flags are rejected");
+
     std::string invalidSkeletalPlayback = valid.str();
     expect(replaceRecordField(invalidSkeletalPlayback, "SKELETAL_PLAYER", 6, "0", 1),
            "v17 scene stores skeletal playback duration");
@@ -820,6 +851,15 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV27(downgradeTextureSchema(valid.str(), 27, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV27, error),
+           "version-twenty-seven scenes remain readable before material extensions");
+    const nuby::Entity* legacyV27Mesh = target.find(2);
+    expect(legacyV27Mesh != nullptr && !legacyV27Mesh->material.unlit
+                   && near(legacyV27Mesh->material.normalMapScale, 1.0f)
+                   && near(legacyV27Mesh->material.emissiveStrength, 1.0f),
+           "legacy scenes default to lit materials, unit normal scale and unit emission strength");
 
     std::stringstream legacyV26(downgradeTextureSchema(valid.str(), 26, 8));
     expect(nuby::SceneSerializer::load(target, legacyV26, error),

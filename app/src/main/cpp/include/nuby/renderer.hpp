@@ -235,6 +235,9 @@ private:
         GLint opacity = -1;
         GLint alphaMaskEnabled = -1;
         GLint alphaCutoff = -1;
+        GLint normalMapScale = -1;
+        GLint emissiveStrength = -1;
+        GLint unlit = -1;
         GLint ambientOcclusion = -1;
         GLint ambientSphericalHarmonics = -1;
         GLint albedoTexture = -1;
