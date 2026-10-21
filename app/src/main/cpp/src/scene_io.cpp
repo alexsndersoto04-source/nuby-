@@ -95,7 +95,8 @@ bool validTextureMapTransform(const TextureMapTransform& transform) {
         if (!std::isfinite(offset) || std::fabs(offset) > 10000.0f) return false;
     }
     return std::isfinite(transform.uvRotation)
-            && std::fabs(transform.uvRotation) <= 10000.0f;
+            && std::fabs(transform.uvRotation) <= 10000.0f
+            && transform.uvSet <= 1U;
 }
 
 bool validTextureMapValueRange(const TextureMapValueRange& valueRange) {
@@ -115,12 +116,17 @@ void writeTextureMapValueRange(std::ostream& output,
 }
 
 bool readTextureMapTransform(std::istream& input, TextureMapTransform& transform,
-                             bool hasSamplerSettings, bool hasRotation = false) {
+                             bool hasSamplerSettings, bool hasRotation, bool hasUvSet) {
     if (!readFloatArray(input, transform.uvScale)
             || !readFloatArray(input, transform.uvOffset)) return false;
     if (hasRotation && !(input >> transform.uvRotation)) return false;
-    return validTextureMapTransform(transform)
-            && (!hasSamplerSettings || readBool(input, transform.clampToEdge));
+    if (hasSamplerSettings && !readBool(input, transform.clampToEdge)) return false;
+    if (hasUvSet) {
+        unsigned int uvSet = 0U;
+        if (!(input >> uvSet) || uvSet > 1U) return false;
+        transform.uvSet = static_cast<std::uint8_t>(uvSet);
+    }
+    return validTextureMapTransform(transform);
 }
 
 void writeTextureMapTransform(std::ostream& output,
@@ -128,7 +134,8 @@ void writeTextureMapTransform(std::ostream& output,
     writeFloatArray(output, transform.uvScale);
     writeFloatArray(output, transform.uvOffset);
     output << ' ' << transform.uvRotation
-           << ' ' << (transform.clampToEdge ? 1 : 0);
+           << ' ' << (transform.clampToEdge ? 1 : 0)
+           << ' ' << static_cast<unsigned int>(transform.uvSet);
 }
 
 bool validTrack(const Vector3Track& track) {
@@ -764,23 +771,23 @@ bool readEntity(std::istream& input, Scene& scene, std::uint32_t& maximumId,
     if (version >= 7
             && (!readTag(input, "MATERIAL_MAP_UV", error)
                 || !readTextureMapTransform(input, entity.material.albedoMapTransform,
-                        version >= 8, version >= 27)
+                        version >= 8, version >= 27, version >= 29)
                 || !readTextureMapTransform(input, entity.material.normalMapTransform,
-                        version >= 8, version >= 27)
+                        version >= 8, version >= 27, version >= 29)
                 || !readTextureMapTransform(input,
-                        entity.material.metallicRoughnessMapTransform, version >= 8, version >= 27)
+                        entity.material.metallicRoughnessMapTransform, version >= 8, version >= 27, version >= 29)
                 || !readTextureMapTransform(input, entity.material.metallicMapTransform,
-                        version >= 8, version >= 27)
+                        version >= 8, version >= 27, version >= 29)
                 || !readTextureMapTransform(input, entity.material.roughnessMapTransform,
-                        version >= 8, version >= 27)
+                        version >= 8, version >= 27, version >= 29)
                 || !readTextureMapTransform(input, entity.material.occlusionMapTransform,
-                        version >= 8, version >= 27)
+                        version >= 8, version >= 27, version >= 29)
                 || (version >= 10
                     && !readTextureMapTransform(input,
-                            entity.material.opacityMapTransform, true, version >= 27))
+                            entity.material.opacityMapTransform, true, version >= 27, version >= 29))
                 || (version >= 12
                     && !readTextureMapTransform(input,
-                            entity.material.emissiveMapTransform, true, version >= 27)))) {
+                            entity.material.emissiveMapTransform, true, version >= 27, version >= 29)))) {
         return fail(error, "Material UV transform or sampler settings are invalid");
     }
     if (version >= 10) {

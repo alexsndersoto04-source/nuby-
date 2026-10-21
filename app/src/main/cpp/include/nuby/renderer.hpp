@@ -121,6 +121,7 @@ private:
         float position[3]{};
         float normal[3]{};
         float uv[2]{};
+        float uv1[2]{};
         std::uint16_t jointIndices[4]{};
         float weights[4]{};
     };
@@ -265,6 +266,8 @@ private:
         std::array<GLint, 7> textureUvScale{};
         std::array<GLint, 7> textureUvOffset{};
         std::array<GLint, 7> textureUvRotation{};
+        GLint textureUvSet = -1;
+        GLint albedoUvSet = -1;
         std::array<GLint, 8> textureMapValueRange{};
         GLint cameraPosition = -1;
         GLint lightDirection = -1;
@@ -412,6 +415,7 @@ private:
     GLint shadowProgramAlbedoUvScale_ = -1;
     GLint shadowProgramAlbedoUvOffset_ = -1;
     GLint shadowProgramAlbedoUvRotation_ = -1;
+    GLint shadowProgramAlbedoUvSet_ = -1;
     static constexpr int kMaximumGpuJoints = 64;
     static constexpr GLuint kSkinPaletteBindingPoint = 0;
     static constexpr int kShadowMapSize = 512;

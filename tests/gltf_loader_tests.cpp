@@ -5,8 +5,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
-#include <cstring>
 #include <fstream>
+#include <cstring>
 #include <iostream>
 #include <iterator>
 #include <string>
@@ -166,6 +166,54 @@ std::string makeTexturedTriangleGlb(const std::string& materialJson,
     const std::size_t updatedMeshes = json.find(R"JSON("meshes":)JSON");
     json.insert(updatedMeshes, R"JSON("scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)JSON"
             + textureDefinitions + R"JSON("materials":[{)JSON" + materialJson + "}],");
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, std::move(json));
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
+std::string makeUv1TexturedTriangleGlb(const std::string& materialJson) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeTexturedTriangleGlb(materialJson), json, binary, error)) {
+        return {};
+    }
+    while ((binary.size() & 3U) != 0U) binary.push_back('\0');
+    const std::size_t uvOffset = binary.size();
+    for (float value : {0.25f, 0.5f, 0.75f, 0.5f, 0.25f, 1.0f}) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        appendU32(binary, bits);
+    }
+    const std::string bufferLength = R"JSON("buffers":[{"byteLength":)JSON";
+    const std::size_t bufferLengthStart = json.find(bufferLength);
+    if (bufferLengthStart == std::string::npos) return {};
+    const std::size_t bufferLengthValue = bufferLengthStart + bufferLength.size();
+    const std::size_t bufferLengthEnd = json.find_first_not_of("0123456789", bufferLengthValue);
+    if (bufferLengthEnd == std::string::npos) return {};
+    json.replace(bufferLengthValue, bufferLengthEnd - bufferLengthValue,
+                 std::to_string(binary.size()));
+    const std::string viewsEnd = R"JSON(],"accessors":)JSON";
+    const std::size_t viewsEndPosition = json.find(viewsEnd);
+    if (viewsEndPosition == std::string::npos) return {};
+    json.insert(viewsEndPosition,
+                R"JSON(,{"buffer":0,"byteOffset":)JSON" + std::to_string(uvOffset)
+                        + R"JSON(,"byteLength":24})JSON");
+    const std::size_t accessorsStart = json.find(R"JSON("accessors":[)JSON");
+    const std::size_t accessorsEndPosition = json.find("],", accessorsStart);
+    if (accessorsStart == std::string::npos || accessorsEndPosition == std::string::npos) return {};
+    json.insert(accessorsEndPosition,
+                R"JSON(,{"bufferView":3,"componentType":5126,"count":3,"type":"VEC2"})JSON");
+    const std::string positionAttribute = R"JSON("POSITION":0)JSON";
+    const std::size_t positionAttributePosition = json.find(positionAttribute);
+    if (positionAttributePosition == std::string::npos) return {};
+    json.replace(positionAttributePosition, positionAttribute.size(),
+                 R"JSON("POSITION":0,"TEXCOORD_1":2)JSON");
     std::string data;
     appendU32(data, 0x46546C67U);
     appendU32(data, 2U);
@@ -554,10 +602,31 @@ void testGltfPbrMaterialFactors() {
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"rotation":10001}}}})JSON"),
                    primitives, error),
            "extreme texture-transform rotations are rejected before rendering");
+    const std::string uv1Material = R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":1,"extensions":{"KHR_texture_transform":{"offset":[0.2,0.3]}}}})JSON";
+    const std::string uv1Glb = makeUv1TexturedTriangleGlb(uv1Material);
+    const bool uv1FirstOk = nuby::parseGlbMeshes(uv1Glb, primitives, error);
+    expect(uv1FirstOk
+                   && primitives.size() == 1U
+                   && primitives[0].material.baseColorTexture.uvSet == 1U
+                   && std::fabs(primitives[0].vertices[0].uv1[0] - 0.25f) < 1.0e-6f
+                   && std::fabs(primitives[0].vertices[0].uv1[1] - 0.5f) < 1.0e-6f,
+           "GLB TEXCOORD_1 data and textureInfo selection are retained");
+    const std::string uv1OverrideMaterial = R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":0,"extensions":{"KHR_texture_transform":{"texCoord":1}}}})JSON";
+    const bool uv1OverrideOk = nuby::parseGlbMeshes(makeUv1TexturedTriangleGlb(uv1OverrideMaterial), primitives, error);
+    expect(uv1OverrideOk
+                   && primitives.size() == 1U
+                   && primitives[0].material.baseColorTexture.uvSet == 1U,
+           "KHR_texture_transform texCoord overrides the textureInfo UV set");
+    expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(uv1Material), primitives, error),
+           "materials cannot select TEXCOORD_1 when the primitive has no such accessor");
     expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
-                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"texCoord":1}}}})JSON"),
+                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":2}})JSON"),
                    primitives, error),
-           "KHR_texture_transform cannot silently select unsupported UV sets");
+           "textureInfo UV sets above TEXCOORD_1 are rejected");
+    expect(!nuby::parseGlbMeshes(makeUv1TexturedTriangleGlb(
+                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"texCoord":2}}}})JSON"),
+                   primitives, error),
+           "KHR_texture_transform UV sets above TEXCOORD_1 are rejected");
     expect(!nuby::parseGlbMeshes(makeTriangleWithMaterialGlb(
                    R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0}})JSON"),
                    primitives, error),
@@ -682,9 +751,9 @@ void testGlbMaterialsBindEmbeddedPngTextures() {
     expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(material, unsupportedFilter), primitives, error),
            "unsupported glTF sampler filtering is explicitly rejected");
     expect(!nuby::parseGlbMeshes(makeTexturedTriangleGlb(
-                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":1}})JSON"),
+                   R"JSON("pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":2}})JSON"),
                    primitives, error),
-           "glTF material UV sets other than TEXCOORD_0 are rejected");
+           "glTF material UV sets above TEXCOORD_1 are rejected");
 }
 
 void testStaticGlbTraversesMultipleMeshNodesAndBakesTransforms() {

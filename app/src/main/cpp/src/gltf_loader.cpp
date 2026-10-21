@@ -771,12 +771,13 @@ bool parseTextureInfo(const JsonValue* info,
     std::uint32_t texCoord = 0;
     if (info->type != JsonValue::Type::Object
             || !unsignedInteger(member(*info, "index"), textureIndex)
-            || !optionalUnsigned(*info, "texCoord", 0U, texCoord) || texCoord != 0U
+            || !optionalUnsigned(*info, "texCoord", 0U, texCoord) || texCoord > 1U
             || textureIndex >= textureSources.size()) {
-        return fail(error, "GLB textureInfo must reference an embedded texture using TEXCOORD_0");
+        return fail(error, "GLB textureInfo must reference an embedded texture using TEXCOORD_0 or TEXCOORD_1");
     }
     const GltfTextureSource& textureSource = textureSources[textureIndex];
     binding.imageIndex = textureSource.imageIndex;
+    binding.uvSet = static_cast<std::uint8_t>(texCoord);
     binding.clampToEdge = textureSource.clampToEdge;
 
     if (const JsonValue* extensions = member(*info, "extensions"); extensions != nullptr) {
@@ -802,9 +803,10 @@ bool parseTextureInfo(const JsonValue* info,
         if (!optionalFloat(*transform, "rotation", 0.0f, binding.uvRotation)
                 || std::fabs(binding.uvRotation) > 10000.0f
                 || !optionalUnsigned(*transform, "texCoord", texCoord, transformTexCoord)
-                || transformTexCoord != 0U) {
-            return fail(error, "KHR_texture_transform rotation is invalid or selects an unsupported UV set");
+                || transformTexCoord > 1U) {
+            return fail(error, "KHR_texture_transform rotation or TEXCOORD_0/1 selection is invalid");
         }
+        binding.uvSet = static_cast<std::uint8_t>(transformTexCoord);
     }
     return true;
 }
@@ -1202,7 +1204,7 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
             }
             const auto readOptionalAttribute = [&](const char* name, const char* type,
                                                    std::size_t components,
-                                                   bool normals) -> bool {
+                                                   bool normals, bool uvSetOne) -> bool {
                 const JsonValue* value = member(*attributes, name);
                 if (value == nullptr) return true;
                 std::uint32_t accessorIndex = 0;
@@ -1217,16 +1219,39 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                             parsed.vertices[vertex].normal[axis] = values[vertex * components + axis];
                         }
                     } else {
-                        parsed.vertices[vertex].uv[0] = values[vertex * components];
-                        parsed.vertices[vertex].uv[1] = values[vertex * components + 1U];
+                        float* uv = uvSetOne ? parsed.vertices[vertex].uv1
+                                             : parsed.vertices[vertex].uv;
+                        uv[0] = values[vertex * components];
+                        uv[1] = values[vertex * components + 1U];
                     }
                 }
                 return true;
             };
             const bool hasNormals = member(*attributes, "NORMAL") != nullptr;
-            if (!readOptionalAttribute("NORMAL", "VEC3", 3U, true)
-                    || !readOptionalAttribute("TEXCOORD_0", "VEC2", 2U, false)) {
-                return fail(error, "GLB NORMAL or TEXCOORD_0 accessor is invalid");
+            const JsonValue* texCoord1 = member(*attributes, "TEXCOORD_1");
+            for (const auto& attribute : attributes->objectValue) {
+                if (attribute.first.rfind("TEXCOORD_", 0) == 0
+                        && attribute.first != "TEXCOORD_0"
+                        && attribute.first != "TEXCOORD_1") {
+                    return fail(error, "GLB primitive uses an unsupported TEXCOORD set");
+                }
+            }
+            if (!readOptionalAttribute("NORMAL", "VEC3", 3U, true, false)
+                    || !readOptionalAttribute("TEXCOORD_0", "VEC2", 2U, false, false)
+                    || !readOptionalAttribute("TEXCOORD_1", "VEC2", 2U, false, true)) {
+                return fail(error, "GLB NORMAL or TEXCOORD_0/1 accessor is invalid");
+            }
+            if (parsed.hasMaterial && texCoord1 == nullptr) {
+                const GltfMaterial& material = parsed.material;
+                const std::array<const GltfTextureBinding*, 5> bindings{{
+                        &material.baseColorTexture, &material.metallicRoughnessTexture,
+                        &material.normalTexture, &material.occlusionTexture,
+                        &material.emissiveTexture}};
+                for (const GltfTextureBinding* binding : bindings) {
+                    if (binding->imageIndex >= 0 && binding->uvSet == 1U) {
+                        return fail(error, "GLB material selects TEXCOORD_1 but the primitive has no such accessor");
+                    }
+                }
             }
             const JsonValue* jointAttribute = member(*attributes, "JOINTS_0");
             const JsonValue* weightAttribute = member(*attributes, "WEIGHTS_0");

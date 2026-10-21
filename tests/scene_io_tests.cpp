@@ -72,7 +72,7 @@ std::string downgradeTextureSchema(const std::string& encoded,
     std::ostringstream legacy;
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "NUBY_SCENE 28") {
+        if (line == "NUBY_SCENE 29") {
             legacy << "NUBY_SCENE " << targetVersion << '\n';
         } else if (line.rfind("MATERIAL_PBR_EXT ", 0) == 0 && targetVersion < 28) {
             continue;
@@ -130,12 +130,13 @@ std::string downgradeTextureSchema(const std::string& encoded,
                     : targetVersion < 10 ? 6U : targetVersion < 12 ? 7U : 8U;
             const bool keepSamplerSettings = targetVersion >= 8;
             for (std::size_t map = 0; map < mapsToKeep; ++map) {
-                const std::size_t base = map * 6U;
+                const std::size_t base = map * 7U;
                 for (std::size_t component = 0; component < 4U; ++component) {
                     legacy << ' ' << fields[base + component];
                 }
                 if (targetVersion >= 27) legacy << ' ' << fields[base + 4U];
                 if (keepSamplerSettings) legacy << ' ' << fields[base + 5U];
+                if (targetVersion >= 29) legacy << ' ' << fields[base + 6U];
             }
             legacy << '\n';
         } else if (line.rfind("RIGIDBODY ", 0) == 0 && targetVersion < 13) {
@@ -313,6 +314,7 @@ nuby::Scene makeScene() {
     mesh.material.albedoMapTransform.uvScale = {0.5f, 0.75f};
     mesh.material.albedoMapTransform.uvOffset = {0.1f, 0.2f};
     mesh.material.albedoMapTransform.uvRotation = 0.6f;
+    mesh.material.albedoMapTransform.uvSet = 1U;
     mesh.material.albedoMapTransform.clampToEdge = true;
     mesh.material.normalMapTransform.uvScale = {2.0f, 1.5f};
     mesh.material.normalMapTransform.uvOffset = {-0.25f, 0.35f};
@@ -529,6 +531,7 @@ void testRoundTripAllSceneData() {
                        && near(mesh->material.albedoMapTransform.uvScale[1], 0.75f)
                        && near(mesh->material.albedoMapTransform.uvOffset[0], 0.1f)
                        && near(mesh->material.albedoMapTransform.uvRotation, 0.6f)
+                       && mesh->material.albedoMapTransform.uvSet == 1U
                        && near(mesh->material.normalMapTransform.uvScale[0], 2.0f)
                        && near(mesh->material.normalMapTransform.uvOffset[0], -0.25f)
                        && near(mesh->material.roughnessMapTransform.uvScale[1], 0.9f)
@@ -775,6 +778,14 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "invalid UV rotations cannot partially replace a scene");
 
+    std::string invalidUvSet = valid.str();
+    expect(replaceRecordField(invalidUvSet, "MATERIAL_MAP_UV", 6,
+                              "2", 1),
+           "v29 material UV records store a bounded coordinate-set selector");
+    std::stringstream malformedUvSet(invalidUvSet);
+    expect(!nuby::SceneSerializer::load(target, malformedUvSet, error),
+           "unsupported serialized UV coordinate sets are rejected");
+
     std::string invalidNormalMapScale = valid.str();
     expect(replaceRecordField(invalidNormalMapScale, "MATERIAL_PBR_EXT", 2,
                               "-0.1", 1),
@@ -851,6 +862,14 @@ void testMalformedFilesDoNotPartiallyReplaceScene() {
            "audio-source paths escaping the asset root are rejected");
     expect(target.entities().size() == 1 && target.find(keepId) != nullptr,
            "unsafe audio paths cannot partially replace the target scene");
+
+    std::stringstream legacyV28(downgradeTextureSchema(valid.str(), 28, 8));
+    expect(nuby::SceneSerializer::load(target, legacyV28, error),
+           "version-twenty-eight scenes remain readable before UV-set selection");
+    const nuby::Entity* legacyV28Mesh = target.find(2);
+    expect(legacyV28Mesh != nullptr
+                   && legacyV28Mesh->material.albedoMapTransform.uvSet == 0U,
+           "legacy scene texture maps default to TEXCOORD_0");
 
     std::stringstream legacyV27(downgradeTextureSchema(valid.str(), 27, 8));
     expect(nuby::SceneSerializer::load(target, legacyV27, error),

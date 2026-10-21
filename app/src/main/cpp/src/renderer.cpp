@@ -181,6 +181,7 @@ std::size_t materialBatchHash(const Material& material) {
         for (float value : transform->uvOffset) hashValue(hash, value);
         hashValue(hash, transform->uvRotation);
         hashValue(hash, transform->clampToEdge);
+        hashValue(hash, transform->uvSet);
     }
     const std::array<const TextureMapValueRange*, 8> ranges{{
             &material.albedoMapValueRange, &material.normalMapValueRange,
@@ -199,7 +200,8 @@ bool sameMaterial(const Material& left, const Material& right) {
     const auto sameTransform = [](const TextureMapTransform& a,
                                   const TextureMapTransform& b) {
         return a.uvScale == b.uvScale && a.uvOffset == b.uvOffset
-                && a.uvRotation == b.uvRotation && a.clampToEdge == b.clampToEdge;
+                && a.uvRotation == b.uvRotation && a.clampToEdge == b.clampToEdge
+                && a.uvSet == b.uvSet;
     };
     const auto sameRange = [](const TextureMapValueRange& a,
                               const TextureMapValueRange& b) {
@@ -301,6 +303,7 @@ precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
+layout(location = 9) in vec2 aUv1;
 layout(location = 3) in mat4 aInstanceModel;
 layout(location = 7) in uvec4 aJointIndices;
 layout(location = 8) in vec4 aJointWeights;
@@ -313,6 +316,7 @@ uniform int uSkinningEnabled;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
 out vec2 vUv;
+out vec2 vUv1;
 out float vViewDepth;
 void main() {
     mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
@@ -331,6 +335,7 @@ void main() {
     vWorldPosition = world.xyz;
     vWorldNormal = mat3(model) * localNormal;
     vUv = aUv;
+    vUv1 = aUv1;
     vViewDepth = -(uView * world).z;
     gl_Position = uViewProjection * world;
 }
@@ -342,6 +347,7 @@ precision highp float;
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
 in vec2 vUv;
+in vec2 vUv1;
 in float vViewDepth;
 uniform vec3 uColor;
 uniform vec3 uEmission;
@@ -386,6 +392,7 @@ uniform vec2 uOpacityUvRotation;
 uniform vec2 uEmissiveUvScale;
 uniform vec2 uEmissiveUvOffset;
 uniform vec2 uEmissiveUvRotation;
+uniform int uTextureUvSet[8];
 uniform int uOpacityMapChannel;
 uniform vec2 uAlbedoMapBaseGain;
 uniform vec2 uNormalMapBaseGain;
@@ -542,6 +549,10 @@ vec3 evaluateDirectLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
             * radiance * normalLight;
 }
 
+vec2 selectTextureUv(int uvSet) {
+    return uvSet == 1 ? vUv1 : vUv;
+}
+
 vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
     vec2 scaled = uv * scale;
     return vec2(rotation.x * scaled.x - rotation.y * scaled.y,
@@ -551,7 +562,7 @@ vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
 void main() {
     vec3 normal = normalize(vWorldNormal);
     vec3 lightDirection = normalize(-uLightDirection);
-    vec2 opacityUv = transformUv(vUv, uOpacityUvScale, uOpacityUvOffset, uOpacityUvRotation);
+    vec2 opacityUv = transformUv(selectTextureUv(uTextureUvSet[6]), uOpacityUvScale, uOpacityUvOffset, uOpacityUvRotation);
     float opacity = clamp(uOpacity, 0.0, 1.0);
     if (uHasOpacityTexture != 0) {
         vec4 opacitySample = texture(uOpacityTexture, opacityUv);
@@ -565,7 +576,7 @@ void main() {
         opacity *= adjustTextureValue(mapOpacity, uOpacityMapBaseGain);
     }
 
-    vec2 albedoUv = transformUv(vUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation);
+    vec2 albedoUv = transformUv(selectTextureUv(uTextureUvSet[0]), uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation);
     vec4 albedoSample = vec4(1.0);
     if (uHasAlbedoTexture != 0) albedoSample = texture(uAlbedoTexture, albedoUv);
     if (uAlphaMaskEnabled != 0) {
@@ -589,13 +600,13 @@ void main() {
     }
 
     vec3 baseColor = uColor;
-    vec2 normalUv = transformUv(vUv, uNormalUvScale, uNormalUvOffset, uNormalUvRotation);
-    vec2 metallicRoughnessUv = transformUv(vUv, uMetallicRoughnessUvScale,
+    vec2 normalUv = transformUv(selectTextureUv(uTextureUvSet[1]), uNormalUvScale, uNormalUvOffset, uNormalUvRotation);
+    vec2 metallicRoughnessUv = transformUv(selectTextureUv(uTextureUvSet[2]), uMetallicRoughnessUvScale,
                                        uMetallicRoughnessUvOffset, uMetallicRoughnessUvRotation);
-    vec2 metallicUv = transformUv(vUv, uMetallicUvScale, uMetallicUvOffset, uMetallicUvRotation);
-    vec2 roughnessUv = transformUv(vUv, uRoughnessUvScale, uRoughnessUvOffset, uRoughnessUvRotation);
-    vec2 occlusionUv = transformUv(vUv, uOcclusionUvScale, uOcclusionUvOffset, uOcclusionUvRotation);
-    vec2 emissiveUv = transformUv(vUv, uEmissiveUvScale, uEmissiveUvOffset, uEmissiveUvRotation);
+    vec2 metallicUv = transformUv(selectTextureUv(uTextureUvSet[3]), uMetallicUvScale, uMetallicUvOffset, uMetallicUvRotation);
+    vec2 roughnessUv = transformUv(selectTextureUv(uTextureUvSet[4]), uRoughnessUvScale, uRoughnessUvOffset, uRoughnessUvRotation);
+    vec2 occlusionUv = transformUv(selectTextureUv(uTextureUvSet[5]), uOcclusionUvScale, uOcclusionUvOffset, uOcclusionUvRotation);
+    vec2 emissiveUv = transformUv(selectTextureUv(uTextureUvSet[7]), uEmissiveUvScale, uEmissiveUvOffset, uEmissiveUvRotation);
     if (uHasAlbedoTexture != 0) {
         baseColor *= srgbToLinear(adjustTextureValues(
                 albedoSample.rgb, uAlbedoMapBaseGain));
@@ -709,6 +720,7 @@ precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
+layout(location = 9) in vec2 aUv1;
 layout(location = 7) in uvec4 aJointIndices;
 layout(location = 8) in vec4 aJointWeights;
 layout(std140) uniform SkinPalette { mat4 uJointMatrices[64]; };
@@ -717,6 +729,7 @@ uniform mat4 uModel;
 uniform int uSkinningEnabled;
 out vec3 vFallbackNormal;
 out vec2 vFallbackUv;
+out vec2 vFallbackUv1;
 out vec3 vFallbackWorldPosition;
 void main() {
     vec4 localPosition = vec4(aPosition, 1.0);
@@ -733,6 +746,7 @@ void main() {
     vec4 worldPosition = uModel * localPosition;
     vFallbackNormal = normalize(mat3(uModel) * localNormal);
     vFallbackUv = aUv;
+    vFallbackUv1 = aUv1;
     vFallbackWorldPosition = worldPosition.xyz;
     gl_Position = uViewProjection * worldPosition;
 }
@@ -743,6 +757,7 @@ constexpr const char* kFallbackFragmentShader = R"(
 precision highp float;
 in vec3 vFallbackNormal;
 in vec2 vFallbackUv;
+in vec2 vFallbackUv1;
 in vec3 vFallbackWorldPosition;
 uniform vec3 uCameraPosition;
 uniform int uFogEnabled;
@@ -765,10 +780,14 @@ uniform float uEmissiveStrength;
 uniform int uUnlit;
 uniform sampler2D uAlbedoTexture;
 uniform int uHasAlbedoTexture;
+uniform int uAlbedoUvSet;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
 uniform vec2 uAlbedoUvRotation;
 out vec4 fragmentColor;
+vec2 selectFallbackUv() {
+    return uAlbedoUvSet == 1 ? vFallbackUv1 : vFallbackUv;
+}
 vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
     vec2 scaled = uv * scale;
     return vec2(rotation.x * scaled.x - rotation.y * scaled.y,
@@ -780,7 +799,7 @@ void main() {
     vec4 albedoSample = vec4(1.0);
     if (uHasAlbedoTexture != 0) {
         albedoSample = texture(uAlbedoTexture,
-                transformUv(vFallbackUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation));
+                transformUv(selectFallbackUv(), uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation));
     }
     if (uAlphaMaskEnabled != 0) {
         if (opacity * albedoSample.a < uAlphaCutoff) discard;
@@ -816,6 +835,7 @@ constexpr const char* kShadowVertexShader = R"(
 precision highp float;
 layout(location = 0) in vec3 aPosition;
 layout(location = 2) in vec2 aUv;
+layout(location = 9) in vec2 aUv1;
 layout(location = 3) in mat4 aInstanceModel;
 layout(location = 7) in uvec4 aJointIndices;
 layout(location = 8) in vec4 aJointWeights;
@@ -825,6 +845,7 @@ uniform mat4 uModel;
 uniform int uUseInstancing;
 uniform int uSkinningEnabled;
 out vec2 vShadowUv;
+out vec2 vShadowUv1;
 void main() {
     mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
     vec4 localPosition = vec4(aPosition, 1.0);
@@ -837,6 +858,7 @@ void main() {
         localPosition = skin * localPosition;
     }
     vShadowUv = aUv;
+    vShadowUv1 = aUv1;
     gl_Position = uLightViewProjection * model * localPosition;
 }
 )";
@@ -845,14 +867,19 @@ constexpr const char* kShadowFragmentShader = R"(
 #version 300 es
 precision highp float;
 in vec2 vShadowUv;
+in vec2 vShadowUv1;
 uniform sampler2D uAlbedoTexture;
 uniform int uHasAlbedoTexture;
 uniform int uAlphaMaskEnabled;
 uniform float uAlphaCutoff;
 uniform float uBaseColorAlpha;
+uniform int uAlbedoUvSet;
 uniform vec2 uAlbedoUvScale;
 uniform vec2 uAlbedoUvOffset;
 uniform vec2 uAlbedoUvRotation;
+vec2 selectShadowUv() {
+    return uAlbedoUvSet == 1 ? vShadowUv1 : vShadowUv;
+}
 vec2 transformUv(vec2 uv, vec2 scale, vec2 offset, vec2 rotation) {
     vec2 scaled = uv * scale;
     return vec2(rotation.x * scaled.x - rotation.y * scaled.y,
@@ -864,7 +891,7 @@ void main() {
         float alpha = uBaseColorAlpha;
         if (uHasAlbedoTexture != 0) {
             alpha *= texture(uAlbedoTexture,
-                    transformUv(vShadowUv, uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation)).a;
+                    transformUv(selectShadowUv(), uAlbedoUvScale, uAlbedoUvOffset, uAlbedoUvRotation)).a;
         }
         if (alpha < uAlphaCutoff) discard;
     }
@@ -1072,6 +1099,9 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<const void*>(offsetof(Vertex, uv)));
+    glEnableVertexAttribArray(9);
+    glVertexAttribPointer(9, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          reinterpret_cast<const void*>(offsetof(Vertex, uv1)));
     glBindVertexArray(0);
     mesh.vertexCount = static_cast<GLsizei>(vertices.size());
     mesh.gpuBytes = static_cast<std::uint64_t>(vertices.size()) * sizeof(Vertex);
@@ -1122,6 +1152,7 @@ bool Renderer::prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
         std::copy(std::begin(source.position), std::end(source.position), destination.position);
         std::copy(std::begin(source.normal), std::end(source.normal), destination.normal);
         std::copy(std::begin(source.uv), std::end(source.uv), destination.uv);
+        std::copy(std::begin(source.uv1), std::end(source.uv1), destination.uv1);
         for (std::size_t slot = 0; slot < 4U; ++slot) {
             if (!std::isfinite(influence.weights[slot]) || influence.weights[slot] < 0.0f
                     || influence.jointIndices[slot] >= kMaximumGpuJoints) {
@@ -1338,6 +1369,10 @@ bool Renderer::initializePendingGpuPrimitive(CpuGpuPrimitive& geometry, Mesh& me
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride),
             reinterpret_cast<const void*>(geometry.skinned
                     ? offsetof(CpuSkinnedVertex, uv) : offsetof(MeshVertex, uv)));
+    glEnableVertexAttribArray(9);
+    glVertexAttribPointer(9, 2, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride),
+            reinterpret_cast<const void*>(geometry.skinned
+                    ? offsetof(CpuSkinnedVertex, uv1) : offsetof(MeshVertex, uv1)));
     if (geometry.skinned) {
         glEnableVertexAttribArray(7);
         glVertexAttribIPointer(7, 4, GL_UNSIGNED_SHORT,
@@ -1651,6 +1686,7 @@ void Renderer::processPendingGpuUpload() {
                     transform.uvScale = binding.uvScale;
                     transform.uvOffset = binding.uvOffset;
                     transform.uvRotation = binding.uvRotation;
+                    transform.uvSet = binding.uvSet;
                     transform.clampToEdge = binding.clampToEdge;
                     return texturePath(binding.imageIndex);
                 };
@@ -2691,6 +2727,7 @@ void Renderer::initializeShadowMap() {
     shadowProgramAlbedoUvScale_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvScale");
     shadowProgramAlbedoUvOffset_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvOffset");
     shadowProgramAlbedoUvRotation_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvRotation");
+    shadowProgramAlbedoUvSet_ = glGetUniformLocation(shadowProgram_, "uAlbedoUvSet");
     const GLuint paletteBlock = glGetUniformBlockIndex(shadowProgram_, "SkinPalette");
     if (paletteBlock != GL_INVALID_INDEX) {
         glUniformBlockBinding(shadowProgram_, paletteBlock, kSkinPaletteBindingPoint);
@@ -2880,6 +2917,8 @@ void Renderer::renderShadowMaps() {
             const std::array<float, 2> shadowUvRotation =
                     textureRotationPair(albedoTransform.uvRotation);
             glUniform2fv(shadowProgramAlbedoUvRotation_, 1, shadowUvRotation.data());
+            glUniform1i(shadowProgramAlbedoUvSet_,
+                        static_cast<GLint>(albedoTransform.uvSet));
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, shadowAlbedoTexture);
             const GLuint shadowSampler = shadowMaterial != nullptr
@@ -3491,6 +3530,8 @@ void Renderer::initialize(AAssetManager* assetManager) {
         uniforms_.textureUvOffset[map] = glGetUniformLocation(program_, uvOffsetNames[map]);
         uniforms_.textureUvRotation[map] = glGetUniformLocation(program_, uvRotationNames[map]);
     }
+    uniforms_.textureUvSet = glGetUniformLocation(program_, "uTextureUvSet[0]");
+    uniforms_.albedoUvSet = glGetUniformLocation(program_, "uAlbedoUvSet");
     uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
     uniforms_.lightDirection = glGetUniformLocation(program_, "uLightDirection");
     uniforms_.directionalLightColor = glGetUniformLocation(program_, "uDirectionalLightColor");
@@ -3648,6 +3689,18 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                 textureRotationPair(mapTransforms[map]->uvRotation);
         glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
     }
+    const std::array<const TextureMapTransform*, 8> uvSetTransforms{{
+            &material.albedoMapTransform, &material.normalMapTransform,
+            &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
+            &material.roughnessMapTransform, &material.occlusionMapTransform,
+            &material.opacityMapTransform, &material.emissiveMapTransform}};
+    std::array<GLint, 8> uvSets{};
+    for (std::size_t map = 0; map < uvSetTransforms.size(); ++map) {
+        uvSets[map] = static_cast<GLint>(uvSetTransforms[map]->uvSet);
+    }
+    glUniform1iv(uniforms_.textureUvSet, static_cast<GLsizei>(uvSets.size()), uvSets.data());
+    glUniform1i(uniforms_.albedoUvSet,
+                static_cast<GLint>(material.albedoMapTransform.uvSet));
     const std::array<const TextureMapValueRange*, 8> mapValueRanges{{
             &material.albedoMapValueRange,
             &material.normalMapValueRange,

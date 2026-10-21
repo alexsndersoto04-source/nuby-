@@ -16,6 +16,7 @@ struct GltfTextureBinding {
     std::array<float, 2> uvScale{1.0f, 1.0f};
     std::array<float, 2> uvOffset{0.0f, 0.0f};
     float uvRotation = 0.0f;
+    std::uint8_t uvSet = 0U;
     bool clampToEdge = false;
 };
 
@@ -83,12 +84,13 @@ bool parseGlbContainer(std::string_view bytes, std::string& json,
 bool validateGltf2Json(std::string_view json, std::string& error);
 
 // Imports triangle primitives from a self-contained GLB with one embedded
-// buffer. Supports float POSITION/NORMAL/TEXCOORD_0, unsigned scalar indices,
-// optional JOINTS_0/WEIGHTS_0 with four influences, glTF PBR material factors,
-// and image-index references to embedded PNGs used by standard texture slots.
-// It retains repeat/clamp addressing and KHR_texture_transform offset/scale/
-// rotation. Higher-level asset APIs return encoded image bytes. External images,
-// non-PNG formats, custom filters and nonzero UV sets are rejected.
+// buffer. Supports float POSITION/NORMAL/TEXCOORD_0/1, unsigned scalar indices,
+// optional JOINTS_0/WEIGHTS_0 with four influences, glTF PBR factors and the
+// KHR_materials_unlit / KHR_materials_emissive_strength extensions. Standard
+// texture slots select UV set 0 or 1; KHR_texture_transform offset/scale/rotation
+// and its texCoord override are retained. Higher-level APIs return encoded image
+// bytes. External images, non-PNG formats, custom filters and UV sets above 1
+// are rejected.
 bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                     std::string& error);
 
