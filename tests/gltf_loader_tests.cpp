@@ -108,6 +108,56 @@ std::string makeTriangleGlb(std::uint16_t thirdIndex = 2, bool includeSkin = fal
     return data;
 }
 
+std::string makeTangentTriangleGlb(bool includeReflectedScene = false,
+                                  float handedness = 1.0f) {
+    std::string json;
+    std::string binary;
+    std::string error;
+    if (!nuby::parseGlbContainer(makeTriangleGlb(), json, binary, error)) return {};
+    while ((binary.size() & 3U) != 0U) binary.push_back('\0');
+    const std::size_t tangentOffset = binary.size();
+    for (int vertex = 0; vertex < 3; ++vertex) {
+        for (float value : {1.0f, 0.0f, 0.0f, handedness}) {
+            std::uint32_t bits = 0U;
+            std::memcpy(&bits, &value, sizeof(bits));
+            appendU32(binary, bits);
+        }
+    }
+    const std::string bufferLength = R"JSON("byteLength":42)JSON";
+    const std::size_t bufferLengthPosition = json.find(bufferLength);
+    if (bufferLengthPosition == std::string::npos) return {};
+    json.replace(bufferLengthPosition, bufferLength.size(),
+                 R"JSON("byteLength":)JSON" + std::to_string(binary.size()));
+    const std::string viewsEnd = R"JSON(],"accessors":)JSON";
+    const std::size_t viewsEndPosition = json.find(viewsEnd);
+    if (viewsEndPosition == std::string::npos) return {};
+    json.insert(viewsEndPosition, R"JSON(,{"buffer":0,"byteOffset":)JSON"
+            + std::to_string(tangentOffset) + R"JSON(,"byteLength":48})JSON");
+    const std::size_t accessorsStart = json.find(R"JSON("accessors":[)JSON");
+    const std::size_t accessorsEnd = json.find("],", accessorsStart);
+    if (accessorsStart == std::string::npos || accessorsEnd == std::string::npos) return {};
+    json.insert(accessorsEnd,
+                R"JSON(,{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"})JSON");
+    const std::string positionAttribute = R"JSON("POSITION":0)JSON";
+    const std::size_t position = json.find(positionAttribute);
+    if (position == std::string::npos) return {};
+    json.replace(position, positionAttribute.size(), R"JSON("POSITION":0,"TANGENT":2)JSON");
+    if (includeReflectedScene) {
+        const std::size_t meshOffset = json.find(R"JSON("meshes":)JSON");
+        if (meshOffset == std::string::npos) return {};
+        json.insert(meshOffset,
+                R"JSON("scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"scale":[-1,1,1]}],)JSON");
+    }
+    std::string data;
+    appendU32(data, 0x46546C67U);
+    appendU32(data, 2U);
+    appendU32(data, 0U);
+    appendChunk(data, 0x4E4F534AU, std::move(json));
+    appendChunk(data, 0x004E4942U, std::move(binary));
+    setU32(data, 8, static_cast<std::uint32_t>(data.size()));
+    return data;
+}
+
 std::string makeTriangleWithMaterialGlb(const std::string& materialJson,
                                         const std::string& rootProperties = {}) {
     std::string json;
@@ -530,6 +580,21 @@ void testGlbImportsTriangleAndSkinAttributes() {
         expect(primitives[0].vertices[0].normal[2] == 1.0f,
                "missing normals are generated from triangle geometry");
     }
+
+    expect(nuby::parseGlbMeshes(makeTangentTriangleGlb(), primitives, error)
+                   && primitives.size() == 1U && primitives[0].tangents.size() == 3U
+                   && std::fabs(primitives[0].tangents[0][0] - 1.0f) < 1.0e-6f
+                   && primitives[0].tangents[0][3] == 1.0f,
+           "authored glTF tangent vectors and handedness import per vertex");
+    nuby::GltfStaticAsset reflected;
+    expect(nuby::parseGlbStaticAsset(makeTangentTriangleGlb(true), reflected, error)
+                   && reflected.primitives.size() == 1U
+                   && reflected.primitives[0].tangents.size() == 3U
+                   && std::fabs(reflected.primitives[0].tangents[0][0] + 1.0f) < 1.0e-6f
+                   && reflected.primitives[0].tangents[0][3] == -1.0f,
+           "static reflected node transforms tangent directions and handedness");
+    expect(!nuby::parseGlbMeshes(makeTangentTriangleGlb(false, 0.0f), primitives, error),
+           "glTF tangent handedness other than plus or minus one is rejected");
 
     expect(!nuby::parseGlbMeshes(makeTriangleGlb(3), primitives, error),
            "triangle indices outside the position accessor are rejected");

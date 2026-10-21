@@ -49,6 +49,7 @@ struct GltfPrimitive {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<SkeletalVertexInfluence> influences;
+    std::vector<std::array<float, 4>> tangents;
     GltfMaterial material;
     bool hasMaterial = false;
     bool hasSkinAttributes = false;
@@ -84,8 +85,8 @@ bool parseGlbContainer(std::string_view bytes, std::string& json,
 bool validateGltf2Json(std::string_view json, std::string& error);
 
 // Imports triangle primitives from a self-contained GLB with one embedded
-// buffer. Supports float POSITION/NORMAL/TEXCOORD_0/1, unsigned scalar indices,
-// optional JOINTS_0/WEIGHTS_0 with four influences, glTF PBR factors and the
+// buffer. Supports float POSITION/NORMAL/TANGENT/TEXCOORD_0/1, unsigned scalar
+// indices, optional JOINTS_0/WEIGHTS_0 with four influences, glTF PBR factors and the
 // KHR_materials_unlit / KHR_materials_emissive_strength extensions. Standard
 // texture slots select UV set 0 or 1; KHR_texture_transform offset/scale/rotation
 // and its texCoord override are retained. Higher-level APIs return encoded image

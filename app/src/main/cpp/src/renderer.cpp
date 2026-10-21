@@ -304,6 +304,7 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUv;
 layout(location = 9) in vec2 aUv1;
+layout(location = 10) in vec4 aTangent;
 layout(location = 3) in mat4 aInstanceModel;
 layout(location = 7) in uvec4 aJointIndices;
 layout(location = 8) in vec4 aJointWeights;
@@ -313,15 +314,19 @@ uniform mat4 uView;
 uniform mat4 uModel;
 uniform int uUseInstancing;
 uniform int uSkinningEnabled;
+uniform int uHasTangents;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
 out vec2 vUv;
 out vec2 vUv1;
+out vec4 vWorldTangent;
 out float vViewDepth;
 void main() {
     mat4 model = uUseInstancing != 0 ? aInstanceModel : uModel;
     vec4 localPosition = vec4(aPosition, 1.0);
     vec3 localNormal = aNormal;
+    vec3 localTangent = vec3(0.0);
+    float tangentHandedness = aTangent.w;
     if (uSkinningEnabled != 0) {
         mat4 skin = mat4(0.0);
         skin += uJointMatrices[int(aJointIndices.x)] * aJointWeights.x;
@@ -330,10 +335,22 @@ void main() {
         skin += uJointMatrices[int(aJointIndices.w)] * aJointWeights.w;
         localPosition = skin * localPosition;
         localNormal = mat3(skin) * localNormal;
+        if (uHasTangents != 0) {
+            localTangent = mat3(skin) * aTangent.xyz;
+            if (determinant(mat3(skin)) < 0.0) tangentHandedness = -tangentHandedness;
+        }
+    } else if (uHasTangents != 0) {
+        localTangent = aTangent.xyz;
     }
     vec4 world = model * localPosition;
     vWorldPosition = world.xyz;
     vWorldNormal = mat3(model) * localNormal;
+    vWorldTangent = vec4(0.0, 0.0, 0.0, 1.0);
+    if (uHasTangents != 0) {
+        float modelHandedness = determinant(mat3(model)) < 0.0 ? -1.0 : 1.0;
+        vWorldTangent = vec4(mat3(model) * localTangent,
+                tangentHandedness * modelHandedness);
+    }
     vUv = aUv;
     vUv1 = aUv1;
     vViewDepth = -(uView * world).z;
@@ -346,6 +363,7 @@ constexpr const char* kFragmentShader = R"(
 precision highp float;
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
+in vec4 vWorldTangent;
 in vec2 vUv;
 in vec2 vUv1;
 in float vViewDepth;
@@ -359,6 +377,7 @@ uniform float uAlphaCutoff;
 uniform float uNormalMapScale;
 uniform float uEmissiveStrength;
 uniform int uUnlit;
+uniform int uHasTangents;
 uniform float uAmbientOcclusion;
 uniform sampler2D uAlbedoTexture;
 uniform sampler2D uNormalTexture;
@@ -620,17 +639,26 @@ void main() {
         tangentNormal = tangentLengthSquared > 0.000001
                 ? tangentNormal * inversesqrt(tangentLengthSquared)
                 : vec3(0.0, 0.0, 1.0);
-        vec3 positionDx = dFdx(vWorldPosition);
-        vec3 positionDy = dFdy(vWorldPosition);
-        vec2 uvDx = dFdx(normalUv);
-        vec2 uvDy = dFdy(normalUv);
-        float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
-        if (abs(determinant) > 0.00001) {
-            vec3 tangent = normalize((positionDx * uvDy.y - positionDy * uvDx.y)
-                    / determinant);
-            vec3 bitangent = normalize((-positionDx * uvDy.x + positionDy * uvDx.x)
-                    / determinant);
+        vec3 authoredTangent = vWorldTangent.xyz
+                - normal * dot(normal, vWorldTangent.xyz);
+        float authoredTangentLengthSquared = dot(authoredTangent, authoredTangent);
+        if (uHasTangents != 0 && authoredTangentLengthSquared > 0.000001) {
+            vec3 tangent = authoredTangent * inversesqrt(authoredTangentLengthSquared);
+            vec3 bitangent = normalize(cross(normal, tangent)) * vWorldTangent.w;
             normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
+        } else {
+            vec3 positionDx = dFdx(vWorldPosition);
+            vec3 positionDy = dFdy(vWorldPosition);
+            vec2 uvDx = dFdx(normalUv);
+            vec2 uvDy = dFdy(normalUv);
+            float uvDeterminant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+            if (abs(uvDeterminant) > 0.00001) {
+                vec3 tangent = normalize((positionDx * uvDy.y - positionDy * uvDx.y)
+                        / uvDeterminant);
+                vec3 bitangent = normalize((-positionDx * uvDy.x + positionDy * uvDx.x)
+                        / uvDeterminant);
+                normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
+            }
         }
     }
 
@@ -1110,6 +1138,7 @@ Renderer::Mesh Renderer::uploadMesh(const std::vector<Vertex>& vertices) {
 
 bool Renderer::prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
                                       std::vector<std::uint32_t> indices,
+                                      std::vector<std::array<float, 4>> tangents,
                                       std::vector<SkeletalVertexInfluence> influences,
                                       bool skinned, CpuGpuPrimitive& output,
                                       std::string& error) {
@@ -1118,6 +1147,7 @@ bool Renderer::prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
                     std::numeric_limits<GLsizei>::max())
             || indices.size() > static_cast<std::size_t>(
                     std::numeric_limits<GLsizei>::max())
+            || (!tangents.empty() && tangents.size() != vertices.size())
             || (skinned && (indices.empty() || influences.size() != vertices.size()))) {
         error = "mesh primitive has invalid vertex, index, or skin counts";
         return false;
@@ -1125,6 +1155,20 @@ bool Renderer::prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
 
     CpuGpuPrimitive candidate;
     candidate.skinned = skinned;
+    for (std::array<float, 4>& tangent : tangents) {
+        const float lengthSquared = tangent[0] * tangent[0] + tangent[1] * tangent[1]
+                + tangent[2] * tangent[2];
+        if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-12f
+                || (tangent[3] != 1.0f && tangent[3] != -1.0f)) {
+            error = "mesh primitive contains invalid tangent vectors";
+            return false;
+        }
+        const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+        tangent[0] *= inverseLength;
+        tangent[1] *= inverseLength;
+        tangent[2] *= inverseLength;
+    }
+    candidate.tangents = std::move(tangents);
     Vec3 minimum{vertices.front().position[0], vertices.front().position[1],
             vertices.front().position[2]};
     Vec3 maximum = minimum;
@@ -1225,7 +1269,8 @@ bool Renderer::prepareGlbAsset(AAssetManager* manager, const std::string& assetP
     for (GltfPrimitive& primitive : candidate.primitives) {
         CpuGpuPrimitive geometry;
         if (!prepareCpuGpuPrimitive(std::move(primitive.vertices),
-                std::move(primitive.indices), std::move(primitive.influences),
+                std::move(primitive.indices), std::move(primitive.tangents),
+                std::move(primitive.influences),
                 candidate.skeletal, geometry, error)) {
             error = "GLB GPU preparation failed for " + assetPath + ": " + error;
             return false;
@@ -1283,7 +1328,7 @@ bool Renderer::prepareObjAsset(AAssetManager* manager, const std::string& assetP
     candidate.parts.reserve(parsedObj.submeshes.size());
     for (ObjSubmesh& submesh : parsedObj.submeshes) {
         CpuObjPart part{};
-        if (!prepareCpuGpuPrimitive(std::move(submesh.vertices), {}, {}, false,
+        if (!prepareCpuGpuPrimitive(std::move(submesh.vertices), {}, {}, {}, false,
                                     part.geometry, error)) {
             error = "OBJ GPU preparation failed for " + assetPath + ": " + error;
             return false;
@@ -1340,15 +1385,21 @@ bool Renderer::initializePendingGpuPrimitive(CpuGpuPrimitive& geometry, Mesh& me
             || geometry.indices.size() > static_cast<std::size_t>(
                     std::numeric_limits<GLsizei>::max())
             || vertexCount > maximumBufferBytes / vertexStride
-            || geometry.indices.size() > maximumBufferBytes / sizeof(std::uint32_t)) {
+            || geometry.indices.size() > maximumBufferBytes / sizeof(std::uint32_t)
+            || geometry.tangents.size() > maximumBufferBytes
+                    / sizeof(std::array<float, 4>)
+            || (!geometry.tangents.empty() && geometry.tangents.size() != vertexCount)) {
         return false;
     }
     const std::size_t vertexBytes = vertexCount * vertexStride;
     const std::size_t indexBytes = geometry.indices.size() * sizeof(std::uint32_t);
+    const std::size_t tangentBytes = geometry.tangents.size()
+            * sizeof(std::array<float, 4>);
 
     glGenVertexArrays(1, &mesh.vao);
     glGenBuffers(1, &mesh.vbo);
     if (!geometry.indices.empty()) glGenBuffers(1, &mesh.ebo);
+    if (!geometry.tangents.empty()) glGenBuffers(1, &mesh.tangentVbo);
     glBindVertexArray(mesh.vao);
     glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertexBytes), nullptr, GL_STATIC_DRAW);
@@ -1373,6 +1424,15 @@ bool Renderer::initializePendingGpuPrimitive(CpuGpuPrimitive& geometry, Mesh& me
     glVertexAttribPointer(9, 2, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(vertexStride),
             reinterpret_cast<const void*>(geometry.skinned
                     ? offsetof(CpuSkinnedVertex, uv1) : offsetof(MeshVertex, uv1)));
+    if (!geometry.tangents.empty()) {
+        glBindBuffer(GL_ARRAY_BUFFER, mesh.tangentVbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(tangentBytes),
+                     nullptr, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(10);
+        glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE,
+                static_cast<GLsizei>(sizeof(std::array<float, 4>)), nullptr);
+        mesh.hasTangents = true;
+    }
     if (geometry.skinned) {
         glEnableVertexAttribArray(7);
         glVertexAttribIPointer(7, 4, GL_UNSIGNED_SHORT,
@@ -1391,14 +1451,16 @@ bool Renderer::initializePendingGpuPrimitive(CpuGpuPrimitive& geometry, Mesh& me
     mesh.boundsCenter = geometry.boundsCenter;
     mesh.boundsRadius = geometry.boundsRadius;
     mesh.boundsValid = geometry.boundsValid;
-    mesh.gpuBytes = static_cast<std::uint64_t>(vertexBytes) + indexBytes;
+    mesh.gpuBytes = static_cast<std::uint64_t>(vertexBytes) + indexBytes + tangentBytes;
     if (glGetError() == GL_NO_ERROR && mesh.vao != 0U && mesh.vbo != 0U
-            && (geometry.indices.empty() || mesh.ebo != 0U)) {
+            && (geometry.indices.empty() || mesh.ebo != 0U)
+            && (geometry.tangents.empty() || mesh.tangentVbo != 0U)) {
         return true;
     }
     if (mesh.vao != 0U) glDeleteVertexArrays(1, &mesh.vao);
     if (mesh.vbo != 0U) glDeleteBuffers(1, &mesh.vbo);
     if (mesh.ebo != 0U) glDeleteBuffers(1, &mesh.ebo);
+    if (mesh.tangentVbo != 0U) glDeleteBuffers(1, &mesh.tangentVbo);
     mesh = {};
     return false;
 }
@@ -1618,6 +1680,7 @@ void Renderer::processPendingGpuUpload() {
         if (mesh.vao != 0U) glDeleteVertexArrays(1, &mesh.vao);
         if (mesh.vbo != 0U) glDeleteBuffers(1, &mesh.vbo);
         if (mesh.ebo != 0U) glDeleteBuffers(1, &mesh.ebo);
+        if (mesh.tangentVbo != 0U) glDeleteBuffers(1, &mesh.tangentVbo);
         mesh = {};
     };
     const auto deleteImportedParts = [&deleteMesh](ImportedModel& model) {
@@ -1726,6 +1789,7 @@ void Renderer::processPendingGpuUpload() {
         pending.activePrimitiveInitialized = true;
         pending.vertexBytesUploaded = 0U;
         pending.indexBytesUploaded = 0U;
+        pending.tangentBytesUploaded = 0U;
     }
 
     CpuGpuPrimitive& geometry = pending.isGlb
@@ -1740,6 +1804,8 @@ void Renderer::processPendingGpuUpload() {
             : static_cast<std::uint64_t>(geometry.vertices.size()) * sizeof(MeshVertex);
     const std::uint64_t indexBytes = static_cast<std::uint64_t>(geometry.indices.size())
             * sizeof(std::uint32_t);
+    const std::uint64_t tangentBytes = static_cast<std::uint64_t>(geometry.tangents.size())
+            * sizeof(std::array<float, 4>);
     std::uint64_t remainingBytes = kMaxGpuAssetUploadBytesPerTurn;
     BufferUploadChunk chunk;
     while (planBufferUploadChunk(vertexBytes, pending.vertexBytesUploaded,
@@ -1761,6 +1827,18 @@ void Renderer::processPendingGpuUpload() {
         pending.indexBytesUploaded += chunk.byteCount;
         remainingBytes -= chunk.byteCount;
     }
+    while (pending.vertexBytesUploaded == vertexBytes
+            && pending.indexBytesUploaded == indexBytes
+            && planBufferUploadChunk(tangentBytes, pending.tangentBytesUploaded,
+                                     remainingBytes, chunk)) {
+        glBindBuffer(GL_ARRAY_BUFFER, pending.activePart.mesh.tangentVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(chunk.offset),
+                static_cast<GLsizeiptr>(chunk.byteCount),
+                reinterpret_cast<const std::uint8_t*>(geometry.tangents.data())
+                        + chunk.offset);
+        pending.tangentBytesUploaded += chunk.byteCount;
+        remainingBytes -= chunk.byteCount;
+    }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     if (glGetError() != GL_NO_ERROR) {
         const std::string assetPath = pending.assetPath;
@@ -1775,7 +1853,8 @@ void Renderer::processPendingGpuUpload() {
         loadSceneAssets();
         return;
     }
-    if (pending.vertexBytesUploaded != vertexBytes || pending.indexBytesUploaded != indexBytes) {
+    if (pending.vertexBytesUploaded != vertexBytes || pending.indexBytesUploaded != indexBytes
+            || pending.tangentBytesUploaded != tangentBytes) {
         return;
     }
 
@@ -1783,11 +1862,13 @@ void Renderer::processPendingGpuUpload() {
     std::vector<MeshVertex>().swap(geometry.vertices);
     std::vector<CpuSkinnedVertex>().swap(geometry.skinnedVertices);
     std::vector<std::uint32_t>().swap(geometry.indices);
+    std::vector<std::array<float, 4>>().swap(geometry.tangents);
     pending.importedModel.parts.push_back(std::move(pending.activePart));
     pending.activePart = {};
     pending.activePrimitiveInitialized = false;
     pending.vertexBytesUploaded = 0U;
     pending.indexBytesUploaded = 0U;
+    pending.tangentBytesUploaded = 0U;
     ++pending.nextPrimitive;
     if (pending.nextPrimitive != primitiveCount) return;
 
@@ -2374,10 +2455,12 @@ void Renderer::releaseSceneAssets() {
         }
         if (pending.activePart.mesh.vbo != 0U) glDeleteBuffers(1, &pending.activePart.mesh.vbo);
         if (pending.activePart.mesh.ebo != 0U) glDeleteBuffers(1, &pending.activePart.mesh.ebo);
+        if (pending.activePart.mesh.tangentVbo != 0U) glDeleteBuffers(1, &pending.activePart.mesh.tangentVbo);
         for (ImportedPart& part : pending.importedModel.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
             if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
             if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+            if (part.mesh.tangentVbo != 0) glDeleteBuffers(1, &part.mesh.tangentVbo);
         }
     }
     pendingGpuUploads_.clear();
@@ -2390,6 +2473,7 @@ void Renderer::releaseSceneAssets() {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
             if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
             if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+            if (part.mesh.tangentVbo != 0) glDeleteBuffers(1, &part.mesh.tangentVbo);
         }
     }
     importedMeshes_.clear();
@@ -2468,10 +2552,14 @@ void Renderer::loadSceneAssets() {
         if (upload->activePart.mesh.ebo != 0U) {
             glDeleteBuffers(1, &upload->activePart.mesh.ebo);
         }
+        if (upload->activePart.mesh.tangentVbo != 0U) {
+            glDeleteBuffers(1, &upload->activePart.mesh.tangentVbo);
+        }
         for (ImportedPart& part : upload->importedModel.parts) {
             if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
             if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
             if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+            if (part.mesh.tangentVbo != 0) glDeleteBuffers(1, &part.mesh.tangentVbo);
         }
         releaseEmbeddedImagesForModel(upload->assetPath);
         pendingMeshAssets_.erase(upload->assetPath);
@@ -2587,6 +2675,7 @@ void Renderer::loadSceneAssets() {
                     if (part.mesh.vao != 0) glDeleteVertexArrays(1, &part.mesh.vao);
                     if (part.mesh.vbo != 0) glDeleteBuffers(1, &part.mesh.vbo);
                     if (part.mesh.ebo != 0) glDeleteBuffers(1, &part.mesh.ebo);
+                    if (part.mesh.tangentVbo != 0) glDeleteBuffers(1, &part.mesh.tangentVbo);
                 }
                 importedMeshes_.erase(model);
             }
@@ -3458,6 +3547,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.model = glGetUniformLocation(program_, "uModel");
     uniforms_.useInstancing = glGetUniformLocation(program_, "uUseInstancing");
     uniforms_.skinningEnabled = glGetUniformLocation(program_, "uSkinningEnabled");
+    uniforms_.hasTangents = glGetUniformLocation(program_, "uHasTangents");
     const GLuint skinPaletteBlock = glGetUniformBlockIndex(program_, "SkinPalette");
     if (skinPaletteBlock != GL_INVALID_INDEX) {
         glUniformBlockBinding(program_, skinPaletteBlock, kSkinPaletteBindingPoint);
@@ -3610,6 +3700,7 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     if (uniforms_.skinningEnabled >= 0) {
         glUniform1i(uniforms_.skinningEnabled, useSkinning ? 1 : 0);
     }
+    glUniform1i(uniforms_.hasTangents, mesh.hasTangents ? 1 : 0);
     if (useSkinning) uploadSkinPalette(pose);
     const bool useInstances = !useSkinning && uniforms_.useInstancing >= 0 && instanceBuffer_ != 0
             && instanceModels != nullptr && instanceModels->size() > 1

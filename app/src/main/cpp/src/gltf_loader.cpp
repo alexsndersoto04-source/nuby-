@@ -1116,6 +1116,20 @@ bool transformStaticPrimitive(GltfPrimitive& primitive, const Matrix4& matrix) {
         vertex.normal[1] = ny / normalLength;
         vertex.normal[2] = nz / normalLength;
     }
+    for (std::array<float, 4>& tangent : primitive.tangents) {
+        const float tx = matrix[0] * tangent[0] + matrix[4] * tangent[1]
+                + matrix[8] * tangent[2];
+        const float ty = matrix[1] * tangent[0] + matrix[5] * tangent[1]
+                + matrix[9] * tangent[2];
+        const float tz = matrix[2] * tangent[0] + matrix[6] * tangent[1]
+                + matrix[10] * tangent[2];
+        const float tangentLength = std::sqrt(tx * tx + ty * ty + tz * tz);
+        if (!std::isfinite(tangentLength) || tangentLength <= 1.0e-12f) return false;
+        tangent[0] = tx / tangentLength;
+        tangent[1] = ty / tangentLength;
+        tangent[2] = tz / tangentLength;
+        if (determinant < 0.0f) tangent[3] = -tangent[3];
+    }
     if (determinant < 0.0f) {
         for (std::size_t index = 0; index < primitive.indices.size(); index += 3U) {
             std::swap(primitive.indices[index + 1U], primitive.indices[index + 2U]);
@@ -1240,6 +1254,35 @@ bool parseGlbMeshes(std::string_view bytes, std::vector<GltfPrimitive>& output,
                     || !readOptionalAttribute("TEXCOORD_0", "VEC2", 2U, false, false)
                     || !readOptionalAttribute("TEXCOORD_1", "VEC2", 2U, false, true)) {
                 return fail(error, "GLB NORMAL or TEXCOORD_0/1 accessor is invalid");
+            }
+            if (const JsonValue* tangentIndexValue = member(*attributes, "TANGENT");
+                    tangentIndexValue != nullptr) {
+                std::uint32_t tangentAccessorIndex = 0U;
+                if (!unsignedInteger(tangentIndexValue, tangentAccessorIndex)
+                        || tangentAccessorIndex >= accessors.size()
+                        || accessors[tangentAccessorIndex].count != vertexCount) {
+                    return fail(error, "GLB TANGENT accessor does not match the vertex count");
+                }
+                std::vector<float> tangentValues;
+                if (!readFloatAccessor(accessors[tangentAccessorIndex], views, binary,
+                                       "VEC4", 4U, tangentValues)) {
+                    return fail(error, "GLB TANGENT accessor has an unsupported layout");
+                }
+                parsed.tangents.resize(vertexCount);
+                for (std::size_t vertex = 0; vertex < vertexCount; ++vertex) {
+                    const std::size_t offset = vertex * 4U;
+                    const float x = tangentValues[offset];
+                    const float y = tangentValues[offset + 1U];
+                    const float z = tangentValues[offset + 2U];
+                    const float length = std::sqrt(x * x + y * y + z * z);
+                    const float handedness = tangentValues[offset + 3U];
+                    if (!std::isfinite(length) || length <= 1.0e-8f
+                            || (handedness != 1.0f && handedness != -1.0f)) {
+                        return fail(error, "GLB tangent vector or handedness is invalid");
+                    }
+                    parsed.tangents[vertex] = {x / length, y / length, z / length,
+                                               handedness};
+                }
             }
             if (parsed.hasMaterial && texCoord1 == nullptr) {
                 const GltfMaterial& material = parsed.material;

@@ -90,12 +90,14 @@ private:
         GLuint vao = 0;
         GLuint vbo = 0;
         GLuint ebo = 0;
+        GLuint tangentVbo = 0;
         GLsizei vertexCount = 0;
         GLsizei indexCount = 0;
         std::array<float, 3> boundsCenter{0.0f, 0.0f, 0.0f};
         float boundsRadius = 0.0f;
         std::uint64_t gpuBytes = 0U;
         bool boundsValid = false;
+        bool hasTangents = false;
     };
 
     struct ImportedPart {
@@ -130,6 +132,7 @@ private:
         std::vector<MeshVertex> vertices;
         std::vector<CpuSkinnedVertex> skinnedVertices;
         std::vector<std::uint32_t> indices;
+        std::vector<std::array<float, 4>> tangents;
         std::array<float, 3> boundsCenter{0.0f, 0.0f, 0.0f};
         float boundsRadius = 0.0f;
         bool skinned = false;
@@ -167,6 +170,7 @@ private:
         std::size_t nextPrimitive = 0U;
         std::uint64_t vertexBytesUploaded = 0U;
         std::uint64_t indexBytesUploaded = 0U;
+        std::uint64_t tangentBytesUploaded = 0U;
         std::size_t totalVertexCount = 0U;
         bool activePrimitiveInitialized = false;
     };
@@ -229,6 +233,7 @@ private:
         GLint model = -1;
         GLint useInstancing = -1;
         GLint skinningEnabled = -1;
+        GLint hasTangents = -1;
         GLint color = -1;
         GLint emission = -1;
         GLint metallic = -1;
@@ -298,6 +303,7 @@ private:
     Mesh uploadMesh(const std::vector<MeshVertex>& vertices);
     static bool prepareCpuGpuPrimitive(std::vector<MeshVertex> vertices,
                                        std::vector<std::uint32_t> indices,
+                                       std::vector<std::array<float, 4>> tangents,
                                        std::vector<SkeletalVertexInfluence> influences,
                                        bool skinned, CpuGpuPrimitive& output,
                                        std::string& error);
