@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 8080;
+const PORTS = [3000, 8080];
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const MIME_TYPES = {
@@ -16,17 +16,21 @@ const MIME_TYPES = {
   '.mp3': 'audio/mpeg'
 };
 
-const server = http.createServer((req, res) => {
-  // Allow all origins
+function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
 
   let reqPath = req.url.split('?')[0];
-  if (reqPath === '/') reqPath = '/index.html';
+  if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
 
   let filePath = path.join(PUBLIC_DIR, reqPath);
-
-  // If requesting the video from root
   if (reqPath === '/video_vocales_educativo.mp4') {
     filePath = path.join(__dirname, 'video_vocales_educativo.mp4');
   }
@@ -41,7 +45,6 @@ const server = http.createServer((req, res) => {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-  // Support Byte-Range requests for smooth video seeking
   const range = req.headers.range;
   if (range && ext === '.mp4') {
     const parts = range.replace(/bytes=/, "").split("-");
@@ -65,8 +68,11 @@ const server = http.createServer((req, res) => {
     });
     fs.createReadStream(filePath).pipe(res);
   }
-});
+}
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Video server running at http://0.0.0.0:${PORT}`);
+PORTS.forEach(port => {
+  const server = http.createServer(handleRequest);
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`Video server running at http://0.0.0.0:${port}`);
+  });
 });

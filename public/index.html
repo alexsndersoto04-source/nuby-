@@ -14,7 +14,6 @@
       --green: #4caf50;
       --blue: #2196f3;
       --purple: #9c27b0;
-      --bg: #e3f2fd;
     }
 
     * {
@@ -28,7 +27,7 @@
       background: linear-gradient(180deg, #bbdefb 0%, #e1f5fe 100%);
       min-height: 100vh;
       color: #37474f;
-      padding: 24px 16px;
+      padding: 20px 12px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -36,14 +35,14 @@
 
     header {
       text-align: center;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
 
     h1 {
-      font-size: 2.2rem;
+      font-size: 2.1rem;
       color: #e65100;
       text-shadow: 2px 2px 0 #fff, 4px 4px 0 #ffe082;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
 
     .badge {
@@ -53,16 +52,16 @@
       padding: 6px 18px;
       border-radius: 30px;
       font-weight: 600;
-      font-size: 1rem;
+      font-size: 0.95rem;
       box-shadow: 0 4px 10px rgba(255, 152, 0, 0.3);
     }
 
     .main-container {
       width: 100%;
-      max-width: 1040px;
+      max-width: 1020px;
       background: white;
-      border-radius: 28px;
-      padding: 24px;
+      border-radius: 24px;
+      padding: 20px;
       box-shadow: 0 16px 40px rgba(0, 0, 0, 0.1);
       border: 4px solid #fff;
     }
@@ -70,7 +69,7 @@
     .video-wrapper {
       position: relative;
       width: 100%;
-      border-radius: 20px;
+      border-radius: 18px;
       overflow: hidden;
       background: #000;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
@@ -80,15 +79,72 @@
       width: 100%;
       height: auto;
       display: block;
-      max-height: 580px;
-      outline: none;
+      max-height: 560px;
+      background: #000;
+    }
+
+    .play-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+      transition: opacity 0.25s ease;
+      z-index: 10;
+    }
+
+    .play-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .play-btn-circle {
+      width: 90px;
+      height: 90px;
+      background: #ff5722;
+      border: 4px solid white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(255, 87, 34, 0.5);
+      transform: scale(1);
+      transition: transform 0.2s ease;
+    }
+
+    .play-btn-circle:hover {
+      transform: scale(1.1);
+      background: #f4511e;
+    }
+
+    .play-icon {
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 20px 0 20px 32px;
+      border-color: transparent transparent transparent #ffffff;
+      margin-left: 6px;
+    }
+
+    .play-text {
+      color: white;
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-top: 14px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.6);
     }
 
     .controls-panel {
-      margin-top: 20px;
+      margin-top: 18px;
       display: flex;
       flex-wrap: wrap;
-      gap: 12px;
+      gap: 10px;
       justify-content: center;
       align-items: center;
     }
@@ -97,15 +153,15 @@
       background: #f1f8e9;
       border: 2px solid #8bc34a;
       color: #33691e;
-      padding: 10px 18px;
+      padding: 9px 16px;
       border-radius: 20px;
-      font-size: 1rem;
+      font-size: 0.95rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s ease;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
 
     .btn-chapter:hover {
@@ -119,9 +175,9 @@
       background: #e91e63;
       border: none;
       color: white;
-      padding: 12px 24px;
-      border-radius: 24px;
-      font-size: 1.05rem;
+      padding: 10px 20px;
+      border-radius: 22px;
+      font-size: 1rem;
       font-weight: 700;
       cursor: pointer;
       text-decoration: none;
@@ -138,27 +194,27 @@
     }
 
     .characters-section {
-      margin-top: 32px;
+      margin-top: 28px;
     }
 
     .section-title {
-      font-size: 1.5rem;
+      font-size: 1.4rem;
       color: #0277bd;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
       text-align: center;
     }
 
     .characters-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 14px;
     }
 
     .char-card {
       background: #fff8e1;
       border: 3px solid #ffe082;
-      border-radius: 20px;
-      padding: 16px;
+      border-radius: 18px;
+      padding: 14px;
       text-align: center;
       transition: transform 0.2s;
       cursor: pointer;
@@ -176,36 +232,36 @@
     }
 
     .char-name {
-      font-size: 1.1rem;
+      font-size: 1.05rem;
       font-weight: 600;
       color: #37474f;
-      margin: 4px 0 8px;
+      margin: 4px 0 6px;
     }
 
     .char-words {
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       color: #546e7a;
       line-height: 1.4;
     }
 
     .summary-box {
-      margin-top: 28px;
+      margin-top: 24px;
       background: #f3e5f5;
       border: 2px dashed #ba68c8;
-      border-radius: 20px;
-      padding: 18px 24px;
-      line-height: 1.6;
+      border-radius: 18px;
+      padding: 16px 20px;
+      line-height: 1.5;
     }
 
     .summary-box h3 {
       color: #6a1b9a;
-      margin-bottom: 8px;
-      font-size: 1.25rem;
+      margin-bottom: 6px;
+      font-size: 1.15rem;
     }
 
     footer {
-      margin-top: 24px;
-      font-size: 0.95rem;
+      margin-top: 20px;
+      font-size: 0.9rem;
       color: #78909c;
       text-align: center;
     }
@@ -215,15 +271,21 @@
 
   <header>
     <h1>🎈 Aprende las Vocales con tus Amigos 🎈</h1>
-    <span class="badge">Video Educativo Largo y Didáctico (5:46 min)</span>
+    <span class="badge">Video Educativo Animado (5:46 min)</span>
   </header>
 
   <div class="main-container">
     <div class="video-wrapper">
-      <video id="player" controls poster="/sample_intro.png">
+      <video id="player" controls playsinline preload="auto" poster="/sample_intro.png">
         <source src="/video_vocales_educativo.mp4" type="video/mp4">
-        Tu navegador no soporta el reproductor de video HTML5.
+        Tu navegador no soporta el reproductor de video.
       </video>
+      <div id="playOverlay" class="play-overlay" onclick="startVideo()">
+        <div class="play-btn-circle">
+          <div class="play-icon"></div>
+        </div>
+        <div class="play-text">Toca aquí para reproducir el video</div>
+      </div>
     </div>
 
     <!-- Chapter Jump Buttons -->
@@ -235,7 +297,7 @@
       <button class="btn-chapter" onclick="jumpTo(238)">🐻 Vocal O (Osvaldo)</button>
       <button class="btn-chapter" onclick="jumpTo(287)">🦄 Vocal U (Ulises)</button>
       <button class="btn-chapter" onclick="jumpTo(334)">🌟 Gran Ronda</button>
-      <a class="btn-download" href="/video_vocales_educativo.mp4" download="Video_Educativo_Vocales_5min.mp4">
+      <a class="btn-download" href="/video_vocales_educativo.mp4" download="video_vocales_educativo.mp4">
         ⬇ Descargar Video MP4
       </a>
     </div>
@@ -276,7 +338,6 @@
       </div>
     </div>
 
-    <!-- Pedagogical Notes -->
     <div class="summary-box">
       <h3>🎯 Enfoque Pedagógico del Video:</h3>
       <p>
@@ -294,7 +355,25 @@
 
   <script>
     const player = document.getElementById('player');
+    const overlay = document.getElementById('playOverlay');
+
+    function startVideo() {
+      overlay.classList.add('hidden');
+      player.play().catch(err => {
+        console.log('Autoplay policy prevented audio, trying muted or user gesture:', err);
+      });
+    }
+
+    player.addEventListener('play', () => {
+      overlay.classList.add('hidden');
+    });
+
+    player.addEventListener('pause', () => {
+      // keep overlay hidden while user has controls
+    });
+
     function jumpTo(sec) {
+      overlay.classList.add('hidden');
       player.currentTime = sec;
       player.play();
     }
