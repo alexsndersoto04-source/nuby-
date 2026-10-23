@@ -1,0 +1,161 @@
+{
+  "total_duration": 346.29999999999995,
+  "scenes": [
+    {
+      "id": "intro",
+      "file": "01_intro.mp3",
+      "vocal": null,
+      "char_name": "\u00a1Bienvenidos!",
+      "char_sprite": "characters_all.png",
+      "tip": "\u00a1Hoy aprenderemos las 5 vocales!",
+      "words": [],
+      "start": 0.0,
+      "duration": 31.25,
+      "end": 31.25
+    },
+    {
+      "id": "vocal_a_part1",
+      "file": "02_vocal_a_part1.mp3",
+      "vocal": "A a",
+      "char_name": "Anita la Abejita",
+      "char_sprite": "sprite_character_a.png",
+      "tip": "\u00a1Abre grande la boca: AAAAA!",
+      "words": [
+        "Avi\u00f3n",
+        "\u00c1rbol",
+        "Abeja"
+      ],
+      "start": 32.05,
+      "duration": 33.34,
+      "end": 65.39
+    },
+    {
+      "id": "vocal_a_part2",
+      "file": "03_vocal_a_part2.mp3",
+      "vocal": "A a",
+      "char_name": "Anita la Abejita",
+      "char_sprite": "sprite_character_a.png",
+      "tip": "\u00bfCon qu\u00e9 letra empieza Avi\u00f3n? \u00a1Con la A!",
+      "words": [
+        "Avi\u00f3n",
+        "\u00c1rbol",
+        "Abeja"
+      ],
+      "start": 66.19,
+      "duration": 40.3,
+      "end": 106.49
+    },
+    {
+      "id": "vocal_e_part1",
+      "file": "04_vocal_e_part1.mp3",
+      "vocal": "E e",
+      "char_name": "El\u00ed el Elefantito",
+      "char_sprite": "sprite_character_e.png",
+      "tip": "\u00a1Sonr\u00ede mostrando los dientes: EEEEE!",
+      "words": [
+        "Estrella",
+        "Escalera",
+        "Elefante"
+      ],
+      "start": 107.28999999999999,
+      "duration": 28.54,
+      "end": 135.82999999999998
+    },
+    {
+      "id": "vocal_e_part2",
+      "file": "05_vocal_e_part2.mp3",
+      "vocal": "E e",
+      "char_name": "El\u00ed el Elefantito",
+      "char_sprite": "sprite_character_e.png",
+      "tip": "\u00a1E de Estrella, Escalera y Elefante!",
+      "words": [
+        "Estrella",
+        "Escalera",
+        "Elefante"
+      ],
+      "start": 136.63,
+      "duration": 30.89,
+      "end": 167.51999999999998
+    },
+    {
+      "id": "vocal_i_part1",
+      "file": "06_vocal_i_part1.mp3",
+      "vocal": "I i",
+      "char_name": "Ignacio la Iguana",
+      "char_sprite": "sprite_character_i.png",
+      "tip": "\u00a1Dientecitos juntos y sonriendo: IIIII!",
+      "words": [
+        "Isla",
+        "Im\u00e1n",
+        "Iguana"
+      ],
+      "start": 168.32,
+      "duration": 36.29,
+      "end": 204.60999999999999
+    },
+    {
+      "id": "vocal_i_part2",
+      "file": "07_vocal_i_part2.mp3",
+      "vocal": "I i",
+      "char_name": "Ignacio la Iguana",
+      "char_sprite": "sprite_character_i.png",
+      "tip": "\u00bfCu\u00e1l tiene un puntito arriba? \u00a1La I!",
+      "words": [
+        "Isla",
+        "Im\u00e1n",
+        "Iguana"
+      ],
+      "start": 205.41,
+      "duration": 32.86,
+      "end": 238.26999999999998
+    },
+    {
+      "id": "vocal_o",
+      "file": "08_vocal_o.mp3",
+      "vocal": "O o",
+      "char_name": "Osvaldo el Osito",
+      "char_sprite": "sprite_character_o.png",
+      "tip": "\u00a1Boquita redonda en c\u00edrculo: OOOOO!",
+      "words": [
+        "Oso",
+        "Ojo",
+        "Olla"
+      ],
+      "start": 239.07,
+      "duration": 48.17,
+      "end": 287.24
+    },
+    {
+      "id": "vocal_u",
+      "file": "09_vocal_u.mp3",
+      "vocal": "U u",
+      "char_name": "Ulises el Unicornio",
+      "char_sprite": "sprite_character_u.png",
+      "tip": "\u00a1Boquita de trompeta o de beso: UUUUU!",
+      "words": [
+        "Uvas",
+        "Unicornio",
+        "Uno"
+      ],
+      "start": 288.03999999999996,
+      "duration": 45.46,
+      "end": 333.49999999999994
+    },
+    {
+      "id": "finale",
+      "file": null,
+      "vocal": "A E I O U",
+      "char_name": "\u00a1Felicidades Campeones!",
+      "char_sprite": "characters_all.png",
+      "tip": "\u00a1Ya te sabes las 5 vocales m\u00e1gicas!",
+      "words": [
+        "\u00a1Excelente!",
+        "\u00a1Bravo!",
+        "\u00a1Lo lograste!"
+      ],
+      "start": 334.29999999999995,
+      "duration": 12.0,
+      "end": 346.29999999999995
+    }
+  ]
+}

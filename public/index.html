@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aprende las Vocales - Video Educativo Infantil</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #ff5722;
+      --yellow: #ffc107;
+      --green: #4caf50;
+      --blue: #2196f3;
+      --purple: #9c27b0;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Fredoka', cursive, sans-serif;
+    }
+
+    body {
+      background: linear-gradient(180deg, #bbdefb 0%, #e1f5fe 100%);
+      min-height: 100vh;
+      color: #37474f;
+      padding: 20px 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-size: 2.1rem;
+      color: #e65100;
+      text-shadow: 2px 2px 0 #fff, 4px 4px 0 #ffe082;
+      margin-bottom: 6px;
+    }
+
+    .badge {
+      display: inline-block;
+      background: #ff9800;
+      color: white;
+      padding: 6px 18px;
+      border-radius: 30px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      box-shadow: 0 4px 10px rgba(255, 152, 0, 0.3);
+    }
+
+    .main-container {
+      width: 100%;
+      max-width: 1020px;
+      background: white;
+      border-radius: 24px;
+      padding: 20px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.1);
+      border: 4px solid #fff;
+    }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      border-radius: 18px;
+      overflow: hidden;
+      background: #000;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    video {
+      width: 100%;
+      height: auto;
+      display: block;
+      max-height: 560px;
+      background: #000;
+    }
+
+    .play-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+      transition: opacity 0.25s ease;
+      z-index: 10;
+    }
+
+    .play-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .play-btn-circle {
+      width: 90px;
+      height: 90px;
+      background: #ff5722;
+      border: 4px solid white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(255, 87, 34, 0.5);
+      transform: scale(1);
+      transition: transform 0.2s ease;
+    }
+
+    .play-btn-circle:hover {
+      transform: scale(1.1);
+      background: #f4511e;
+    }
+
+    .play-icon {
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 20px 0 20px 32px;
+      border-color: transparent transparent transparent #ffffff;
+      margin-left: 6px;
+    }
+
+    .play-text {
+      color: white;
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-top: 14px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+    }
+
+    .controls-panel {
+      margin-top: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .btn-chapter {
+      background: #f1f8e9;
+      border: 2px solid #8bc34a;
+      color: #33691e;
+      padding: 9px 16px;
+      border-radius: 20px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-chapter:hover {
+      background: #8bc34a;
+      color: white;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 14px rgba(139, 195, 74, 0.3);
+    }
+
+    .btn-download {
+      background: #e91e63;
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 22px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      box-shadow: 0 6px 16px rgba(233, 30, 99, 0.35);
+    }
+
+    .btn-download:hover {
+      background: #c2185b;
+      transform: scale(1.03);
+    }
+
+    .characters-section {
+      margin-top: 28px;
+    }
+
+    .section-title {
+      font-size: 1.4rem;
+      color: #0277bd;
+      margin-bottom: 14px;
+      text-align: center;
+    }
+
+    .characters-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 14px;
+    }
+
+    .char-card {
+      background: #fff8e1;
+      border: 3px solid #ffe082;
+      border-radius: 18px;
+      padding: 14px;
+      text-align: center;
+      transition: transform 0.2s;
+      cursor: pointer;
+    }
+
+    .char-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
+    }
+
+    .char-vocal {
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: #e65100;
+    }
+
+    .char-name {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #37474f;
+      margin: 4px 0 6px;
+    }
+
+    .char-words {
+      font-size: 0.88rem;
+      color: #546e7a;
+      line-height: 1.4;
+    }
+
+    .summary-box {
+      margin-top: 24px;
+      background: #f3e5f5;
+      border: 2px dashed #ba68c8;
+      border-radius: 18px;
+      padding: 16px 20px;
+      line-height: 1.5;
+    }
+
+    .summary-box h3 {
+      color: #6a1b9a;
+      margin-bottom: 6px;
+      font-size: 1.15rem;
+    }
+
+    footer {
+      margin-top: 20px;
+      font-size: 0.9rem;
+      color: #78909c;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>🎈 Aprende las Vocales con tus Amigos 🎈</h1>
+    <span class="badge">Video Educativo Animado (5:46 min)</span>
+  </header>
+
+  <div class="main-container">
+    <div class="video-wrapper">
+      <video id="player" controls playsinline preload="auto" poster="/sample_intro.png">
+        <source src="/video_vocales_educativo.mp4" type="video/mp4">
+        Tu navegador no soporta el reproductor de video.
+      </video>
+      <div id="playOverlay" class="play-overlay" onclick="startVideo()">
+        <div class="play-btn-circle">
+          <div class="play-icon"></div>
+        </div>
+        <div class="play-text">Toca aquí para reproducir el video</div>
+      </div>
+    </div>
+
+    <!-- Chapter Jump Buttons -->
+    <div class="controls-panel">
+      <button class="btn-chapter" onclick="jumpTo(0)">▶ Inicio</button>
+      <button class="btn-chapter" onclick="jumpTo(32)">🐝 Vocal A (Anita)</button>
+      <button class="btn-chapter" onclick="jumpTo(106)">🐘 Vocal E (Elí)</button>
+      <button class="btn-chapter" onclick="jumpTo(167)">🦎 Vocal I (Ignacio)</button>
+      <button class="btn-chapter" onclick="jumpTo(238)">🐻 Vocal O (Osvaldo)</button>
+      <button class="btn-chapter" onclick="jumpTo(287)">🦄 Vocal U (Ulises)</button>
+      <button class="btn-chapter" onclick="jumpTo(334)">🌟 Gran Ronda</button>
+      <a class="btn-download" href="/video_vocales_educativo.mp4" download="video_vocales_educativo.mp4">
+        ⬇ Descargar Video MP4
+      </a>
+    </div>
+
+    <!-- Character Cards -->
+    <div class="characters-section">
+      <h2 class="section-title">Nuestros 5 Personajes Educativos</h2>
+      <div class="characters-grid">
+        <div class="char-card" onclick="jumpTo(32)" style="background:#fffde7; border-color:#fff176;">
+          <div class="char-vocal">A a</div>
+          <div class="char-name">Anita la Abejita</div>
+          <div class="char-words">✈️ Avión<br>🌳 Árbol<br>🐝 Abeja</div>
+        </div>
+
+        <div class="char-card" onclick="jumpTo(106)" style="background:#e8f5e9; border-color:#a5d6a7;">
+          <div class="char-vocal">E e</div>
+          <div class="char-name">Elí el Elefantito</div>
+          <div class="char-words">⭐ Estrella<br>🪜 Escalera<br>🐘 Elefante</div>
+        </div>
+
+        <div class="char-card" onclick="jumpTo(167)" style="background:#e0f7fa; border-color:#80deea;">
+          <div class="char-vocal">I i</div>
+          <div class="char-name">Ignacio la Iguana</div>
+          <div class="char-words">🏝️ Isla<br>🧲 Imán<br>🦎 Iguana</div>
+        </div>
+
+        <div class="char-card" onclick="jumpTo(238)" style="background:#fff3e0; border-color:#ffcc80;">
+          <div class="char-vocal">O o</div>
+          <div class="char-name">Osvaldo el Osito</div>
+          <div class="char-words">🐻 Oso<br>👁️ Ojo<br>🍲 Olla</div>
+        </div>
+
+        <div class="char-card" onclick="jumpTo(287)" style="background:#f3e5f5; border-color:#ce93d8;">
+          <div class="char-vocal">U u</div>
+          <div class="char-name">Ulises el Unicornio</div>
+          <div class="char-words">🍇 Uvas<br>🦄 Unicornio<br>1️⃣ Uno</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary-box">
+      <h3>🎯 Enfoque Pedagógico del Video:</h3>
+      <p>
+        Este video fue estructurado con un ritmo <strong>pausado, claro y participativo</strong>:
+        cada vocal cuenta con tiempo para abrir y modular la boca (ej. <em>"Abre grande la boca"</em>, <em>"Boquita redonda en círculo"</em>),
+        espacio de silencio para que los niños repitan en voz alta, tres palabras de ejemplo cotidiano con tarjetas visuales,
+        preguntas de refuerzo, y una música de fondo alegre e instrumental suave para mantener la atención.
+      </p>
+    </div>
+  </div>
+
+  <footer>
+    Creado especialmente para la enseñanza temprana de las vocales en español.
+  </footer>
+
+  <script>
+    const player = document.getElementById('player');
+    const overlay = document.getElementById('playOverlay');
+
+    function startVideo() {
+      overlay.classList.add('hidden');
+      player.play().catch(err => {
+        console.log('Autoplay policy prevented audio, trying muted or user gesture:', err);
+      });
+    }
+
+    player.addEventListener('play', () => {
+      overlay.classList.add('hidden');
+    });
+
+    player.addEventListener('pause', () => {
+      // keep overlay hidden while user has controls
+    });
+
+    function jumpTo(sec) {
+      overlay.classList.add('hidden');
+      player.currentTime = sec;
+      player.play();
+    }
+  </script>
+</body>
+</html>
