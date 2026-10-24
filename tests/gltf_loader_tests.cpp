@@ -1170,6 +1170,52 @@ void testPackagedAlphaMaskFixture() {
     }
 }
 
+void testPackagedSheenClearcoatFixture() {
+    std::ifstream input("app/src/main/assets/engine-tests/sheen_clearcoat_sphere.glb",
+                        std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    expect(input.good() || input.eof(), "packaged sheen validation GLB is readable");
+    nuby::GltfStaticAsset asset;
+    std::string error;
+    expect(nuby::parseGlbStaticAsset(bytes, asset, error),
+           "sheen/clearcoat validation GLB parses through the static importer");
+    expect(asset.primitives.size() == 1U && asset.images.size() == 2U
+                   && asset.primitives[0].hasMaterial
+                   && std::fabs(asset.primitives[0].material.sheenColorFactor[0] - 0.85f)
+                           < 1.0e-6f
+                   && std::fabs(asset.primitives[0].material.sheenRoughness - 0.62f)
+                           < 1.0e-6f
+                   && std::fabs(asset.primitives[0].material.clearcoatFactor - 0.38f)
+                           < 1.0e-6f
+                   && asset.primitives[0].material.sheenColorTexture.imageIndex == 0
+                   && asset.primitives[0].material.sheenColorTexture.uvSet == 0U
+                   && asset.primitives[0].material.sheenRoughnessTexture.imageIndex == 1
+                   && asset.primitives[0].material.sheenRoughnessTexture.uvSet == 1U
+                   && std::fabs(asset.primitives[0].material.sheenRoughnessTexture.uvRotation
+                                + 0.08f) < 1.0e-6f,
+           "fixture exercises color sheen on UV0, alpha roughness on transformed UV1, and top clearcoat");
+    if (asset.images.size() == 2U) {
+        nuby::ImageRgba8 color;
+        nuby::ImageRgba8 roughness;
+        expect(nuby::decodePng(asset.images[0].bytes, color, error)
+                       && nuby::decodePng(asset.images[1].bytes, roughness, error)
+                       && color.width == 48U && color.height == 48U
+                       && roughness.width == 48U && roughness.height == 48U,
+               "both embedded sheen textures decode through the engine PNG path");
+        if (!roughness.pixels.empty()) {
+            std::uint8_t minimumAlpha = 255U;
+            std::uint8_t maximumAlpha = 0U;
+            for (std::size_t pixel = 3U; pixel < roughness.pixels.size(); pixel += 4U) {
+                minimumAlpha = std::min(minimumAlpha, roughness.pixels[pixel]);
+                maximumAlpha = std::max(maximumAlpha, roughness.pixels[pixel]);
+            }
+            expect(minimumAlpha < maximumAlpha,
+                   "fixture alpha channel contains a roughness gradient");
+        }
+    }
+}
+
 void testPackagedWayfarerAsset() {
     std::ifstream input("app/src/main/assets/characters/wayfarer_skeletal.glb", std::ios::binary);
     const std::string bytes((std::istreambuf_iterator<char>(input)),
@@ -1309,6 +1355,7 @@ int main() {
     testSkeletalGlbImportsMultipleMeshNodesWithTransforms();
     testSkeletalGlbStepAndCubicSplineInterpolation();
     testPackagedAlphaMaskFixture();
+    testPackagedSheenClearcoatFixture();
     testPackagedWayfarerAsset();
     testGltfJsonSyntaxAndVersionValidation();
     testGlbRequiresOneLeadingJsonChunk();

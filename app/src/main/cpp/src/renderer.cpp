@@ -2382,6 +2382,12 @@ void Renderer::buildScene() {
     alphaMaskCard.transform.position = {1.18f, -1.22f, 0.38f};
     alphaMaskCard.transform.scale = {0.42f, 0.42f, 0.42f};
 
+    // Engine-lab fixture: verify embedded sheen maps and clearcoat-over-sheen on a real GLB.
+    Entity& sheenLayerSample = scene_.create("GLB Sheen and Clearcoat Layer Sample",
+            Primitive::ImportedMesh);
+    sheenLayerSample.meshAsset = "engine-tests/sheen_clearcoat_sphere.glb";
+    sheenLayerSample.transform.position = {-1.55f, 0.62f, 0.22f};
+
     for (int index = 0; index < 3; ++index) {
         const bool useImportedMesh = index == 1;
         Entity& satellite = scene_.create("Orbiting Shard " + std::to_string(index + 1),

@@ -27,6 +27,11 @@ jobs:
           python3 tools/generate_alpha_mask_sample.py
           git diff --exit-code -- app/src/main/assets/engine-tests/alpha_mask_card.glb
 
+      - name: Verify deterministic sheen/clearcoat visual fixture
+        run: |
+          python3 tools/generate_sheen_sample.py
+          git diff --exit-code -- app/src/main/assets/engine-tests/sheen_clearcoat_sphere.glb
+
       - name: Verify deterministic adventure audio assets
         run: |
           python3 tools/generate_adventure_audio.py
