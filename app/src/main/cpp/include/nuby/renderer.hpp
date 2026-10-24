@@ -74,6 +74,7 @@ public:
     int rendererTier() const {
         return fallbackRenderer_ ? 0 : csmShaderSupported_ ? 2 : 1;
     }
+    std::string rendererFailureReason() const { return rendererFailureReason_; }
     // 0 = no imported assets, 1 = mesh pending/fallback, 2 = mesh ready but
     // texture maps pending, 3 = all referenced assets ready, 4 = asset failure.
     int sceneAssetStatus() const;
@@ -464,6 +465,8 @@ private:
     SceneEditorSession editorSession_;
     std::string projectAssetPrefix_;
     std::string projectLoadError_;
+    std::string lastProgramBuildError_;
+    std::string rendererFailureReason_;
     SampleGame sampleGame_;
     AdventureGame adventureGame_;
     AudioEngine audioEngine_;

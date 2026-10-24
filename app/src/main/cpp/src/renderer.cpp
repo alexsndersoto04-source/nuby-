@@ -1284,6 +1284,11 @@ GLuint Renderer::compileShader(GLenum type, const char* source) {
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
         std::string log(static_cast<std::size_t>(std::max(logLength, 1)), '\0');
         glGetShaderInfoLog(shader, logLength, nullptr, log.data());
+        const std::size_t nullTerminator = log.find('\0');
+        if (nullTerminator != std::string::npos) log.resize(nullTerminator);
+        const char* stage = type == GL_VERTEX_SHADER ? "vertex" : "fragment";
+        lastProgramBuildError_ = std::string("Shader compile failed (") + stage
+                + "): " + log;
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Shader compile failed: %s", log.c_str());
         glDeleteShader(shader);
         return 0;
@@ -1292,6 +1297,7 @@ GLuint Renderer::compileShader(GLenum type, const char* source) {
 }
 
 GLuint Renderer::createProgram(const char* vertexSource, const char* fragmentSource) {
+    lastProgramBuildError_.clear();
     const GLuint vertex = compileShader(GL_VERTEX_SHADER, vertexSource);
     const GLuint fragment = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
     if (vertex == 0 || fragment == 0) {
@@ -1314,6 +1320,9 @@ GLuint Renderer::createProgram(const char* vertexSource, const char* fragmentSou
         glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
         std::string log(static_cast<std::size_t>(std::max(logLength, 1)), '\0');
         glGetProgramInfoLog(program, logLength, nullptr, log.data());
+        const std::size_t nullTerminator = log.find('\0');
+        if (nullTerminator != std::string::npos) log.resize(nullTerminator);
+        lastProgramBuildError_ = std::string("Program link failed: ") + log;
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Program link failed: %s", log.c_str());
         glDeleteProgram(program);
         return 0;
@@ -3798,7 +3807,15 @@ void Renderer::initialize(AAssetManager* assetManager) {
     shadowsAvailable_ = false;
     shadowCascadesValid_ = false;
     postProcessingAvailable_ = false;
+    rendererFailureReason_.clear();
+    GLint maxFragmentTextureUnits = 0;
+    GLint maxCombinedTextureUnits = 0;
+    GLint maxFragmentUniformVectors = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxFragmentTextureUnits);
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxCombinedTextureUnits);
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &maxFragmentUniformVectors);
     program_ = createProgram(kVertexShader, kFragmentShader);
+    const std::string csmBuildError = program_ == 0 ? lastProgramBuildError_ : std::string{};
     if (program_ != 0) {
         csmShaderSupported_ = true;
     } else {
@@ -3811,10 +3828,27 @@ void Renderer::initialize(AAssetManager* assetManager) {
             program_ = createProgram(kVertexShader, pbrWithoutCsm.c_str());
         }
         if (program_ == 0) {
+            const std::string pbrWithoutCsmError = lastProgramBuildError_;
             fallbackRenderer_ = true;
+            rendererFailureReason_ = "GL limits: fragment texture units="
+                    + std::to_string(maxFragmentTextureUnits)
+                    + ", combined texture units=" + std::to_string(maxCombinedTextureUnits)
+                    + ", fragment uniform vectors=" + std::to_string(maxFragmentUniformVectors)
+                    + "\nPBR with cascaded shadows: " + csmBuildError
+                    + "\nPBR without cascaded shadows: " + pbrWithoutCsmError;
+            if (rendererFailureReason_.size() > 4096U) {
+                rendererFailureReason_.resize(4096U);
+            }
             __android_log_print(ANDROID_LOG_WARN, kLogTag,
                     "Advanced PBR shaders unavailable; trying compatibility renderer");
             program_ = createProgram(kFallbackVertexShader, kFallbackFragmentShader);
+            if (program_ == 0) {
+                rendererFailureReason_ += "\nCompatibility renderer: "
+                        + lastProgramBuildError_;
+                if (rendererFailureReason_.size() > 4096U) {
+                    rendererFailureReason_.resize(4096U);
+                }
+            }
         } else {
             __android_log_print(ANDROID_LOG_WARN, kLogTag,
                     "PBR shader enabled without cascaded shadows on this GPU");

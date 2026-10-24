@@ -1,6 +1,8 @@
 package com.nuby.engine;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -63,6 +65,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
     private static native int nativeRendererTier();
+    private static native String nativeRendererFailureReason();
     private static native int nativeSceneAssetStatus();
     private static native String nativeAssetMemoryStatus();
     private static native String nativeFrameTimingStatus();
@@ -178,6 +181,21 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 Gravity.TOP | Gravity.END);
         telemetryParams.setMargins(0, dp(18), dp(18), 0);
         root.addView(telemetry, telemetryParams);
+        telemetry.setContentDescription("Renderer statistics; keep pressed to copy renderer diagnostic");
+        telemetry.setOnLongClickListener(view -> {
+            final String diagnostic = nativeRendererFailureReason();
+            if (diagnostic == null || diagnostic.isEmpty()) {
+                Toast.makeText(this, "No renderer fallback diagnostic", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+            ClipboardManager clipboard = (ClipboardManager)
+                    getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("Renderer diagnostic", diagnostic));
+                Toast.makeText(this, "Renderer diagnostic copied", Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        });
 
         gameStatus = label("AETHER RUN  0/6  45s", 11, 0xFFF1F8FF, true);
         gameStatus.setGravity(Gravity.CENTER);
