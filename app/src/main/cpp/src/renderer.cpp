@@ -356,7 +356,8 @@ uniform mat4 uView;
 uniform mat4 uModel;
 uniform int uUseInstancing;
 uniform int uSkinningEnabled;
-uniform int uHasTangents;
+// Match the fragment stage; GLES integer precision defaults differ by stage.
+uniform highp int uHasTangents;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
 out vec2 vUv;
@@ -427,7 +428,7 @@ uniform vec3 uSpecularColorFactor;
 uniform float uSheenRoughnessFactor;
 uniform vec3 uSheenColorFactor;
 uniform int uUnlit;
-uniform int uHasTangents;
+uniform highp int uHasTangents;
 uniform float uAmbientOcclusion;
 uniform sampler2D uAlbedoTexture;
 uniform sampler2D uNormalTexture;
