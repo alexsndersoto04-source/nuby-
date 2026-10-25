@@ -401,6 +401,7 @@ private:
     std::vector<DrawItem> opaqueDrawItems_;
     std::vector<DrawItem> transparentDrawItems_;
     std::vector<ShadowDrawItem> shadowDrawItems_;
+    std::vector<ShadowDrawItem> shadowCasterItems_;
     std::vector<std::array<float, 16>> instanceModelsScratch_;
     GLuint program_ = 0;
     GLuint repeatSampler_ = 0;

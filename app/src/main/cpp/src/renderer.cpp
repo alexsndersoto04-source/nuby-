@@ -3213,6 +3213,55 @@ void Renderer::renderShadowMaps() {
     glPolygonOffset(1.5f, 2.5f);
     glUseProgram(shadowProgram_);
 
+    const Scene& shadowScene = activeScene();
+    shadowCasterItems_.clear();
+    for (const Entity& entity : shadowScene.entities()) {
+        if (!entity.visible || entity.primitive == Primitive::Ground) continue;
+        const Mat4 model = shadowScene.worldMatrix(entity.id);
+        if (entity.primitive == Primitive::ImportedMesh) {
+            const std::string meshPath = projectAssetPath(entity.meshAsset);
+            const auto imported = importedMeshes_.find(meshPath);
+            if (imported != importedMeshes_.end()) {
+                const auto pose = evaluatedSkeletalPoses_.find(entity.id);
+                const SkeletalPose* poseData = pose == evaluatedSkeletalPoses_.end()
+                        ? nullptr : &pose->second;
+                for (const ImportedPart& part : imported->second.parts) {
+                    const bool useImportedMaterial = part.hasMaterial
+                            && !entity.overrideMtlMaterials;
+                    const Material& material = useImportedMaterial
+                            ? part.material : entity.material;
+                    const bool alphaMask = useImportedMaterial && part.alphaMask;
+                    const SkeletalPose* partPose = part.skinned ? poseData : nullptr;
+                    if (part.mesh.vao == 0 || (!alphaMask
+                            && (material.opacity < 1.0f
+                                || !material.opacityTexture.empty()))) continue;
+                    shadowCasterItems_.push_back({&part.mesh, model, partPose,
+                            alphaMask ? &material : nullptr, alphaMask, part.alphaCutoff});
+                }
+                continue;
+            }
+        }
+        if (entity.material.opacity < 1.0f
+                || !entity.material.opacityTexture.empty()) continue;
+        const Mesh* mesh = meshFor(entity);
+        if (mesh == nullptr || mesh->vao == 0) continue;
+        shadowCasterItems_.push_back({mesh, model});
+    }
+    const auto shadowItemLess = [](const ShadowDrawItem& left, const ShadowDrawItem& right) {
+        if (left.mesh != right.mesh) {
+            return std::less<const Mesh*>{}(left.mesh, right.mesh);
+        }
+        if (left.pose != right.pose) {
+            return std::less<const SkeletalPose*>{}(left.pose, right.pose);
+        }
+        if (left.material != right.material) {
+            return std::less<const Material*>{}(left.material, right.material);
+        }
+        if (left.alphaMask != right.alphaMask) return left.alphaMask < right.alphaMask;
+        return left.alphaCutoff < right.alphaCutoff;
+    };
+    std::sort(shadowCasterItems_.begin(), shadowCasterItems_.end(), shadowItemLess);
+
     for (std::size_t cascade = 0; cascade < kDirectionalShadowCascadeCount; ++cascade) {
         const GLint tileX = static_cast<GLint>(cascade)
                 * static_cast<GLint>(kShadowMapSize);
@@ -3226,57 +3275,14 @@ void Renderer::renderShadowMaps() {
         ViewFrustum cascadeFrustum;
         extractViewFrustum(shadowViewProjections_[cascade], cascadeFrustum);
 
-        const Scene& shadowScene = activeScene();
         shadowDrawItems_.clear();
-        for (const Entity& entity : shadowScene.entities()) {
-            if (!entity.visible || entity.primitive == Primitive::Ground) continue;
-            const Mat4 model = shadowScene.worldMatrix(entity.id);
-            if (entity.primitive == Primitive::ImportedMesh) {
-                const std::string meshPath = projectAssetPath(entity.meshAsset);
-                const auto imported = importedMeshes_.find(meshPath);
-                if (imported != importedMeshes_.end()) {
-                    const auto pose = evaluatedSkeletalPoses_.find(entity.id);
-                    const SkeletalPose* poseData = pose == evaluatedSkeletalPoses_.end()
-                            ? nullptr : &pose->second;
-                    for (const ImportedPart& part : imported->second.parts) {
-                        const bool useImportedMaterial = part.hasMaterial
-                                && !entity.overrideMtlMaterials;
-                        const Material& material = useImportedMaterial
-                                ? part.material : entity.material;
-                        const bool alphaMask = useImportedMaterial && part.alphaMask;
-                        const SkeletalPose* partPose = part.skinned ? poseData : nullptr;
-                        if (part.mesh.vao == 0 || (!alphaMask
-                                && (material.opacity < 1.0f
-                                    || !material.opacityTexture.empty()))
-                                || (partPose == nullptr
-                                    && !meshIntersectsFrustum(part.mesh, model, cascadeFrustum))) continue;
-                        shadowDrawItems_.push_back({&part.mesh, model, partPose,
-                                alphaMask ? &material : nullptr, alphaMask, part.alphaCutoff});
-                    }
-                    continue;
-                }
+        for (const ShadowDrawItem& candidate : shadowCasterItems_) {
+            if (candidate.pose == nullptr
+                    && !meshIntersectsFrustum(*candidate.mesh, candidate.model, cascadeFrustum)) {
+                continue;
             }
-            if (entity.material.opacity < 1.0f
-                    || !entity.material.opacityTexture.empty()) continue;
-            const Mesh* mesh = meshFor(entity);
-            if (mesh == nullptr || mesh->vao == 0
-                    || !meshIntersectsFrustum(*mesh, model, cascadeFrustum)) continue;
-            shadowDrawItems_.push_back({mesh, model});
+            shadowDrawItems_.push_back(candidate);
         }
-        std::sort(shadowDrawItems_.begin(), shadowDrawItems_.end(),
-                [](const ShadowDrawItem& left, const ShadowDrawItem& right) {
-                    if (left.mesh != right.mesh) {
-                        return std::less<const Mesh*>{}(left.mesh, right.mesh);
-                    }
-                    if (left.pose != right.pose) {
-                        return std::less<const SkeletalPose*>{}(left.pose, right.pose);
-                    }
-                    if (left.material != right.material) {
-                        return std::less<const Material*>{}(left.material, right.material);
-                    }
-                    if (left.alphaMask != right.alphaMask) return left.alphaMask < right.alphaMask;
-                    return left.alphaCutoff < right.alphaCutoff;
-                });
         for (std::size_t begin = 0; begin < shadowDrawItems_.size();) {
             const ShadowDrawItem& first = shadowDrawItems_[begin];
             std::size_t end = begin + 1;
