@@ -2173,6 +2173,7 @@ void Renderer::processPendingGpuUpload() {
     const std::size_t partCount = pending.importedModel.parts.size();
     const std::size_t vertexCount = isGlb ? 0U : pending.totalVertexCount;
     importedMeshes_[assetPath] = std::move(pending.importedModel);
+    skeletalClipCache_.clear();
     pendingGpuUploads_.pop_front();
     pendingMeshAssets_.erase(assetPath);
     if (!isGlb) {
@@ -2776,6 +2777,7 @@ void Renderer::releaseSceneAssets() {
         }
     }
     importedMeshes_.clear();
+    skeletalClipCache_.clear();
     evaluatedSkeletalPoses_.clear();
     for (const auto& entry : textures_) {
         if (entry.second != 0) glDeleteTextures(1, &entry.second);
@@ -2785,22 +2787,47 @@ void Renderer::releaseSceneAssets() {
     transparentDrawItems_.clear();
 }
 
+const GltfAnimation* Renderer::findSkeletalClip(
+        std::uint32_t entityId, const std::string& assetPath,
+        const std::string& clipName, const ImportedModel*& model) {
+    model = nullptr;
+    if (assetPath.empty() || clipName.empty()) return nullptr;
+    const auto cached = skeletalClipCache_.find(entityId);
+    if (cached != skeletalClipCache_.end()
+            && cached->second.assetPath == assetPath
+            && cached->second.clipName == clipName) {
+        model = cached->second.model;
+        return cached->second.animation;
+    }
+    const auto imported = importedMeshes_.find(assetPath);
+    if (imported == importedMeshes_.end()) return nullptr;
+    model = &imported->second;
+    const auto animation = std::find_if(model->animations.begin(), model->animations.end(),
+            [&clipName](const GltfAnimation& candidate) {
+                return candidate.name == clipName;
+            });
+    if (animation == model->animations.end()) return nullptr;
+    CachedSkeletalClip entry;
+    entry.assetPath = assetPath;
+    entry.clipName = clipName;
+    entry.model = model;
+    entry.animation = &*animation;
+    skeletalClipCache_[entityId] = std::move(entry);
+    return &*animation;
+}
+
 void Renderer::synchronizeSkeletalClipDurations(Scene& frameScene) {
     for (Entity& entity : frameScene.entities()) {
         if (!entity.skeletalAnimation.enabled || entity.meshAsset.empty()) continue;
-        const auto model = importedMeshes_.find(projectAssetPath(entity.meshAsset));
-        if (model == importedMeshes_.end()) continue;
-        const auto clip = std::find_if(model->second.animations.begin(),
-                model->second.animations.end(), [&entity](const GltfAnimation& animation) {
-                    return animation.name == entity.skeletalAnimation.clipName;
-                });
-        if (clip == model->second.animations.end()
-                || !std::isfinite(clip->clip.durationSeconds)
-                || clip->clip.durationSeconds <= 0.0f) {
-            continue;
-        }
+        const std::string assetPath = projectAssetPath(entity.meshAsset);
+        const ImportedModel* model = nullptr;
+        const GltfAnimation* animation = findSkeletalClip(
+                entity.id, assetPath, entity.skeletalAnimation.clipName, model);
+        if (model == nullptr || animation == nullptr
+                || !std::isfinite(animation->clip.durationSeconds)
+                || animation->clip.durationSeconds <= 0.0f) continue;
         SkeletalAnimationComponent& playback = entity.skeletalAnimation;
-        playback.durationSeconds = clip->clip.durationSeconds;
+        playback.durationSeconds = animation->clip.durationSeconds;
         if (playback.timeSeconds > playback.durationSeconds) {
             playback.timeSeconds = playback.looping
                     ? std::fmod(playback.timeSeconds, playback.durationSeconds)
@@ -2984,6 +3011,7 @@ void Renderer::loadSceneAssets() {
                     if (part.mesh.tangentVbo != 0) glDeleteBuffers(1, &part.mesh.tangentVbo);
                 }
                 importedMeshes_.erase(model);
+                skeletalClipCache_.clear();
             }
             releaseEmbeddedImagesForModel(meshPath);
         } else if (cacheKey.compare(0U, 8U, "texture:") == 0) {
@@ -3839,6 +3867,7 @@ void Renderer::initialize(AAssetManager* assetManager) {
     adventureMode_ = false;
     baseMeshesInitialized_ = false;
     importedMeshes_.clear();
+    skeletalClipCache_.clear();
     textures_.clear();
     fallbackRenderer_ = false;
     csmShaderSupported_ = false;
@@ -4392,13 +4421,11 @@ void Renderer::render(float deltaSeconds) {
                 || !entity.skeletalAnimation.enabled || entity.skeletalAnimation.clipName.empty()) {
             continue;
         }
-        const auto model = importedMeshes_.find(projectAssetPath(entity.meshAsset));
-        if (model == importedMeshes_.end() || model->second.skeleton.empty()) continue;
-        const auto clip = std::find_if(model->second.animations.begin(), model->second.animations.end(),
-                [&entity](const GltfAnimation& animation) {
-                    return animation.name == entity.skeletalAnimation.clipName;
-                });
-        if (clip == model->second.animations.end()) continue;
+        const std::string assetPath = projectAssetPath(entity.meshAsset);
+        const ImportedModel* model = nullptr;
+        const GltfAnimation* clip = findSkeletalClip(
+                entity.id, assetPath, entity.skeletalAnimation.clipName, model);
+        if (model == nullptr || model->skeleton.empty() || clip == nullptr) continue;
         const auto poseEntry = evaluatedSkeletalPoses_.try_emplace(entity.id);
         SkeletalPose& pose = poseEntry.first->second;
         std::string poseError;
@@ -4407,14 +4434,14 @@ void Renderer::render(float deltaSeconds) {
         const float transitionDuration = entity.skeletalLocomotion.transitionDurationSeconds;
         if (!playback.transitionFromClip.empty() && std::isfinite(transitionDuration)
                 && transitionDuration > 0.0f) {
-            const auto fromClip = std::find_if(model->second.animations.begin(),
-                    model->second.animations.end(), [&playback](const GltfAnimation& animation) {
+            const auto fromClip = std::find_if(model->animations.begin(),
+                    model->animations.end(), [&playback](const GltfAnimation& animation) {
                         return animation.name == playback.transitionFromClip;
                     });
-            if (fromClip != model->second.animations.end()) {
+            if (fromClip != model->animations.end()) {
                 const float blendAmount = std::clamp(
                         playback.transitionElapsedSeconds / transitionDuration, 0.0f, 1.0f);
-                evaluated = evaluateBlendedSkeletalPosePrevalidated(model->second.skeleton,
+                evaluated = evaluateBlendedSkeletalPosePrevalidated(model->skeleton,
                         fromClip->clip, playback.transitionFromTimeSeconds,
                         playback.transitionFromLooping, clip->clip,
                         playback.timeSeconds, playback.looping, blendAmount,
@@ -4422,7 +4449,7 @@ void Renderer::render(float deltaSeconds) {
             }
         }
         if (!evaluated) {
-            evaluated = evaluateSkeletalPosePrevalidated(model->second.skeleton, clip->clip,
+            evaluated = evaluateSkeletalPosePrevalidated(model->skeleton, clip->clip,
                     playback.timeSeconds, playback.looping, pose,
                     skeletalWorldMatricesScratch_, poseError);
         }

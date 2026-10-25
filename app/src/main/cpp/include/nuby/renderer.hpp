@@ -121,6 +121,13 @@ private:
         std::vector<GltfAnimation> animations;
     };
 
+    struct CachedSkeletalClip {
+        std::string assetPath;
+        std::string clipName;
+        const ImportedModel* model = nullptr;
+        const GltfAnimation* animation = nullptr;
+    };
+
     struct CpuSkinnedVertex {
         float position[3]{};
         float normal[3]{};
@@ -367,6 +374,10 @@ private:
     void playAudioClip(const std::shared_ptr<const AudioClip>& clip,
                        float gain = 1.0f, std::uint8_t priority = 64U);
     void synchronizeSkeletalClipDurations(Scene& scene);
+    const GltfAnimation* findSkeletalClip(std::uint32_t entityId,
+                                          const std::string& assetPath,
+                                          const std::string& clipName,
+                                          const ImportedModel*& model);
     void releaseSceneAssets();
     Scene& activeScene();
     const Scene& activeScene() const;
@@ -400,6 +411,7 @@ private:
     std::unordered_set<std::string> pendingTextureAssets_;
     std::unordered_set<std::string> failedTextureAssets_;
     std::unordered_map<std::string, ImportedModel> importedMeshes_;
+    std::unordered_map<std::uint32_t, CachedSkeletalClip> skeletalClipCache_;
     std::unordered_map<std::uint32_t, SkeletalPose> evaluatedSkeletalPoses_;
     std::unordered_set<std::uint32_t> activeSkeletalPoseIds_;
     std::vector<SkeletalMatrix4> skeletalWorldMatricesScratch_;
