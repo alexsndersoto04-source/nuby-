@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -211,6 +212,9 @@ private:
         const Material* material = nullptr;
         bool alphaMask = false;
         float alphaCutoff = 0.5f;
+        std::array<float, 3> worldBoundsCenter{};
+        float worldBoundsRadius = 0.0f;
+        bool worldBoundsValid = false;
     };
 
     struct SkyUniforms {
@@ -362,6 +366,8 @@ private:
               const std::vector<std::array<float, 16>>* instanceModels = nullptr,
               const SkeletalPose* pose = nullptr,
               bool alphaMask = false, float alphaCutoff = 0.5f);
+    bool meshWorldSphere(const Mesh& mesh, const std::array<float, 16>& model,
+                         std::array<float, 3>& center, float& radius) const;
     bool meshIntersectsFrustum(const Mesh& mesh, const std::array<float, 16>& model,
                                const ViewFrustum& frustum) const;
     void buildScene();
@@ -395,7 +401,11 @@ private:
     AssetMemoryCache assetMemoryCache_;
     FrameTimingWindow frameTimingWindow_;
     FrameTimingWindow scenePreparationTimingWindow_;
+    FrameTimingWindow sceneAssetRefreshTimingWindow_;
     FrameTimingWindow shadowPassTimingWindow_;
+    FrameTimingWindow shadowCandidateBuildTimingWindow_;
+    FrameTimingWindow shadowCascadeCullTimingWindow_;
+    FrameTimingWindow shadowCommandTimingWindow_;
     FrameTimingWindow mainPassTimingWindow_;
     FrameTimingWindow bloomPassTimingWindow_;
     std::uint64_t assetUseSequence_ = 0U;
@@ -406,6 +416,7 @@ private:
     std::deque<PendingGpuAsset> pendingGpuUploads_;
     std::deque<PendingTextureUpload> pendingTextureUploads_;
     bool textureUploadTurn_ = true;
+    bool sceneAssetRefreshPending_ = false;
     std::unordered_set<std::string> pendingMeshAssets_;
     std::unordered_set<std::string> failedMeshAssets_;
     std::unordered_set<std::string> pendingTextureAssets_;
@@ -421,6 +432,9 @@ private:
     std::vector<DrawItem> transparentDrawItems_;
     std::vector<ShadowDrawItem> shadowDrawItems_;
     std::vector<ShadowDrawItem> shadowCasterItems_;
+    std::size_t shadowCandidateCount_ = 0U;
+    std::size_t shadowCascadeItemCount_ = 0U;
+    std::size_t shadowDrawCallCount_ = 0U;
     std::vector<std::array<float, 16>> instanceModelsScratch_;
     GLuint program_ = 0;
     GLuint repeatSampler_ = 0;

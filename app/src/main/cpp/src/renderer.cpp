@@ -2779,6 +2779,8 @@ void Renderer::releaseSceneAssets() {
     importedMeshes_.clear();
     skeletalClipCache_.clear();
     evaluatedSkeletalPoses_.clear();
+    activeSkeletalPoseIds_.clear();
+    sceneAssetRefreshPending_ = false;
     for (const auto& entry : textures_) {
         if (entry.second != 0) glDeleteTextures(1, &entry.second);
     }
@@ -2837,6 +2839,8 @@ void Renderer::synchronizeSkeletalClipDurations(Scene& frameScene) {
 }
 
 void Renderer::loadSceneAssets() {
+    const auto refreshStart = std::chrono::steady_clock::now();
+    sceneAssetRefreshPending_ = false;
     std::unordered_set<std::string> requiredMeshes;
     std::unordered_set<std::string> requiredTextures;
     const auto addMaterialTextures = [this, &requiredTextures](const Material& material) {
@@ -2940,7 +2944,7 @@ void Renderer::loadSceneAssets() {
                     failedMeshAssets_.insert(meshPath);
                     __android_log_print(ANDROID_LOG_ERROR, kLogTag,
                             "Could not prepare model %s: %s", meshPath.c_str(), error.c_str());
-                    loadSceneAssets();
+                    sceneAssetRefreshPending_ = true;
                     return;
                 }
                 if (isGlb) uploadPreparedGlbAsset(meshPath, std::move(glbModel));
@@ -3047,6 +3051,8 @@ void Renderer::loadSceneAssets() {
         else failed = failedTextureAssets_.erase(failed);
     }
     for (const std::string& assetPath : requiredTextures) requestTextureDecode(assetPath);
+    sceneAssetRefreshTimingWindow_.record(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - refreshStart).count());
 }
 
 std::string Renderer::assetMemoryStatusText() const {
@@ -3075,7 +3081,8 @@ std::string Renderer::rendererDiagnosticText() const {
            << " (0=compatibility, 1=PBR, 2=PBR+CSM)\n"
            << "Shadows: " << (shadowsAvailable_ ? "ON" : "OFF")
            << "; bloom: " << (postProcessingAvailable_ ? "ON" : "OFF") << "\n"
-           << "Pass durations are CPU-side GL submission, not GPU timer queries.\n";
+           << "Pass durations are CPU-side GL submission, not GPU timer queries.\n"
+           << "Subphase windows are separate rolling samples; do not add their percentiles.\n";
     const auto appendWindow = [&report](const char* label,
                                         const FrameTimingWindow& window) {
         const FrameTimingStats stats = window.snapshot();
@@ -3089,7 +3096,14 @@ std::string Renderer::rendererDiagnosticText() const {
     };
     appendWindow("Total render CPU", frameTimingWindow_);
     appendWindow("Scene/update prep", scenePreparationTimingWindow_);
+    appendWindow("Scene asset refresh", sceneAssetRefreshTimingWindow_);
     appendWindow("Shadow pass", shadowPassTimingWindow_);
+    appendWindow("Shadow caster build/sort", shadowCandidateBuildTimingWindow_);
+    appendWindow("Shadow cascade culling", shadowCascadeCullTimingWindow_);
+    appendWindow("Shadow draw submission", shadowCommandTimingWindow_);
+    report << "Shadow workload (last frame): candidates=" << shadowCandidateCount_
+           << ", cascade-visible=" << shadowCascadeItemCount_
+           << ", GL draw calls=" << shadowDrawCallCount_ << "\n";
     appendWindow("Main scene pass", mainPassTimingWindow_);
     appendWindow("Bloom pass", bloomPassTimingWindow_);
     if (!rendererFailureReason_.empty()) {
@@ -3236,31 +3250,19 @@ void Renderer::initializeShadowMap() {
             kShadowMapSize, kShadowMapSize);
 }
 
+bool Renderer::meshWorldSphere(const Mesh& mesh, const Mat4& model,
+                               std::array<float, 3>& center, float& radius) const {
+    return mesh.boundsValid && transformSphereBounds(
+            mesh.boundsCenter, mesh.boundsRadius, model, center, radius);
+}
+
 bool Renderer::meshIntersectsFrustum(const Mesh& mesh, const Mat4& model,
                                      const ViewFrustum& frustum) const {
-    if (!mesh.boundsValid || !frustum.valid) return true;
-    Vec3 worldCenter{
-            model[0] * mesh.boundsCenter[0] + model[4] * mesh.boundsCenter[1]
-                    + model[8] * mesh.boundsCenter[2] + model[12],
-            model[1] * mesh.boundsCenter[0] + model[5] * mesh.boundsCenter[1]
-                    + model[9] * mesh.boundsCenter[2] + model[13],
-            model[2] * mesh.boundsCenter[0] + model[6] * mesh.boundsCenter[1]
-                    + model[10] * mesh.boundsCenter[2] + model[14]};
-    if (!std::isfinite(worldCenter[0]) || !std::isfinite(worldCenter[1])
-            || !std::isfinite(worldCenter[2])) return true;
-
-    const float rowNorm = std::max({
-            std::fabs(model[0]) + std::fabs(model[4]) + std::fabs(model[8]),
-            std::fabs(model[1]) + std::fabs(model[5]) + std::fabs(model[9]),
-            std::fabs(model[2]) + std::fabs(model[6]) + std::fabs(model[10])});
-    const float columnNorm = std::max({
-            std::fabs(model[0]) + std::fabs(model[1]) + std::fabs(model[2]),
-            std::fabs(model[4]) + std::fabs(model[5]) + std::fabs(model[6]),
-            std::fabs(model[8]) + std::fabs(model[9]) + std::fabs(model[10])});
-    const float scaleBound = std::sqrt(rowNorm * columnNorm);
-    const float worldRadius = mesh.boundsRadius * scaleBound;
-    if (!std::isfinite(worldRadius)) return true;
-    return sphereIntersectsFrustum(frustum, worldCenter, worldRadius);
+    if (!frustum.valid) return true;
+    std::array<float, 3> center{};
+    float radius = 0.0f;
+    if (!meshWorldSphere(mesh, model, center, radius)) return true;
+    return sphereIntersectsFrustum(frustum, center, radius);
 }
 
 void Renderer::renderShadowMaps() {
@@ -3271,9 +3273,37 @@ void Renderer::renderShadowMaps() {
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.5f);
     glUseProgram(shadowProgram_);
+    glUniform1i(shadowProgramAlbedoTexture_, 0);
+    glUniform1i(shadowProgramAlphaMaskEnabled_, 0);
+    glUniform1i(shadowProgramSkinningEnabled_, 0);
+    glUniform1i(shadowProgramUseInstancing_, 0);
+    bool alphaMaskEnabled = false;
+    bool skinningEnabled = false;
+    bool instancingEnabled = false;
 
     const Scene& shadowScene = activeScene();
+    shadowCandidateCount_ = 0U;
+    shadowCascadeItemCount_ = 0U;
+    shadowDrawCallCount_ = 0U;
+    const auto candidateBuildStart = std::chrono::steady_clock::now();
     shadowCasterItems_.clear();
+    const auto appendCandidate = [this](const Mesh* mesh, const Mat4& model,
+                                        const SkeletalPose* pose,
+                                        const Material* material, bool alphaMask,
+                                        float alphaCutoff) {
+        ShadowDrawItem candidate;
+        candidate.mesh = mesh;
+        candidate.model = model;
+        candidate.pose = pose;
+        candidate.material = material;
+        candidate.alphaMask = alphaMask;
+        candidate.alphaCutoff = alphaCutoff;
+        if (pose == nullptr && mesh != nullptr) {
+            candidate.worldBoundsValid = meshWorldSphere(*mesh, model,
+                    candidate.worldBoundsCenter, candidate.worldBoundsRadius);
+        }
+        shadowCasterItems_.push_back(std::move(candidate));
+    };
     for (const Entity& entity : shadowScene.entities()) {
         if (!entity.visible || entity.primitive == Primitive::Ground) continue;
         const Mat4 model = shadowScene.worldMatrix(entity.id);
@@ -3294,8 +3324,8 @@ void Renderer::renderShadowMaps() {
                     if (part.mesh.vao == 0 || (!alphaMask
                             && (material.opacity < 1.0f
                                 || !material.opacityTexture.empty()))) continue;
-                    shadowCasterItems_.push_back({&part.mesh, model, partPose,
-                            alphaMask ? &material : nullptr, alphaMask, part.alphaCutoff});
+                    appendCandidate(&part.mesh, model, partPose,
+                            alphaMask ? &material : nullptr, alphaMask, part.alphaCutoff);
                 }
                 continue;
             }
@@ -3304,7 +3334,7 @@ void Renderer::renderShadowMaps() {
                 || !entity.material.opacityTexture.empty()) continue;
         const Mesh* mesh = meshFor(entity);
         if (mesh == nullptr || mesh->vao == 0) continue;
-        shadowCasterItems_.push_back({mesh, model});
+        appendCandidate(mesh, model, nullptr, nullptr, false, 0.5f);
     }
     const auto shadowItemLess = [](const ShadowDrawItem& left, const ShadowDrawItem& right) {
         if (left.mesh != right.mesh) {
@@ -3320,7 +3350,14 @@ void Renderer::renderShadowMaps() {
         return left.alphaCutoff < right.alphaCutoff;
     };
     std::sort(shadowCasterItems_.begin(), shadowCasterItems_.end(), shadowItemLess);
+    shadowCandidateBuildTimingWindow_.record(
+            std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - candidateBuildStart).count());
+    shadowCandidateCount_ = shadowCasterItems_.size();
 
+    double cascadeCullMilliseconds = 0.0;
+    double commandSubmissionMilliseconds = 0.0;
+    const SkeletalPose* uploadedShadowPose = nullptr;
     for (std::size_t cascade = 0; cascade < kDirectionalShadowCascadeCount; ++cascade) {
         const GLint tileX = static_cast<GLint>(cascade)
                 * static_cast<GLint>(kShadowMapSize);
@@ -3335,13 +3372,19 @@ void Renderer::renderShadowMaps() {
         extractViewFrustum(shadowViewProjections_[cascade], cascadeFrustum);
 
         shadowDrawItems_.clear();
+        const auto cascadeCullStart = std::chrono::steady_clock::now();
         for (const ShadowDrawItem& candidate : shadowCasterItems_) {
-            if (candidate.pose == nullptr
-                    && !meshIntersectsFrustum(*candidate.mesh, candidate.model, cascadeFrustum)) {
+            if (candidate.pose == nullptr && candidate.worldBoundsValid
+                    && !sphereIntersectsFrustum(cascadeFrustum,
+                            candidate.worldBoundsCenter, candidate.worldBoundsRadius)) {
                 continue;
             }
             shadowDrawItems_.push_back(candidate);
         }
+        cascadeCullMilliseconds += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - cascadeCullStart).count();
+        shadowCascadeItemCount_ += shadowDrawItems_.size();
+        const auto commandStart = std::chrono::steady_clock::now();
         for (std::size_t begin = 0; begin < shadowDrawItems_.size();) {
             const ShadowDrawItem& first = shadowDrawItems_[begin];
             std::size_t end = begin + 1;
@@ -3358,41 +3401,54 @@ void Renderer::renderShadowMaps() {
                             std::numeric_limits<GLsizei>::max());
             glBindVertexArray(first.mesh->vao);
             glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, first.model.data());
-            glUniform1i(shadowProgramUseInstancing_, useInstances ? 1 : 0);
-            const bool useSkinning = skinPaletteBuffer_ != 0 && first.pose != nullptr;
-            glUniform1i(shadowProgramSkinningEnabled_, useSkinning ? 1 : 0);
-            glUniform1i(shadowProgramAlphaMaskEnabled_, first.alphaMask ? 1 : 0);
-            glUniform1f(shadowProgramAlphaCutoff_, first.alphaCutoff);
-            const Material* shadowMaterial = first.material;
-            GLuint shadowAlbedoTexture = 0U;
-            if (first.alphaMask && shadowMaterial != nullptr
-                    && !shadowMaterial->albedoTexture.empty()) {
-                const std::string texturePath = projectAssetPath(shadowMaterial->albedoTexture);
-                const auto texture = textures_.find(texturePath);
-                if (texture != textures_.end()) shadowAlbedoTexture = texture->second;
+            if (useInstances != instancingEnabled) {
+                glUniform1i(shadowProgramUseInstancing_, useInstances ? 1 : 0);
+                instancingEnabled = useInstances;
             }
-            glUniform1i(shadowProgramAlbedoTexture_, 0);
-            glUniform1i(shadowProgramHasAlbedoTexture_,
-                        shadowAlbedoTexture != 0U ? 1 : 0);
-            glUniform1f(shadowProgramBaseColorAlpha_,
-                        shadowMaterial != nullptr ? shadowMaterial->opacity : 1.0f);
-            const TextureMapTransform defaultTransform{};
-            const TextureMapTransform& albedoTransform = shadowMaterial != nullptr
-                    ? shadowMaterial->albedoMapTransform : defaultTransform;
-            glUniform2fv(shadowProgramAlbedoUvScale_, 1, albedoTransform.uvScale.data());
-            glUniform2fv(shadowProgramAlbedoUvOffset_, 1, albedoTransform.uvOffset.data());
-            const std::array<float, 2> shadowUvRotation =
-                    textureRotationPair(albedoTransform.uvRotation);
-            glUniform2fv(shadowProgramAlbedoUvRotation_, 1, shadowUvRotation.data());
-            glUniform1i(shadowProgramAlbedoUvSet_,
-                        static_cast<GLint>(albedoTransform.uvSet));
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, shadowAlbedoTexture);
-            const GLuint shadowSampler = shadowMaterial != nullptr
-                    && shadowMaterial->albedoMapTransform.clampToEdge
-                    ? clampSampler_ : repeatSampler_;
-            glBindSampler(0, first.alphaMask ? shadowSampler : 0U);
-            if (useSkinning) uploadSkinPalette(first.pose);
+            const bool useSkinning = skinPaletteBuffer_ != 0 && first.pose != nullptr;
+            if (useSkinning != skinningEnabled) {
+                glUniform1i(shadowProgramSkinningEnabled_, useSkinning ? 1 : 0);
+                skinningEnabled = useSkinning;
+            }
+            if (first.alphaMask != alphaMaskEnabled) {
+                glUniform1i(shadowProgramAlphaMaskEnabled_, first.alphaMask ? 1 : 0);
+                alphaMaskEnabled = first.alphaMask;
+            }
+            if (first.alphaMask) {
+                glUniform1f(shadowProgramAlphaCutoff_, first.alphaCutoff);
+                const Material* shadowMaterial = first.material;
+                GLuint shadowAlbedoTexture = 0U;
+                if (shadowMaterial != nullptr && !shadowMaterial->albedoTexture.empty()) {
+                    const std::string texturePath = projectAssetPath(
+                            shadowMaterial->albedoTexture);
+                    const auto texture = textures_.find(texturePath);
+                    if (texture != textures_.end()) shadowAlbedoTexture = texture->second;
+                }
+                glUniform1i(shadowProgramHasAlbedoTexture_,
+                            shadowAlbedoTexture != 0U ? 1 : 0);
+                glUniform1f(shadowProgramBaseColorAlpha_,
+                            shadowMaterial != nullptr ? shadowMaterial->opacity : 1.0f);
+                const TextureMapTransform defaultTransform{};
+                const TextureMapTransform& albedoTransform = shadowMaterial != nullptr
+                        ? shadowMaterial->albedoMapTransform : defaultTransform;
+                glUniform2fv(shadowProgramAlbedoUvScale_, 1, albedoTransform.uvScale.data());
+                glUniform2fv(shadowProgramAlbedoUvOffset_, 1, albedoTransform.uvOffset.data());
+                const std::array<float, 2> shadowUvRotation =
+                        textureRotationPair(albedoTransform.uvRotation);
+                glUniform2fv(shadowProgramAlbedoUvRotation_, 1, shadowUvRotation.data());
+                glUniform1i(shadowProgramAlbedoUvSet_,
+                            static_cast<GLint>(albedoTransform.uvSet));
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, shadowAlbedoTexture);
+                const GLuint shadowSampler = shadowMaterial != nullptr
+                        && shadowMaterial->albedoMapTransform.clampToEdge
+                        ? clampSampler_ : repeatSampler_;
+                glBindSampler(0, shadowSampler);
+            }
+            if (useSkinning && first.pose != uploadedShadowPose) {
+                uploadSkinPalette(first.pose);
+                uploadedShadowPose = first.pose;
+            }
             if (useInstances) {
                 instanceModelsScratch_.clear();
                 instanceModelsScratch_.reserve(end - begin);
@@ -3407,25 +3463,32 @@ void Renderer::renderShadowMaps() {
                     glDrawArraysInstanced(GL_TRIANGLES, 0, first.mesh->vertexCount,
                             static_cast<GLsizei>(instanceModelsScratch_.size()));
                 }
+                ++shadowDrawCallCount_;
                 unbindInstanceAttributes();
             } else {
                 for (std::size_t index = begin; index < end; ++index) {
                     const ShadowDrawItem& item = shadowDrawItems_[index];
                     glUniformMatrix4fv(shadowProgramModel_, 1, GL_FALSE, item.model.data());
-                    if (item.pose != nullptr && skinPaletteBuffer_ != 0) {
-                        glUniform1i(shadowProgramSkinningEnabled_, 1);
+                    if (item.pose != nullptr && skinPaletteBuffer_ != 0
+                            && item.pose != uploadedShadowPose) {
                         uploadSkinPalette(item.pose);
+                        uploadedShadowPose = item.pose;
                     }
                     if (item.mesh->ebo != 0) {
                         glDrawElements(GL_TRIANGLES, item.mesh->indexCount, GL_UNSIGNED_INT, nullptr);
                     } else {
                         glDrawArrays(GL_TRIANGLES, 0, item.mesh->vertexCount);
                     }
+                    ++shadowDrawCallCount_;
                 }
             }
             begin = end;
         }
+        commandSubmissionMilliseconds += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - commandStart).count();
     }
+    shadowCascadeCullTimingWindow_.record(cascadeCullMilliseconds);
+    shadowCommandTimingWindow_.record(commandSubmissionMilliseconds);
 
     glBindVertexArray(0);
     glBindSampler(0, 0);
@@ -3861,7 +3924,9 @@ void Renderer::initialize(AAssetManager* assetManager) {
         }
         return parseWorldZoneManifest(contents, manifest, error);
     });
-    adventureGame_.setZoneAssetsChangedCallback([this]() { loadSceneAssets(); });
+    adventureGame_.setZoneAssetsChangedCallback([this]() {
+        sceneAssetRefreshPending_ = true;
+    });
     demoMode_ = 0;
     gameMode_ = false;
     adventureMode_ = false;
@@ -4402,6 +4467,7 @@ void Renderer::render(float deltaSeconds) {
             playAudioClip(gateAudioClip_, 0.86f, 120U);
         }
     } else scene_.update(dt);
+    if (sceneAssetRefreshPending_) loadSceneAssets();
     if (androidAudioOutput_.running()) {
         if (audioEngine_.activeVoiceCount() == 0U) {
             audioIdleSeconds_ += dt;
@@ -4579,6 +4645,9 @@ void Renderer::render(float deltaSeconds) {
     scenePreparationTimingWindow_.record(std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - scenePreparationStart).count());
 
+    shadowCandidateCount_ = 0U;
+    shadowCascadeItemCount_ = 0U;
+    shadowDrawCallCount_ = 0U;
     const auto shadowPassStart = std::chrono::steady_clock::now();
     if (shadowsAvailable_) {
         const ShadowCameraFrustum shadowCamera{

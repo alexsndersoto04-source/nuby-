@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -65,6 +66,38 @@ inline bool extractViewFrustum(const std::array<float, 16>& viewProjection,
     }
     frustum.valid = true;
     return true;
+}
+
+// Conservative world-space sphere transform for column-major affine matrices.
+// Returns false for invalid inputs; callers should fail open and skip culling.
+inline bool transformSphereBounds(const std::array<float, 3>& localCenter,
+                                  float localRadius,
+                                  const std::array<float, 16>& model,
+                                  std::array<float, 3>& worldCenter,
+                                  float& worldRadius) {
+    if (!std::isfinite(localRadius) || localRadius < 0.0f
+            || !std::isfinite(localCenter[0]) || !std::isfinite(localCenter[1])
+            || !std::isfinite(localCenter[2])) return false;
+    worldCenter = {
+            model[0] * localCenter[0] + model[4] * localCenter[1]
+                    + model[8] * localCenter[2] + model[12],
+            model[1] * localCenter[0] + model[5] * localCenter[1]
+                    + model[9] * localCenter[2] + model[13],
+            model[2] * localCenter[0] + model[6] * localCenter[1]
+                    + model[10] * localCenter[2] + model[14]};
+    if (!std::isfinite(worldCenter[0]) || !std::isfinite(worldCenter[1])
+            || !std::isfinite(worldCenter[2])) return false;
+
+    const float rowNorm = std::max({
+            std::fabs(model[0]) + std::fabs(model[4]) + std::fabs(model[8]),
+            std::fabs(model[1]) + std::fabs(model[5]) + std::fabs(model[9]),
+            std::fabs(model[2]) + std::fabs(model[6]) + std::fabs(model[10])});
+    const float columnNorm = std::max({
+            std::fabs(model[0]) + std::fabs(model[1]) + std::fabs(model[2]),
+            std::fabs(model[4]) + std::fabs(model[5]) + std::fabs(model[6]),
+            std::fabs(model[8]) + std::fabs(model[9]) + std::fabs(model[10])});
+    worldRadius = localRadius * std::sqrt(rowNorm * columnNorm);
+    return std::isfinite(worldRadius) && worldRadius >= 0.0f;
 }
 
 // Invalid bounds/frusta fail open so numerical issues never make objects disappear.

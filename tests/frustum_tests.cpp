@@ -36,6 +36,30 @@ void testIdentityClipFrustumContainsAndRejectsSpheres() {
            "sphere fully beyond the near clip plane is culled");
 }
 
+void testWorldSphereTransformAndInvalidBounds() {
+    auto model = identity();
+    model[0] = 2.0f;
+    model[5] = 3.0f;
+    model[10] = 4.0f;
+    model[12] = 5.0f;
+    model[13] = -2.0f;
+    model[14] = 1.0f;
+    std::array<float, 3> center{};
+    float radius = 0.0f;
+    expect(nuby::transformSphereBounds({1.0f, 2.0f, -1.0f}, 0.5f,
+                   model, center, radius),
+           "finite local sphere transforms successfully");
+    expect(std::fabs(center[0] - 7.0f) < 1.0e-5f
+                   && std::fabs(center[1] - 4.0f) < 1.0e-5f
+                   && std::fabs(center[2] + 3.0f) < 1.0e-5f,
+           "world sphere center includes nonuniform scale and translation");
+    expect(std::fabs(radius - 2.0f) < 1.0e-5f,
+           "world sphere radius conservatively covers the largest axis scale");
+    expect(!nuby::transformSphereBounds({0.0f, 0.0f, 0.0f}, -1.0f,
+                   model, center, radius),
+           "negative local radius is rejected for fail-open culling");
+}
+
 void testTranslatedClipMatrixAndInvalidInputsFailOpen() {
     auto translated = identity();
     translated[12] = -2.0f;
@@ -58,6 +82,7 @@ void testTranslatedClipMatrixAndInvalidInputsFailOpen() {
 
 int main() {
     testIdentityClipFrustumContainsAndRejectsSpheres();
+    testWorldSphereTransformAndInvalidBounds();
     testTranslatedClipMatrixAndInvalidInputsFailOpen();
     if (failures != 0) {
         std::cerr << failures << " frustum test(s) failed\n";
