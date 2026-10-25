@@ -4385,8 +4385,8 @@ void Renderer::render(float deltaSeconds) {
         }
     }
     Scene& frameScene = activeScene();
-    evaluatedSkeletalPoses_.clear();
-    evaluatedSkeletalPoses_.reserve(frameScene.entities().size());
+    activeSkeletalPoseIds_.clear();
+    activeSkeletalPoseIds_.reserve(frameScene.entities().size());
     for (const Entity& entity : frameScene.entities()) {
         if (!entity.visible || entity.primitive != Primitive::ImportedMesh
                 || !entity.skeletalAnimation.enabled || entity.skeletalAnimation.clipName.empty()) {
@@ -4399,7 +4399,8 @@ void Renderer::render(float deltaSeconds) {
                     return animation.name == entity.skeletalAnimation.clipName;
                 });
         if (clip == model->second.animations.end()) continue;
-        SkeletalPose pose;
+        const auto poseEntry = evaluatedSkeletalPoses_.try_emplace(entity.id);
+        SkeletalPose& pose = poseEntry.first->second;
         std::string poseError;
         const SkeletalAnimationComponent& playback = entity.skeletalAnimation;
         bool evaluated = false;
@@ -4413,18 +4414,27 @@ void Renderer::render(float deltaSeconds) {
             if (fromClip != model->second.animations.end()) {
                 const float blendAmount = std::clamp(
                         playback.transitionElapsedSeconds / transitionDuration, 0.0f, 1.0f);
-                evaluated = evaluateBlendedSkeletalPose(model->second.skeleton,
+                evaluated = evaluateBlendedSkeletalPosePrevalidated(model->second.skeleton,
                         fromClip->clip, playback.transitionFromTimeSeconds,
                         playback.transitionFromLooping, clip->clip,
                         playback.timeSeconds, playback.looping, blendAmount,
-                        pose, poseError);
+                        pose, skeletalWorldMatricesScratch_, poseError);
             }
         }
         if (!evaluated) {
-            evaluated = evaluateSkeletalPose(model->second.skeleton, clip->clip,
-                    playback.timeSeconds, playback.looping, pose, poseError);
+            evaluated = evaluateSkeletalPosePrevalidated(model->second.skeleton, clip->clip,
+                    playback.timeSeconds, playback.looping, pose,
+                    skeletalWorldMatricesScratch_, poseError);
         }
-        if (evaluated) evaluatedSkeletalPoses_.emplace(entity.id, std::move(pose));
+        if (evaluated) activeSkeletalPoseIds_.insert(entity.id);
+        else evaluatedSkeletalPoses_.erase(entity.id);
+    }
+    for (auto pose = evaluatedSkeletalPoses_.begin(); pose != evaluatedSkeletalPoses_.end();) {
+        if (activeSkeletalPoseIds_.find(pose->first) == activeSkeletalPoseIds_.end()) {
+            pose = evaluatedSkeletalPoses_.erase(pose);
+        } else {
+            ++pose;
+        }
     }
     frameDirectionalLighting_ = frameScene.directionalLighting();
     float directionLengthSquared = 0.0f;

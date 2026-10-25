@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace nuby {
 
@@ -15,24 +14,28 @@ void FrameTimingWindow::record(double milliseconds) {
 }
 
 FrameTimingStats FrameTimingWindow::snapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     FrameTimingStats result;
-    result.sampleCount = count_;
-    if (count_ == 0U) return result;
-
-    std::vector<double> ordered;
-    ordered.reserve(count_);
-    const std::size_t first = count_ == samples_.size() ? next_ : 0U;
-    for (std::size_t index = 0U; index < count_; ++index) {
-        ordered.push_back(samples_[(first + index) % samples_.size()]);
+    std::array<double, kCapacity> ordered{};
+    std::size_t sampleCount = 0U;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sampleCount = count_;
+        if (sampleCount == 0U) return result;
+        const std::size_t first = sampleCount == samples_.size() ? next_ : 0U;
+        for (std::size_t index = 0U; index < sampleCount; ++index) {
+            ordered[index] = samples_[(first + index) % samples_.size()];
+        }
     }
+    result.sampleCount = sampleCount;
     result.averageMilliseconds = 0.0;
-    for (double sample : ordered) result.averageMilliseconds += sample;
-    result.averageMilliseconds /= static_cast<double>(ordered.size());
-    std::sort(ordered.begin(), ordered.end());
-    const std::size_t p95Index = (95U * ordered.size() + 99U) / 100U - 1U;
+    for (std::size_t index = 0U; index < sampleCount; ++index) {
+        result.averageMilliseconds += ordered[index];
+    }
+    result.averageMilliseconds /= static_cast<double>(sampleCount);
+    std::sort(ordered.begin(), ordered.begin() + static_cast<std::ptrdiff_t>(sampleCount));
+    const std::size_t p95Index = (95U * sampleCount + 99U) / 100U - 1U;
     result.p95Milliseconds = ordered[p95Index];
-    result.maximumMilliseconds = ordered.back();
+    result.maximumMilliseconds = ordered[sampleCount - 1U];
     return result;
 }
 

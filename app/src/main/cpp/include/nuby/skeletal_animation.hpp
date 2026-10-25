@@ -138,4 +138,22 @@ bool evaluateBlendedSkeletalPose(const std::vector<SkeletalJoint>& skeleton,
                                  float blendAmount, SkeletalPose& output,
                                  std::string& error);
 
+// Fast evaluation variants for immutable skeletons/clips that have already
+// passed validateSkeletalAnimation (as imported glTF assets do). The scratch
+// vector is retained by the caller to avoid per-frame workspace allocations.
+bool evaluateSkeletalPosePrevalidated(const std::vector<SkeletalJoint>& skeleton,
+                                      const SkeletalAnimationClip& clip,
+                                      float timeSeconds, bool looping,
+                                      SkeletalPose& output,
+                                      std::vector<SkeletalMatrix4>& worldScratch,
+                                      std::string& error);
+bool evaluateBlendedSkeletalPosePrevalidated(
+        const std::vector<SkeletalJoint>& skeleton,
+        const SkeletalAnimationClip& fromClip,
+        float fromTimeSeconds, bool fromLooping,
+        const SkeletalAnimationClip& toClip,
+        float toTimeSeconds, bool toLooping, float blendAmount,
+        SkeletalPose& output, std::vector<SkeletalMatrix4>& worldScratch,
+        std::string& error);
+
 }  // namespace nuby

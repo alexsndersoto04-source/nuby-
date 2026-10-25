@@ -198,6 +198,19 @@ void testCrossfadeAndNonLoopingEvaluation() {
                    && near(pose.jointMatrices[0][0], 0.0f, 0.001f)
                    && near(pose.jointMatrices[0][1], 1.0f, 0.001f),
            "crossfade blends local translation and slerps rotation before composition");
+    expect(nuby::validateSkeletalAnimation(skeleton, fromClip, error)
+                   && nuby::validateSkeletalAnimation(skeleton, toClip, error),
+           "both crossfade clips pass full validation before the fast path");
+    nuby::SkeletalPose fastBlendPose;
+    std::vector<nuby::SkeletalMatrix4> worldScratch;
+    expect(nuby::evaluateBlendedSkeletalPosePrevalidated(skeleton,
+                   fromClip, 0.0f, true, toClip, 1.0f, false, 0.5f,
+                   fastBlendPose, worldScratch, error)
+                   && fastBlendPose.jointMatrices.size() == pose.jointMatrices.size()
+                   && near(fastBlendPose.jointMatrices[0][12], 1.0f)
+                   && near(fastBlendPose.jointMatrices[0][0], 0.0f, 0.001f)
+                   && near(fastBlendPose.jointMatrices[0][1], 1.0f, 0.001f),
+           "prevalidated crossfade matches the fully validated interpolation result");
 
     expect(nuby::evaluateSkeletalPose(skeleton, toClip, 1.0f, false, pose, error)
                    && pose.jointMatrices.size() == 1
@@ -214,6 +227,50 @@ void testCrossfadeAndNonLoopingEvaluation() {
            "blend amounts outside the normalized range are rejected");
     expect(pose.jointMatrices.size() == 1 && near(pose.jointMatrices[0][12], preservedX),
            "failed blend evaluation leaves the caller's previous pose intact");
+}
+
+void testPrevalidatedEvaluationMatchesValidatedPathAndReusesWorkspace() {
+    std::vector<nuby::SkeletalJoint> skeleton(2U);
+    skeleton[1].parentIndex = 0;
+    skeleton[1].bindTranslation = {0.0f, 1.0f, 0.0f};
+    nuby::SkeletalAnimationClip clip;
+    clip.durationSeconds = 1.0f;
+    clip.joints.resize(2U);
+    clip.joints[0].translation.addKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    clip.joints[0].translation.addKeyframe(1.0f, {2.0f, 0.0f, 0.0f});
+    std::string error;
+    expect(nuby::validateSkeletalAnimation(skeleton, clip, error),
+           "prevalidated evaluator fixture passes the full validation path");
+
+    nuby::SkeletalPose checkedPose;
+    nuby::SkeletalPose fastPose;
+    std::vector<nuby::SkeletalMatrix4> worldScratch;
+    expect(nuby::evaluateSkeletalPose(skeleton, clip, 0.4f, true,
+                                     checkedPose, error)
+                   && nuby::evaluateSkeletalPosePrevalidated(skeleton, clip, 0.4f, true,
+                                     fastPose, worldScratch, error),
+           "validated and prevalidated pose evaluators both accept a valid immutable clip");
+    expect(checkedPose.jointMatrices.size() == fastPose.jointMatrices.size()
+                   && checkedPose.jointMatrices.size() == 2U,
+           "fast evaluator emits the same joint count");
+    if (checkedPose.jointMatrices.size() == fastPose.jointMatrices.size()) {
+        for (std::size_t joint = 0; joint < checkedPose.jointMatrices.size(); ++joint) {
+            for (std::size_t element = 0; element < checkedPose.jointMatrices[joint].size();
+                 ++element) {
+                expect(near(checkedPose.jointMatrices[joint][element],
+                            fastPose.jointMatrices[joint][element]),
+                       "prevalidated pose matrices match the fully validated path");
+            }
+        }
+    }
+    const auto* poseStorage = fastPose.jointMatrices.data();
+    const auto* scratchStorage = worldScratch.data();
+    expect(nuby::evaluateSkeletalPosePrevalidated(skeleton, clip, 0.7f, true,
+                                                   fastPose, worldScratch, error),
+           "prevalidated evaluator can reuse its pose and world-matrix buffers");
+    expect(fastPose.jointMatrices.data() == poseStorage
+                   && worldScratch.data() == scratchStorage,
+           "repeated fast pose evaluation reuses both vector allocations");
 }
 
 void testLinearBlendSkinningReference() {
@@ -308,6 +365,7 @@ int main() {
     testStepAndCubicSplineTracks();
     testMatrixAuthoredBindTransforms();
     testCrossfadeAndNonLoopingEvaluation();
+    testPrevalidatedEvaluationMatchesValidatedPathAndReusesWorkspace();
     testLinearBlendSkinningReference();
     testTrackEditingAndInvalidData();
     if (failures != 0) {
