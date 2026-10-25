@@ -3039,6 +3039,37 @@ std::string Renderer::frameTimingStatusText() const {
     return status.str();
 }
 
+std::string Renderer::rendererDiagnosticText() const {
+    std::ostringstream report;
+    report << "GLES renderer: " << glRendererName_ << "\n"
+           << "GLES version: " << glVersion_ << "\n"
+           << "Renderer tier: " << rendererTier()
+           << " (0=compatibility, 1=PBR, 2=PBR+CSM)\n"
+           << "Shadows: " << (shadowsAvailable_ ? "ON" : "OFF")
+           << "; bloom: " << (postProcessingAvailable_ ? "ON" : "OFF") << "\n"
+           << "Pass durations are CPU-side GL submission, not GPU timer queries.\n";
+    const auto appendWindow = [&report](const char* label,
+                                        const FrameTimingWindow& window) {
+        const FrameTimingStats stats = window.snapshot();
+        report << std::fixed << std::setprecision(1) << label << ": ";
+        if (stats.sampleCount == 0U) {
+            report << "no samples\n";
+            return;
+        }
+        report << "P95=" << stats.p95Milliseconds << " ms, MAX="
+               << stats.maximumMilliseconds << " ms, n=" << stats.sampleCount << "\n";
+    };
+    appendWindow("Total render CPU", frameTimingWindow_);
+    appendWindow("Scene/update prep", scenePreparationTimingWindow_);
+    appendWindow("Shadow pass", shadowPassTimingWindow_);
+    appendWindow("Main scene pass", mainPassTimingWindow_);
+    appendWindow("Bloom pass", bloomPassTimingWindow_);
+    if (!rendererFailureReason_.empty()) {
+        report << "\n" << rendererFailureReason_;
+    }
+    return report.str();
+}
+
 int Renderer::sceneAssetStatus() const {
     bool hasImportedAssets = false;
     bool missingMesh = false;
@@ -3815,6 +3846,12 @@ void Renderer::initialize(AAssetManager* assetManager) {
     shadowCascadesValid_ = false;
     postProcessingAvailable_ = false;
     rendererFailureReason_.clear();
+    const GLubyte* rendererName = glGetString(GL_RENDERER);
+    const GLubyte* versionName = glGetString(GL_VERSION);
+    glRendererName_ = rendererName != nullptr
+            ? reinterpret_cast<const char*>(rendererName) : "unknown GLES renderer";
+    glVersion_ = versionName != nullptr
+            ? reinterpret_cast<const char*>(versionName) : "unknown GLES version";
     GLint maxFragmentTextureUnits = 0;
     GLint maxCombinedTextureUnits = 0;
     GLint maxFragmentUniformVectors = 0;
@@ -4316,6 +4353,7 @@ void Renderer::render(float deltaSeconds) {
         return;
     }
 
+    const auto scenePreparationStart = std::chrono::steady_clock::now();
     // Consume at most one CPU result per frame. Completion callbacks own all
     // OpenGL work and therefore always run on the renderer thread.
     processAssetTasks();
@@ -4501,7 +4539,10 @@ void Renderer::render(float deltaSeconds) {
     viewProjection_ = multiply(projection, view);
     ViewFrustum cameraFrustum;
     extractViewFrustum(viewProjection_, cameraFrustum);
+    scenePreparationTimingWindow_.record(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - scenePreparationStart).count());
 
+    const auto shadowPassStart = std::chrono::steady_clock::now();
     if (shadowsAvailable_) {
         const ShadowCameraFrustum shadowCamera{
                 cameraPosition_,
@@ -4521,7 +4562,10 @@ void Renderer::render(float deltaSeconds) {
     } else {
         shadowCascadesValid_ = false;
     }
+    shadowPassTimingWindow_.record(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - shadowPassStart).count());
 
+    const auto mainPassStart = std::chrono::steady_clock::now();
     if (postProcessingAvailable_) {
         glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
         glViewport(0, 0, width_, height_);
@@ -4672,7 +4716,14 @@ void Renderer::render(float deltaSeconds) {
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
-    if (postProcessingAvailable_) renderBloom();
+    mainPassTimingWindow_.record(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - mainPassStart).count());
+    if (postProcessingAvailable_) {
+        const auto bloomPassStart = std::chrono::steady_clock::now();
+        renderBloom();
+        bloomPassTimingWindow_.record(std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - bloomPassStart).count());
+    }
     recordFrameTime();
 }
 

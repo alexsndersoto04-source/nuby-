@@ -65,7 +65,7 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
     private static native boolean nativeShadowsEnabled();
     private static native boolean nativePostProcessingEnabled();
     private static native int nativeRendererTier();
-    private static native String nativeRendererFailureReason();
+    private static native String nativeRendererDiagnosticText();
     private static native int nativeSceneAssetStatus();
     private static native String nativeAssetMemoryStatus();
     private static native String nativeFrameTimingStatus();
@@ -181,19 +181,30 @@ public final class MainActivity extends Activity implements GLSurfaceView.Render
                 Gravity.TOP | Gravity.END);
         telemetryParams.setMargins(0, dp(18), dp(18), 0);
         root.addView(telemetry, telemetryParams);
-        telemetry.setContentDescription("Renderer statistics; keep pressed to copy renderer diagnostic");
+        telemetry.setContentDescription("Renderer statistics; keep pressed to copy detailed performance diagnostics");
         telemetry.setOnLongClickListener(view -> {
-            final String diagnostic = nativeRendererFailureReason();
-            if (diagnostic == null || diagnostic.isEmpty()) {
-                Toast.makeText(this, "No renderer fallback diagnostic", Toast.LENGTH_SHORT).show();
+            if (surface == null) {
+                Toast.makeText(this, "Renderer diagnostics unavailable", Toast.LENGTH_SHORT).show();
                 return true;
             }
-            ClipboardManager clipboard = (ClipboardManager)
-                    getSystemService(CLIPBOARD_SERVICE);
-            if (clipboard != null) {
-                clipboard.setPrimaryClip(ClipData.newPlainText("Renderer diagnostic", diagnostic));
-                Toast.makeText(this, "Renderer diagnostic copied", Toast.LENGTH_SHORT).show();
-            }
+            surface.queueEvent(() -> {
+                final String diagnostic = nativeRendererDiagnosticText();
+                runOnUiThread(() -> {
+                    if (diagnostic == null || diagnostic.isEmpty()) {
+                        Toast.makeText(this, "Renderer diagnostics unavailable",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    ClipboardManager clipboard = (ClipboardManager)
+                            getSystemService(CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText(
+                                "Renderer diagnostic", diagnostic));
+                        Toast.makeText(this, "Renderer performance diagnostic copied",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            });
             return true;
         });
 

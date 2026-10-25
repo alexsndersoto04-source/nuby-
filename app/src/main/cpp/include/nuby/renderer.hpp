@@ -75,6 +75,7 @@ public:
         return fallbackRenderer_ ? 0 : csmShaderSupported_ ? 2 : 1;
     }
     std::string rendererFailureReason() const { return rendererFailureReason_; }
+    std::string rendererDiagnosticText() const;
     // 0 = no imported assets, 1 = mesh pending/fallback, 2 = mesh ready but
     // texture maps pending, 3 = all referenced assets ready, 4 = asset failure.
     int sceneAssetStatus() const;
@@ -382,6 +383,10 @@ private:
     AAssetManager* assetManager_ = nullptr;
     AssetMemoryCache assetMemoryCache_;
     FrameTimingWindow frameTimingWindow_;
+    FrameTimingWindow scenePreparationTimingWindow_;
+    FrameTimingWindow shadowPassTimingWindow_;
+    FrameTimingWindow mainPassTimingWindow_;
+    FrameTimingWindow bloomPassTimingWindow_;
     std::uint64_t assetUseSequence_ = 0U;
     std::unordered_map<std::string, std::uint64_t> textureGpuBytes_;
     std::unordered_map<std::string, std::unordered_set<std::string>> embeddedImagesByModel_;
@@ -470,6 +475,8 @@ private:
     std::string projectLoadError_;
     std::string lastProgramBuildError_;
     std::string rendererFailureReason_;
+    std::string glRendererName_;
+    std::string glVersion_;
     SampleGame sampleGame_;
     AdventureGame adventureGame_;
     AudioEngine audioEngine_;

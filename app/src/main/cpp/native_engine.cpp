@@ -34,10 +34,10 @@ Java_com_nuby_engine_MainActivity_nativeRendererTier(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_nuby_engine_MainActivity_nativeRendererFailureReason(JNIEnv* env, jclass) {
-    const std::string reason = gRenderer
-            ? gRenderer->rendererFailureReason() : std::string("Renderer is not initialized");
-    return env->NewStringUTF(reason.c_str());
+Java_com_nuby_engine_MainActivity_nativeRendererDiagnosticText(JNIEnv* env, jclass) {
+    const std::string diagnostic = gRenderer
+            ? gRenderer->rendererDiagnosticText() : std::string("Renderer is not initialized");
+    return env->NewStringUTF(diagnostic.c_str());
 }
 
 extern "C" JNIEXPORT jint JNICALL
