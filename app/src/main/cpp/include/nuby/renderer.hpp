@@ -450,6 +450,7 @@ private:
     static constexpr int kShadowMapSize = 512;
     static constexpr int kMaxPointLights = 4;
     Uniforms uniforms_{};
+    const Material* cachedDrawMaterial_ = nullptr;
     std::vector<PointLightData> pointLights_;
     std::array<float, 27> ambientSphericalHarmonics_{};
     DirectionalLighting frameDirectionalLighting_{};

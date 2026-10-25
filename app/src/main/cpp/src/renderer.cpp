@@ -4025,6 +4025,23 @@ void Renderer::initialize(AAssetManager* assetManager) {
     uniforms_.pointLightCount = glGetUniformLocation(program_, "uPointLightCount");
     uniforms_.pointLightPositionRange = glGetUniformLocation(program_, "uPointLightPositionRange[0]");
     uniforms_.pointLightColorIntensity = glGetUniformLocation(program_, "uPointLightColorIntensity[0]");
+    glUseProgram(program_);
+    glUniform1i(uniforms_.shadowMap, 0);
+    glUniform1i(uniforms_.albedoTexture, 1);
+    glUniform1i(uniforms_.normalTexture, 2);
+    glUniform1i(uniforms_.metallicRoughnessTexture, 3);
+    glUniform1i(uniforms_.occlusionTexture, 4);
+    glUniform1i(uniforms_.metallicTexture, 5);
+    glUniform1i(uniforms_.roughnessTexture, 6);
+    glUniform1i(uniforms_.opacityTexture, 7);
+    glUniform1i(uniforms_.emissiveTexture, 8);
+    glUniform1i(uniforms_.clearcoatTexture, 9);
+    glUniform1i(uniforms_.clearcoatRoughnessTexture, 10);
+    glUniform1i(uniforms_.clearcoatNormalTexture, 11);
+    glUniform1i(uniforms_.specularTexture, 12);
+    glUniform1i(uniforms_.specularColorTexture, 13);
+    glUniform1i(uniforms_.sheenColorTexture, 14);
+    glUniform1i(uniforms_.sheenRoughnessTexture, 15);
 
     buildScene();
     if (gameMode_) sampleGame_.start(scene_);
@@ -4062,14 +4079,6 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
                     bool alphaMask, float alphaCutoff) {
     if (program_ == 0 || mesh.vao == 0) return;
 
-    glUseProgram(program_);
-    glUniformMatrix4fv(uniforms_.viewProjection, 1, GL_FALSE, viewProjection_.data());
-    glUniformMatrix4fv(uniforms_.view, 1, GL_FALSE, view_.data());
-    for (std::size_t cascade = 0; cascade < uniforms_.lightViewProjection.size(); ++cascade) {
-        glUniformMatrix4fv(uniforms_.lightViewProjection[cascade], 1, GL_FALSE,
-                           shadowViewProjections_[cascade].data());
-    }
-    glUniform3fv(uniforms_.cascadeFarSplits, 1, shadowCascadeFarSplits_.data());
     glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, model.data());
     const bool useSkinning = skinPaletteBuffer_ != 0 && pose != nullptr
             && !pose->jointMatrices.empty()
@@ -4086,225 +4095,187 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     if (uniforms_.useInstancing >= 0) {
         glUniform1i(uniforms_.useInstancing, useInstances ? 1 : 0);
     }
-    glUniform3fv(uniforms_.color, 1, material.color.data());
-    glUniform3fv(uniforms_.emission, 1, material.emission.data());
-    glUniform1f(uniforms_.metallic, material.metallic);
-    glUniform1f(uniforms_.roughness, material.roughness);
-    glUniform1f(uniforms_.opacity, material.opacity);
     glUniform1i(uniforms_.alphaMaskEnabled, alphaMask ? 1 : 0);
     glUniform1f(uniforms_.alphaCutoff, alphaCutoff);
-    glUniform1f(uniforms_.normalMapScale, material.normalMapScale);
-    glUniform1f(uniforms_.emissiveStrength, material.emissiveStrength);
-    glUniform1f(uniforms_.indexOfRefraction, material.indexOfRefraction);
-    glUniform1f(uniforms_.clearcoatFactor, material.clearcoatFactor);
-    glUniform1f(uniforms_.clearcoatRoughness, material.clearcoatRoughness);
-    glUniform1f(uniforms_.clearcoatNormalScale, material.clearcoatNormalScale);
-    glUniform1f(uniforms_.specularFactor, material.specularFactor);
-    glUniform3fv(uniforms_.specularColorFactor, 1, material.specularColorFactor.data());
-    glUniform3fv(uniforms_.sheenColorFactor, 1, material.sheenColorFactor.data());
-    glUniform1f(uniforms_.sheenRoughnessFactor, material.sheenRoughness);
-    glUniform1i(uniforms_.unlit, material.unlit ? 1 : 0);
-    glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
-    glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
-                 ambientSphericalHarmonics_.data());
-    const auto textureFor = [this](const std::string& path) -> GLuint {
-        if (path.empty()) return 0U;
-        const std::string assetPath = projectAssetPath(path);
-        const auto found = textures_.find(assetPath);
-        return assetPath.empty() || found == textures_.end() ? 0U : found->second;
-    };
-    const GLuint albedoTexture = textureFor(material.albedoTexture);
-    const GLuint normalTexture = textureFor(material.normalTexture);
-    const GLuint metallicRoughnessTexture = textureFor(material.metallicRoughnessTexture);
-    const GLuint metallicTexture = textureFor(material.metallicTexture);
-    const GLuint roughnessTexture = textureFor(material.roughnessTexture);
-    const GLuint occlusionTexture = textureFor(material.occlusionTexture);
-    const GLuint opacityTexture = textureFor(material.opacityTexture);
-    const GLuint emissiveTexture = textureFor(material.emissiveTexture);
-    const GLuint clearcoatTexture = textureFor(material.clearcoatTexture);
-    const GLuint clearcoatRoughnessTexture =
-            textureFor(material.clearcoatRoughnessTexture);
-    const GLuint clearcoatNormalTexture = textureFor(material.clearcoatNormalTexture);
-    const GLuint specularTexture = textureFor(material.specularTexture);
-    const GLuint specularColorTexture = textureFor(material.specularColorTexture);
-    const GLuint sheenColorTexture = textureFor(material.sheenColorTexture);
-    const GLuint sheenRoughnessTexture = textureFor(material.sheenRoughnessTexture);
-    glUniform1i(uniforms_.albedoTexture, 1);
-    glUniform1i(uniforms_.normalTexture, 2);
-    glUniform1i(uniforms_.metallicRoughnessTexture, 3);
-    glUniform1i(uniforms_.occlusionTexture, 4);
-    glUniform1i(uniforms_.metallicTexture, 5);
-    glUniform1i(uniforms_.roughnessTexture, 6);
-    glUniform1i(uniforms_.opacityTexture, 7);
-    glUniform1i(uniforms_.emissiveTexture, 8);
-    glUniform1i(uniforms_.clearcoatTexture, 9);
-    glUniform1i(uniforms_.clearcoatRoughnessTexture, 10);
-    glUniform1i(uniforms_.clearcoatNormalTexture, 11);
-    glUniform1i(uniforms_.specularTexture, 12);
-    glUniform1i(uniforms_.specularColorTexture, 13);
-    glUniform1i(uniforms_.sheenColorTexture, 14);
-    glUniform1i(uniforms_.sheenRoughnessTexture, 15);
-    glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasMetallicRoughnessTexture,
-                metallicRoughnessTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasMetallicTexture, metallicTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasRoughnessTexture, roughnessTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasOpacityTexture, opacityTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasEmissiveTexture, emissiveTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasClearcoatTexture, clearcoatTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasClearcoatRoughnessTexture,
-                clearcoatRoughnessTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasClearcoatNormalTexture,
-                clearcoatNormalTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasSpecularTexture, specularTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasSpecularColorTexture,
-                specularColorTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasSheenColorTexture, sheenColorTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.hasSheenRoughnessTexture,
-                sheenRoughnessTexture != 0U ? 1 : 0);
-    glUniform1i(uniforms_.opacityMapChannel,
-                static_cast<GLint>(material.opacityMapChannel));
-    glUniform2fv(uniforms_.opacityUvScale, 1,
-                 material.opacityMapTransform.uvScale.data());
-    glUniform2fv(uniforms_.opacityUvOffset, 1,
-                 material.opacityMapTransform.uvOffset.data());
-    const std::array<float, 2> opacityUvRotation =
-            textureRotationPair(material.opacityMapTransform.uvRotation);
-    glUniform2fv(uniforms_.opacityUvRotation, 1, opacityUvRotation.data());
-    const std::array<const TextureMapTransform*, 14> mapTransforms{{
-            &material.albedoMapTransform,
-            &material.normalMapTransform,
-            &material.metallicRoughnessMapTransform,
-            &material.metallicMapTransform,
-            &material.roughnessMapTransform,
-            &material.occlusionMapTransform,
-            &material.emissiveMapTransform,
-            &material.clearcoatMapTransform,
-            &material.clearcoatRoughnessMapTransform,
-            &material.clearcoatNormalMapTransform,
-            &material.specularMapTransform,
-            &material.specularColorMapTransform,
-            &material.sheenColorMapTransform,
-            &material.sheenRoughnessMapTransform
-    }};
-    for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
-        glUniform2fv(uniforms_.textureUvScale[map], 1,
-                     mapTransforms[map]->uvScale.data());
-        glUniform2fv(uniforms_.textureUvOffset[map], 1,
-                     mapTransforms[map]->uvOffset.data());
-        const std::array<float, 2> uvRotation =
-                textureRotationPair(mapTransforms[map]->uvRotation);
-        glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
+    if (cachedDrawMaterial_ != &material) {
+        glUniform3fv(uniforms_.color, 1, material.color.data());
+        glUniform3fv(uniforms_.emission, 1, material.emission.data());
+        glUniform1f(uniforms_.metallic, material.metallic);
+        glUniform1f(uniforms_.roughness, material.roughness);
+        glUniform1f(uniforms_.opacity, material.opacity);
+        glUniform1f(uniforms_.normalMapScale, material.normalMapScale);
+        glUniform1f(uniforms_.emissiveStrength, material.emissiveStrength);
+        glUniform1f(uniforms_.indexOfRefraction, material.indexOfRefraction);
+        glUniform1f(uniforms_.clearcoatFactor, material.clearcoatFactor);
+        glUniform1f(uniforms_.clearcoatRoughness, material.clearcoatRoughness);
+        glUniform1f(uniforms_.clearcoatNormalScale, material.clearcoatNormalScale);
+        glUniform1f(uniforms_.specularFactor, material.specularFactor);
+        glUniform3fv(uniforms_.specularColorFactor, 1, material.specularColorFactor.data());
+        glUniform3fv(uniforms_.sheenColorFactor, 1, material.sheenColorFactor.data());
+        glUniform1f(uniforms_.sheenRoughnessFactor, material.sheenRoughness);
+        glUniform1i(uniforms_.unlit, material.unlit ? 1 : 0);
+        glUniform1i(uniforms_.grid, material.proceduralGrid ? 1 : 0);
+        glUniform1f(uniforms_.ambientOcclusion, material.ambientOcclusion);
+        glUniform3fv(uniforms_.ambientSphericalHarmonics, 9,
+                     ambientSphericalHarmonics_.data());
+        const auto textureFor = [this](const std::string& path) -> GLuint {
+            if (path.empty()) return 0U;
+            const std::string assetPath = projectAssetPath(path);
+            const auto found = textures_.find(assetPath);
+            return assetPath.empty() || found == textures_.end() ? 0U : found->second;
+        };
+        const GLuint albedoTexture = textureFor(material.albedoTexture);
+        const GLuint normalTexture = textureFor(material.normalTexture);
+        const GLuint metallicRoughnessTexture = textureFor(material.metallicRoughnessTexture);
+        const GLuint metallicTexture = textureFor(material.metallicTexture);
+        const GLuint roughnessTexture = textureFor(material.roughnessTexture);
+        const GLuint occlusionTexture = textureFor(material.occlusionTexture);
+        const GLuint opacityTexture = textureFor(material.opacityTexture);
+        const GLuint emissiveTexture = textureFor(material.emissiveTexture);
+        const GLuint clearcoatTexture = textureFor(material.clearcoatTexture);
+        const GLuint clearcoatRoughnessTexture =
+                textureFor(material.clearcoatRoughnessTexture);
+        const GLuint clearcoatNormalTexture = textureFor(material.clearcoatNormalTexture);
+        const GLuint specularTexture = textureFor(material.specularTexture);
+        const GLuint specularColorTexture = textureFor(material.specularColorTexture);
+        const GLuint sheenColorTexture = textureFor(material.sheenColorTexture);
+        const GLuint sheenRoughnessTexture = textureFor(material.sheenRoughnessTexture);
+        glUniform1i(uniforms_.hasAlbedoTexture, albedoTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasNormalTexture, normalTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasMetallicRoughnessTexture,
+                    metallicRoughnessTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasMetallicTexture, metallicTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasRoughnessTexture, roughnessTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasOcclusionTexture, occlusionTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasOpacityTexture, opacityTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasEmissiveTexture, emissiveTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasClearcoatTexture, clearcoatTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasClearcoatRoughnessTexture,
+                    clearcoatRoughnessTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasClearcoatNormalTexture,
+                    clearcoatNormalTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasSpecularTexture, specularTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasSpecularColorTexture,
+                    specularColorTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasSheenColorTexture, sheenColorTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.hasSheenRoughnessTexture,
+                    sheenRoughnessTexture != 0U ? 1 : 0);
+        glUniform1i(uniforms_.opacityMapChannel,
+                    static_cast<GLint>(material.opacityMapChannel));
+        glUniform2fv(uniforms_.opacityUvScale, 1,
+                     material.opacityMapTransform.uvScale.data());
+        glUniform2fv(uniforms_.opacityUvOffset, 1,
+                     material.opacityMapTransform.uvOffset.data());
+        const std::array<float, 2> opacityUvRotation =
+                textureRotationPair(material.opacityMapTransform.uvRotation);
+        glUniform2fv(uniforms_.opacityUvRotation, 1, opacityUvRotation.data());
+        const std::array<const TextureMapTransform*, 14> mapTransforms{{
+                &material.albedoMapTransform,
+                &material.normalMapTransform,
+                &material.metallicRoughnessMapTransform,
+                &material.metallicMapTransform,
+                &material.roughnessMapTransform,
+                &material.occlusionMapTransform,
+                &material.emissiveMapTransform,
+                &material.clearcoatMapTransform,
+                &material.clearcoatRoughnessMapTransform,
+                &material.clearcoatNormalMapTransform,
+                &material.specularMapTransform,
+                &material.specularColorMapTransform,
+                &material.sheenColorMapTransform,
+                &material.sheenRoughnessMapTransform
+        }};
+        for (std::size_t map = 0; map < mapTransforms.size(); ++map) {
+            glUniform2fv(uniforms_.textureUvScale[map], 1,
+                         mapTransforms[map]->uvScale.data());
+            glUniform2fv(uniforms_.textureUvOffset[map], 1,
+                         mapTransforms[map]->uvOffset.data());
+            const std::array<float, 2> uvRotation =
+                    textureRotationPair(mapTransforms[map]->uvRotation);
+            glUniform2fv(uniforms_.textureUvRotation[map], 1, uvRotation.data());
+        }
+        const std::array<const TextureMapTransform*, 15> uvSetTransforms{{
+                &material.albedoMapTransform, &material.normalMapTransform,
+                &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
+                &material.roughnessMapTransform, &material.occlusionMapTransform,
+                &material.opacityMapTransform, &material.emissiveMapTransform,
+                &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
+                &material.clearcoatNormalMapTransform, &material.specularMapTransform,
+                &material.specularColorMapTransform, &material.sheenColorMapTransform,
+                &material.sheenRoughnessMapTransform}};
+        std::array<GLint, 15> uvSets{};
+        for (std::size_t map = 0; map < uvSetTransforms.size(); ++map) {
+            uvSets[map] = static_cast<GLint>(uvSetTransforms[map]->uvSet);
+        }
+        glUniform1iv(uniforms_.textureUvSet, static_cast<GLsizei>(uvSets.size()), uvSets.data());
+        glUniform1i(uniforms_.albedoUvSet,
+                    static_cast<GLint>(material.albedoMapTransform.uvSet));
+        const std::array<const TextureMapValueRange*, 8> mapValueRanges{{
+                &material.albedoMapValueRange,
+                &material.normalMapValueRange,
+                &material.metallicRoughnessMapValueRange,
+                &material.metallicMapValueRange,
+                &material.roughnessMapValueRange,
+                &material.occlusionMapValueRange,
+                &material.opacityMapValueRange,
+                &material.emissiveMapValueRange
+        }};
+        for (std::size_t map = 0; map < mapValueRanges.size(); ++map) {
+            const std::array<float, 2> baseGain{{
+                    mapValueRanges[map]->base, mapValueRanges[map]->gain}};
+            glUniform2fv(uniforms_.textureMapValueRange[map], 1, baseGain.data());
+        }
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, albedoTexture);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, normalTexture);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, metallicRoughnessTexture);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, occlusionTexture);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, metallicTexture);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, roughnessTexture);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, opacityTexture);
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D, emissiveTexture);
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, clearcoatTexture);
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_2D, clearcoatRoughnessTexture);
+        glActiveTexture(GL_TEXTURE11);
+        glBindTexture(GL_TEXTURE_2D, clearcoatNormalTexture);
+        glActiveTexture(GL_TEXTURE12);
+        glBindTexture(GL_TEXTURE_2D, specularTexture);
+        glActiveTexture(GL_TEXTURE13);
+        glBindTexture(GL_TEXTURE_2D, specularColorTexture);
+        glActiveTexture(GL_TEXTURE14);
+        glBindTexture(GL_TEXTURE_2D, sheenColorTexture);
+        glActiveTexture(GL_TEXTURE15);
+        glBindTexture(GL_TEXTURE_2D, sheenRoughnessTexture);
+        const auto samplerFor = [this](const TextureMapTransform& map) {
+            return map.clampToEdge ? clampSampler_ : repeatSampler_;
+        };
+        glBindSampler(1, samplerFor(material.albedoMapTransform));
+        glBindSampler(2, samplerFor(material.normalMapTransform));
+        glBindSampler(3, samplerFor(material.metallicRoughnessMapTransform));
+        glBindSampler(4, samplerFor(material.occlusionMapTransform));
+        glBindSampler(5, samplerFor(material.metallicMapTransform));
+        glBindSampler(6, samplerFor(material.roughnessMapTransform));
+        glBindSampler(7, samplerFor(material.opacityMapTransform));
+        glBindSampler(8, samplerFor(material.emissiveMapTransform));
+        glBindSampler(9, samplerFor(material.clearcoatMapTransform));
+        glBindSampler(10, samplerFor(material.clearcoatRoughnessMapTransform));
+        glBindSampler(11, samplerFor(material.clearcoatNormalMapTransform));
+        glBindSampler(12, samplerFor(material.specularMapTransform));
+        glBindSampler(13, samplerFor(material.specularColorMapTransform));
+        glBindSampler(14, samplerFor(material.sheenColorMapTransform));
+        glBindSampler(15, samplerFor(material.sheenRoughnessMapTransform));
+        glActiveTexture(GL_TEXTURE0);
+        cachedDrawMaterial_ = &material;
     }
-    const std::array<const TextureMapTransform*, 15> uvSetTransforms{{
-            &material.albedoMapTransform, &material.normalMapTransform,
-            &material.metallicRoughnessMapTransform, &material.metallicMapTransform,
-            &material.roughnessMapTransform, &material.occlusionMapTransform,
-            &material.opacityMapTransform, &material.emissiveMapTransform,
-            &material.clearcoatMapTransform, &material.clearcoatRoughnessMapTransform,
-            &material.clearcoatNormalMapTransform, &material.specularMapTransform,
-            &material.specularColorMapTransform, &material.sheenColorMapTransform,
-            &material.sheenRoughnessMapTransform}};
-    std::array<GLint, 15> uvSets{};
-    for (std::size_t map = 0; map < uvSetTransforms.size(); ++map) {
-        uvSets[map] = static_cast<GLint>(uvSetTransforms[map]->uvSet);
-    }
-    glUniform1iv(uniforms_.textureUvSet, static_cast<GLsizei>(uvSets.size()), uvSets.data());
-    glUniform1i(uniforms_.albedoUvSet,
-                static_cast<GLint>(material.albedoMapTransform.uvSet));
-    const std::array<const TextureMapValueRange*, 8> mapValueRanges{{
-            &material.albedoMapValueRange,
-            &material.normalMapValueRange,
-            &material.metallicRoughnessMapValueRange,
-            &material.metallicMapValueRange,
-            &material.roughnessMapValueRange,
-            &material.occlusionMapValueRange,
-            &material.opacityMapValueRange,
-            &material.emissiveMapValueRange
-    }};
-    for (std::size_t map = 0; map < mapValueRanges.size(); ++map) {
-        const std::array<float, 2> baseGain{{
-                mapValueRanges[map]->base, mapValueRanges[map]->gain}};
-        glUniform2fv(uniforms_.textureMapValueRange[map], 1, baseGain.data());
-    }
-    glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
-    glUniform3fv(uniforms_.lightDirection, 1, frameDirectionalLighting_.direction.data());
-    glUniform3fv(uniforms_.directionalLightColor, 1,
-                 frameDirectionalLighting_.color.data());
-    glUniform1f(uniforms_.directionalLightIntensity,
-                frameDirectionalLighting_.intensity);
-    glUniform1f(uniforms_.shadowStrength, frameDirectionalLighting_.shadowStrength);
-    glUniform1i(uniforms_.fogEnabled, frameAtmosphere_.fogEnabled ? 1 : 0);
-    glUniform3fv(uniforms_.fogColor, 1, frameAtmosphere_.fogColor.data());
-    glUniform1f(uniforms_.fogStart, frameAtmosphere_.fogStart);
-    glUniform1f(uniforms_.fogEnd, frameAtmosphere_.fogEnd);
-    glUniform1f(uniforms_.skyAmbientStrength,
-                frameSky_.enabled ? frameSky_.ambientStrength : 0.0f);
-    glUniform3fv(uniforms_.skyZenithColor, 1, frameSky_.zenithColor.data());
-    glUniform3fv(uniforms_.skyHorizonColor, 1, frameSky_.horizonColor.data());
-    glUniform3fv(uniforms_.skyGroundColor, 1, frameSky_.groundColor.data());
-    glUniform1i(uniforms_.shadowMap, 0);
-    glUniform1i(uniforms_.shadowsEnabled,
-                shadowsAvailable_ && shadowCascadesValid_ ? 1 : 0);
-    glUniform1i(uniforms_.grid, material.proceduralGrid ? 1 : 0);
-    glUniform1i(uniforms_.pointLightCount, static_cast<GLint>(pointLights_.size()));
-    glUniform4fv(uniforms_.pointLightPositionRange, kMaxPointLights,
-                 pointLightPositionRanges_.data());
-    glUniform4fv(uniforms_.pointLightColorIntensity, kMaxPointLights,
-                 pointLightColorIntensities_.data());
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, albedoTexture);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, normalTexture);
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, metallicRoughnessTexture);
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, occlusionTexture);
-    glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_2D, metallicTexture);
-    glActiveTexture(GL_TEXTURE6);
-    glBindTexture(GL_TEXTURE_2D, roughnessTexture);
-    glActiveTexture(GL_TEXTURE7);
-    glBindTexture(GL_TEXTURE_2D, opacityTexture);
-    glActiveTexture(GL_TEXTURE8);
-    glBindTexture(GL_TEXTURE_2D, emissiveTexture);
-    glActiveTexture(GL_TEXTURE9);
-    glBindTexture(GL_TEXTURE_2D, clearcoatTexture);
-    glActiveTexture(GL_TEXTURE10);
-    glBindTexture(GL_TEXTURE_2D, clearcoatRoughnessTexture);
-    glActiveTexture(GL_TEXTURE11);
-    glBindTexture(GL_TEXTURE_2D, clearcoatNormalTexture);
-    glActiveTexture(GL_TEXTURE12);
-    glBindTexture(GL_TEXTURE_2D, specularTexture);
-    glActiveTexture(GL_TEXTURE13);
-    glBindTexture(GL_TEXTURE_2D, specularColorTexture);
-    glActiveTexture(GL_TEXTURE14);
-    glBindTexture(GL_TEXTURE_2D, sheenColorTexture);
-    glActiveTexture(GL_TEXTURE15);
-    glBindTexture(GL_TEXTURE_2D, sheenRoughnessTexture);
-    const auto samplerFor = [this](const TextureMapTransform& map) {
-        return map.clampToEdge ? clampSampler_ : repeatSampler_;
-    };
-    glBindSampler(1, samplerFor(material.albedoMapTransform));
-    glBindSampler(2, samplerFor(material.normalMapTransform));
-    glBindSampler(3, samplerFor(material.metallicRoughnessMapTransform));
-    glBindSampler(4, samplerFor(material.occlusionMapTransform));
-    glBindSampler(5, samplerFor(material.metallicMapTransform));
-    glBindSampler(6, samplerFor(material.roughnessMapTransform));
-    glBindSampler(7, samplerFor(material.opacityMapTransform));
-    glBindSampler(8, samplerFor(material.emissiveMapTransform));
-    glBindSampler(9, samplerFor(material.clearcoatMapTransform));
-    glBindSampler(10, samplerFor(material.clearcoatRoughnessMapTransform));
-    glBindSampler(11, samplerFor(material.clearcoatNormalMapTransform));
-    glBindSampler(12, samplerFor(material.specularMapTransform));
-    glBindSampler(13, samplerFor(material.specularColorMapTransform));
-    glBindSampler(14, samplerFor(material.sheenColorMapTransform));
-    glBindSampler(15, samplerFor(material.sheenRoughnessMapTransform));
-    glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(mesh.vao);
     if (useInstances) {
@@ -4555,6 +4526,40 @@ void Renderer::render(float deltaSeconds) {
     glDisable(GL_BLEND);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     drawSky(view, verticalFov, aspectRatio);
+    glUseProgram(program_);
+    glUniformMatrix4fv(uniforms_.viewProjection, 1, GL_FALSE, viewProjection_.data());
+    glUniformMatrix4fv(uniforms_.view, 1, GL_FALSE, view_.data());
+    for (std::size_t cascade = 0; cascade < uniforms_.lightViewProjection.size(); ++cascade) {
+        glUniformMatrix4fv(uniforms_.lightViewProjection[cascade], 1, GL_FALSE,
+                           shadowViewProjections_[cascade].data());
+    }
+    glUniform3fv(uniforms_.cascadeFarSplits, 1, shadowCascadeFarSplits_.data());
+    glUniform3fv(uniforms_.cameraPosition, 1, cameraPosition_.data());
+    glUniform3fv(uniforms_.lightDirection, 1, frameDirectionalLighting_.direction.data());
+    glUniform3fv(uniforms_.directionalLightColor, 1,
+                 frameDirectionalLighting_.color.data());
+    glUniform1f(uniforms_.directionalLightIntensity,
+                frameDirectionalLighting_.intensity);
+    glUniform1f(uniforms_.shadowStrength, frameDirectionalLighting_.shadowStrength);
+    glUniform1i(uniforms_.fogEnabled, frameAtmosphere_.fogEnabled ? 1 : 0);
+    glUniform3fv(uniforms_.fogColor, 1, frameAtmosphere_.fogColor.data());
+    glUniform1f(uniforms_.fogStart, frameAtmosphere_.fogStart);
+    glUniform1f(uniforms_.fogEnd, frameAtmosphere_.fogEnd);
+    glUniform1f(uniforms_.skyAmbientStrength,
+                frameSky_.enabled ? frameSky_.ambientStrength : 0.0f);
+    glUniform3fv(uniforms_.skyZenithColor, 1, frameSky_.zenithColor.data());
+    glUniform3fv(uniforms_.skyHorizonColor, 1, frameSky_.horizonColor.data());
+    glUniform3fv(uniforms_.skyGroundColor, 1, frameSky_.groundColor.data());
+    glUniform1i(uniforms_.shadowsEnabled,
+                shadowsAvailable_ && shadowCascadesValid_ ? 1 : 0);
+    glUniform1i(uniforms_.pointLightCount, static_cast<GLint>(pointLights_.size()));
+    glUniform4fv(uniforms_.pointLightPositionRange, kMaxPointLights,
+                 pointLightPositionRanges_.data());
+    glUniform4fv(uniforms_.pointLightColorIntensity, kMaxPointLights,
+                 pointLightColorIntensities_.data());
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    cachedDrawMaterial_ = nullptr;
     opaqueDrawItems_.clear();
     transparentDrawItems_.clear();
     const auto queueDraw = [this, &cameraFrustum](const Mesh& mesh, const Mat4& model,
