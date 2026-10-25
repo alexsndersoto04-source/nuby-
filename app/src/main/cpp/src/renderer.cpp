@@ -4283,7 +4283,10 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
         cachedDrawMaterial_ = &material;
     }
 
-    glBindVertexArray(mesh.vao);
+    if (activeMeshVao_ != mesh.vao) {
+        glBindVertexArray(mesh.vao);
+        activeMeshVao_ = mesh.vao;
+    }
     if (useInstances) {
         bindInstanceAttributes(instanceBuffer_, *instanceModels);
         if (mesh.ebo != 0) {
@@ -4299,7 +4302,6 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Material& materia
     } else {
         glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
     }
-    glBindVertexArray(0);
 }
 
 void Renderer::render(float deltaSeconds) {
@@ -4533,6 +4535,9 @@ void Renderer::render(float deltaSeconds) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     drawSky(view, verticalFov, aspectRatio);
     glUseProgram(program_);
+    // The shadow and sky passes bind their own VAOs; start the main pass with
+    // an invalidated cache so its first mesh is always bound explicitly.
+    activeMeshVao_ = 0;
     glUniformMatrix4fv(uniforms_.viewProjection, 1, GL_FALSE, viewProjection_.data());
     glUniformMatrix4fv(uniforms_.view, 1, GL_FALSE, view_.data());
     for (std::size_t cascade = 0; cascade < uniforms_.lightViewProjection.size(); ++cascade) {

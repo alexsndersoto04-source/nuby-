@@ -452,6 +452,7 @@ private:
     static constexpr int kMaxPointLights = 4;
     Uniforms uniforms_{};
     const Material* cachedDrawMaterial_ = nullptr;
+    GLuint activeMeshVao_ = 0;
     std::vector<PointLightData> pointLights_;
     std::array<float, 27> ambientSphericalHarmonics_{};
     DirectionalLighting frameDirectionalLighting_{};
