@@ -384,10 +384,17 @@
           <h3 class="setup-title">Resumen</h3>
           <dl class="summary">
             <div><dt>Duración</dt><dd id="export-summary-duration">—</dd></div>
+            <div><dt>Rango</dt><dd id="export-summary-range">—</dd></div>
             <div><dt>Pistas con audio</dt><dd id="export-summary-tracks">—</dd></div>
             <div><dt>Formato</dt><dd id="export-summary-format">—</dd></div>
             <div><dt>Sonoridad estimada</dt><dd id="export-summary-lufs">—</dd></div>
           </dl>
+          <p id="export-summary-warning" class="hint hint--warn" hidden></p>
+          <div class="dialog__toolbar" hidden id="export-silent-actions">
+            <button type="button" id="btn-drop-silent" class="btn btn--ghost btn--sm">
+              Quitar los clips sin sonido
+            </button>
+          </div>
           <div class="progress" id="export-progress" hidden><div class="progress__bar" id="export-progress-bar"></div></div>
           <p class="hint" id="export-status">La mezcla se calcula en tu equipo; no se sube nada a internet.</p>
           <div id="export-result" class="result" hidden></div>
@@ -454,6 +461,8 @@
       <div class="dialog__toolbar">
         <button type="button" id="btn-run-diagnostics" class="btn btn--ghost btn--sm">Repetir comprobaciones</button>
         <button type="button" id="btn-test-encoder" class="btn btn--ghost btn--sm">Probar codificador MP3</button>
+        <button type="button" id="btn-check-layout" class="btn btn--ghost btn--sm">Comprobar la interfaz</button>
+        <button type="button" id="btn-copy-report" class="btn btn--ghost btn--sm">Copiar informe</button>
       </div>
       <pre id="diag-log" class="diag-log" aria-live="polite"></pre>
     </div>

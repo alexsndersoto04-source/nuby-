@@ -88,9 +88,11 @@ export class InputRecorder {
       chunks: [],
       frames: 0,
       startFrame: -1,
-      skip: 0,
-      blockFrame: 0,
-      ready: false,
+      // Anclas: (fotograma estimado al abrir el bloque − fotogramas ya
+      // capturados). El bloque se procesa en el hilo principal un poco después
+      // de sonar, así que cada ancla adelanta el inicio real; la más pequeña es
+      // la más fiable. Sin esto la toma entraba con retardo (el "atraso").
+      anchors: [],
     };
     node.onaudioprocess = (event) => {
       if (!this.recording) return;
@@ -99,29 +101,19 @@ export class InputRecorder {
       const frames = input.length;
       const rate = this.ctx.sampleRate;
 
-      if (!path.ready) {
-        // Los bloques del ScriptProcessor llegan seguidos: basta saber dónde
-        // empieza el primero y descartar los fotogramas de la cuenta de entrada
-        // (o del pre-roll) hasta el punto exacto de inicio.
+      if (path.frames === 0 || path.chunks.length % 24 === 0) {
         const nowFrame = Math.round(this.ctx.currentTime * rate);
-        path.blockFrame = Math.max(0, nowFrame - frames);
-        path.skip = Math.max(0, this.startFrameTarget - path.blockFrame);
-        path.ready = true;
+        path.anchors.push({ index: path.frames, observed: nowFrame - frames });
       }
 
-      const skip = Math.min(path.skip, frames);
-      path.skip -= skip;
-      if (path.startFrame < 0) path.startFrame = path.blockFrame + skip;
-      path.blockFrame += frames;
-      const count = frames - skip;
-      if (count <= 0) return;
-
+      // Se captura todo el bloque: el recorte exacto (pre-roll incluido) se
+      // hace al parar, con el reloj de audio como referencia.
       const block = [];
       for (let c = 0; c < this.channels; c++) {
         const source = input.getChannelData(Math.min(c, input.numberOfChannels - 1));
-        block.push(source.slice(skip, skip + count));
+        block.push(source.slice(0));
       }
-      this.collect(path, block, count);
+      this.collect(path, block, frames);
     };
     return path;
   }
@@ -179,21 +171,24 @@ export class InputRecorder {
    * @param {{startFrame?: number, channels?: 1|2}} options
    */
   start(options = {}) {
+    const rate = this.ctx.sampleRate;
     this.channels = options.channels === 2 ? 2 : 1;
     this.startFrameTarget =
-      options.startFrame ?? Math.round(this.ctx.currentTime * this.ctx.sampleRate);
+      options.startFrame ?? Math.round(this.ctx.currentTime * rate);
+    // Ventana real de la toma: desde el fotograma pedido hasta el de parada.
+    this.captureStartFrame = this.startFrameTarget;
+    this.captureStopFrame = -1;
     this.recording = true;
     this.lastSource = null;
     this.lastPeak = 0;
+    this.lastReport = null;
 
     for (const path of [this.scriptPath, this.workletPath]) {
       if (!path) continue;
       path.chunks = [];
       path.frames = 0;
       path.startFrame = -1;
-      path.skip = 0;
-      path.blockFrame = 0;
-      path.ready = false;
+      path.anchors = [];
       path.done = null;
     }
 
@@ -215,6 +210,8 @@ export class InputRecorder {
   async stop() {
     if (!this.recording) return null;
     this.recording = false;
+    // Fotograma exacto de parada: la toma nunca puede ser más larga que esto.
+    this.captureStopFrame = Math.round(this.ctx.currentTime * this.ctx.sampleRate);
 
     const workletResult = await this.stopWorklet();
     const scriptResult = this.finishPath(this.scriptPath);
@@ -270,6 +267,7 @@ export class InputRecorder {
     }
     this.lastSource = best.source;
     this.lastPeak = peakOf(best.channels);
+    this.lastReport = best.report ?? null;
     return best;
   }
 
@@ -293,35 +291,109 @@ export class InputRecorder {
     this.pendingStop = null;
   }
 
-  /** Une los bloques de un camino en canales continuos. */
+  /**
+   * Fotograma en el que empieza de verdad lo capturado por este camino.
+   * El worklet lo informa exacto; el ScriptProcessor se estima con las anclas.
+   */
+  resolveStartFrame(path) {
+    if (!path) return -1;
+    if (path.kind !== 'script' || !path.anchors?.length) return path.startFrame;
+    let best = Infinity;
+    for (const anchor of path.anchors) {
+      const start = anchor.observed - anchor.index;
+      if (Number.isFinite(start) && start < best) best = start;
+    }
+    return Number.isFinite(best) ? Math.max(0, Math.round(best)) : path.startFrame;
+  }
+
+  /**
+   * Une los bloques de un camino en canales continuos y recorta la toma a la
+   * ventana real de grabación (desde el fotograma pedido hasta la parada).
+   * Así la toma dura exactamente lo que se grabó y empieza en su sitio.
+   */
   finishPath(path) {
-    if (!path || !path.frames) return null;
-    const frames = path.frames;
+    if (!path || !path.frames) {
+      if (path) {
+        path.chunks = [];
+        path.frames = 0;
+      }
+      return null;
+    }
+    const capturedStart = this.resolveStartFrame(path);
+    const captured = path.frames;
+    if (path.startFrame < 0 && capturedStart >= 0) path.startFrame = capturedStart;
+
+    const windowStart = Number.isFinite(this.captureStartFrame) ? this.captureStartFrame : capturedStart;
+    const windowEnd = this.captureStopFrame > 0 ? this.captureStopFrame : -1;
+
+    let head = 0;
+    if (capturedStart >= 0 && windowStart >= capturedStart) head = windowStart - capturedStart;
+    head = Math.max(0, Math.min(captured, head));
+
+    let end = captured;
+    if (windowEnd > 0 && capturedStart >= 0) {
+      const endInPath = windowEnd - capturedStart;
+      if (endInPath > head) end = Math.min(captured, endInPath);
+    }
+    // Red de seguridad: ninguna toma puede ser mucho más larga que lo grabado.
+    const windowFrames = windowEnd > windowStart ? windowEnd - windowStart : captured;
+    if (windowFrames > 0 && captured - head > windowFrames * 2 + this.ctx.sampleRate) {
+      end = Math.min(end, head + windowFrames);
+    }
+
+    const length = Math.max(0, Math.floor(end - head));
+    const frames = length > 0 ? length : captured;
+    const start = length > 0 ? Math.round(capturedStart + head) : capturedStart;
+
     const channels = [];
     for (let c = 0; c < this.channels; c++) channels.push(new Float32Array(frames));
 
     let offset = 0;
     for (const block of path.chunks) {
-      const length = block[0]?.length ?? 0;
-      if (!length) continue;
-      for (let c = 0; c < this.channels; c++) {
-        const source = block[Math.min(c, block.length - 1)];
-        if (source) channels[c].set(source.subarray(0, Math.min(length, frames - offset)), offset);
+      const blockLength = block[0]?.length ?? 0;
+      if (!blockLength) continue;
+      const blockStart = offset;
+      const blockEnd = offset + blockLength;
+      // Qué parte de este bloque cae dentro de [head, head+frames).
+      const from = Math.max(blockStart, head);
+      const to = Math.min(blockEnd, head + frames);
+      if (to > from) {
+        const destOffset = from - head;
+        const sourceOffset = from - blockStart;
+        const count = to - from;
+        for (let c = 0; c < this.channels; c++) {
+          const source = block[Math.min(c, block.length - 1)];
+          if (source) channels[c].set(source.subarray(sourceOffset, sourceOffset + count), destOffset);
+        }
       }
-      offset += length;
-      if (offset >= frames) break;
+      offset = blockEnd;
+      if (offset >= head + frames) break;
     }
+
+    const report = {
+      source: path.kind,
+      capturedFrames: captured,
+      frames,
+      headTrim: head,
+      tailTrim: Math.max(0, captured - head - frames),
+      startFrame: start,
+      windowFrames: windowEnd > windowStart ? windowEnd - windowStart : captured,
+      sampleRate: this.ctx.sampleRate,
+    };
 
     path.chunks = [];
     path.frames = 0;
+    path.anchors = [];
 
     return {
       channels,
       frames,
-      startFrame: path.startFrame,
+      startFrame: start,
+      capturedFrames: captured,
       sampleRate: this.ctx.sampleRate,
       source: path.kind,
       peak: peakOf(channels),
+      report,
     };
   }
 }

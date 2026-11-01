@@ -68,6 +68,23 @@ Abre la dirección en **Chrome, Edge o Firefox**. El micrófono exige un context
 seguro: `localhost` o HTTPS. No hay backend, todo ocurre en el propio equipo, y
 al ser una PWA se puede instalar y usar sin conexión.
 
+### Auditoría de 1.4.0: entrada correcta, tomas con su duración real
+
+- **La app elige la tarjeta externa.** Antes, si no se elegía dispositivo se abría
+  el *micrófono del teléfono* (el predeterminado de Android): de ahí el eco y el
+  ruido aunque la V8 no tuviera eco. Ahora se ordenan las entradas (las externas
+  primero), se cambia sola a la V8 cuando aparece tras dar el permiso, y si solo
+  hay micrófono del teléfono se avisa en pantalla y se activa la cancelación de
+  eco (`Ajustes › Entrada y captura`).
+- **La toma dura lo grabado.** El grabador recorta con el reloj de audio: nada de
+  tomas de 1:46 cuando se grabaron 3 segundos, y sin el atraso inicial que
+  metía el bloque del `ScriptProcessorNode`.
+- **El proyecto se ve tal cual es.** Diagnóstico y Exportar muestran el rango real
+  (`0:00 → 1:46`) y detectan los clips sin sonido, con un botón para quitarlos.
+- **Comprobar la interfaz**: botón en Diagnóstico que recorre la pantalla y lista
+  lo que se sale del ancho del teléfono; y **Copiar informe** para enviar el
+  estado completo.
+
 ### Nivel, eco y la pista del teléfono en la V8
 
 - **La V8 entrega la señal baja.** Por eso «Ganancia» de la tira de entrada llega a

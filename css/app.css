@@ -836,6 +836,27 @@ body[data-density='compacta'] .track-list { gap: 4px; }
   /* Dedos, no ratón: objetivos de toque más cómodos. */
   .tbtn, .chip, .btn, .tool { min-height: 34px; }
   .track-list { padding-bottom: 8px; }
+
+  /* Nada puede salirse de una pantalla de 360 px (Redmi 9C). */
+  .topbar { gap: 8px; row-gap: 6px; }
+  .topbar__brand { min-width: 0; flex: 0 1 auto; }
+  .project-name { width: 100%; min-width: 0; max-width: 46vw; }
+  .transport { flex-wrap: wrap; justify-content: flex-end; }
+  .dialog__toolbar, .diag__row, .summary div, .fx-section__head, .toolbar, .fx-row { flex-wrap: wrap; }
+  .field, .field__input, .setup-col, .settings-row, .settings-row__control, .track-strip, .clip-card { min-width: 0; }
+  canvas, img, video, table, pre, .meter { max-width: 100%; }
+  .dialog, .dialog__body { overflow-x: hidden; }
+  .diag-log { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .btn, .chip, .tbtn { max-width: 100%; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 430px) {
+  .topbar { padding: 6px; gap: 6px; }
+  .btn { padding: 5px 8px; }
+  .transport__time { min-width: 74px; font-size: 13px; }
+  .input-strip { padding: 6px; }
+  .dialog { max-width: calc(100vw - 10px); }
+  .settings-row__label { font-size: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

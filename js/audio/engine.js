@@ -15,6 +15,7 @@
 import { buildTrackChain, buildMasterChain } from './track-chain.js';
 import { createImpulseResponse, REVERB_PRESETS } from './impulse.js';
 import { InputRecorder } from './recorder.js';
+import { pickInputDevice, rankInputDevices, isBuiltInLabel } from './input-devices.js';
 import { Metronome } from './metronome.js';
 import { getSetting } from '../state/settings.js';
 
@@ -87,7 +88,7 @@ export class StudioEngine {
     this.buildBuses();
 
     // Codificador grabador (se mantiene vivo con una salida silenciosa).
-    this.recorder = new InputRecorder(this.ctx, { worklets: this.workletsReady });
+    this.recorder = new InputRecorder(this.ctx, { worklets: this.workletsReady && this.processingWorklets });
     this.recorderSilence = this.ctx.createGain();
     this.recorderSilence.gain.value = 0;
     // Las dos salidas de captura se mantienen conectadas (aunque sea en silencio):
@@ -334,9 +335,22 @@ export class StudioEngine {
   async listInputDevices() {
     if (!navigator.mediaDevices?.enumerateDevices) return [];
     const devices = await navigator.mediaDevices.enumerateDevices();
-    return devices
-      .filter((d) => d.kind === 'audioinput')
-      .map((d) => ({ deviceId: d.deviceId, label: d.label || 'Entrada sin nombre' }));
+    const inputs = devices.filter((d) => d.kind === 'audioinput');
+    // Ordenadas de mejor a peor: primero las tarjetas externas (V8), al final
+    // el micrófono del teléfono, que es el que provoca eco al grabar.
+    return rankInputDevices(inputs, this.input?.deviceId ?? this.lastDeviceId ?? '').map((d) => ({
+      deviceId: d.deviceId,
+      label: d.label,
+      builtIn: d.builtIn,
+      external: d.external,
+      score: d.score,
+    }));
+  }
+
+  /** La entrada recomendada ahora mismo (sin abrirla). */
+  async recommendInput() {
+    const devices = await navigator.mediaDevices?.enumerateDevices?.();
+    return pickInputDevice(devices ?? [], this.input?.deviceId ?? this.lastDeviceId ?? '');
   }
 
   /**
@@ -354,16 +368,38 @@ export class StudioEngine {
     }
     this.closeInput();
 
+    // 1) ¿Qué dispositivo nos piden? Si no indican ninguno se usa la entrada
+    //    recomendada (tarjeta externa tipo V8); nunca el micrófono del teléfono
+    //    por descarte, porque es el que mete eco y ruido en la toma.
+    let devices = [];
+    try {
+      devices = await navigator.mediaDevices.enumerateDevices();
+    } catch {
+      devices = [];
+    }
+    const hasLabels = devices.some((d) => d.kind === 'audioinput' && d.label);
+    let targetId = deviceId || '';
+    if (!targetId && hasLabels) {
+      const preferred = pickInputDevice(devices, this.lastDeviceId ?? '');
+      if (preferred?.deviceId && preferred.deviceId !== 'default') targetId = preferred.deviceId;
+    }
+    const targetInfo = devices.find((d) => d.deviceId === targetId);
+    const builtIn = isBuiltInLabel(targetInfo?.label ?? '');
+    const phoneMicCleanup = builtIn || (!hasLabels && !targetId);
+    const echoSetting = getSetting('phoneMicProcessing') !== false;
+
     const base = {
-      echoCancellation: false,
-      noiseSuppression: false,
+      // En una tarjeta externa no queremos procesado del navegador: resta
+      // calidad. En el micrófono del teléfono sí, o el altavoz entra en la toma.
+      echoCancellation: Boolean(echoSetting && phoneMicCleanup),
+      noiseSuppression: Boolean(echoSetting && phoneMicCleanup),
       autoGainControl: false,
       channelCount: { ideal: 2 },
       sampleRate: { ideal: this.ctx?.sampleRate ?? preferredSampleRate() },
       latency: { ideal: 0 },
     };
     const preferred = {
-      audio: deviceId ? { ...base, deviceId: { exact: deviceId } } : base,
+      audio: targetId ? { ...base, deviceId: { exact: targetId } } : base,
       video: false,
     };
 
@@ -377,9 +413,50 @@ export class StudioEngine {
         );
       }
       if (error?.name === 'OverconstrainedError' || error?.name === 'NotFoundError') {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        // El dispositivo pedido ya no existe: se abre la recomendada y, si
+        // tampoco, la del sistema. Se avisa en la interfaz de cuál se abrió.
+        const fallbackId = pickInputDevice(devices, '')?.deviceId;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: fallbackId ? { ...base, deviceId: { exact: fallbackId } } : base,
+            video: false,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        }
       } else {
         throw error;
+      }
+    }
+
+    // Con el permiso ya concedido aparecen las etiquetas: si existe una tarjeta
+    // externa (V8) y se abrió el micrófono del teléfono, se cambia sola. Es la
+    // diferencia entre grabar la V8 y grabar el altavoz de vuelta (eco).
+    if (!deviceId) {
+      try {
+        const after = await navigator.mediaDevices.enumerateDevices();
+        const best = pickInputDevice(after, this.lastDeviceId ?? '');
+        const currentId = stream.getAudioTracks?.()[0]?.getSettings?.().deviceId ?? '';
+        if (best?.deviceId && best.external && best.deviceId !== currentId) {
+          const better = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              ...base,
+              echoCancellation: false,
+              noiseSuppression: false,
+              deviceId: { exact: best.deviceId },
+            },
+            video: false,
+          });
+          try {
+            stream.getTracks().forEach((track) => track.stop());
+          } catch {
+            /* nada */
+          }
+          stream = better;
+          targetId = best.deviceId;
+        }
+      } catch {
+        /* se queda la entrada que ya estaba abierta */
       }
     }
 
@@ -407,9 +484,24 @@ export class StudioEngine {
     bus.connect(gain);
     gain.connect(analyser);
 
-    const settings = stream.getAudioTracks()[0]?.getSettings?.() ?? {};
+    const track = stream.getAudioTracks()[0];
+    const settings = track?.getSettings?.() ?? {};
     const previousMode = this.input?.channelMode ?? 'mono-left';
+    const deviceLabel = track?.label ?? '';
+    const usingBuiltIn = isBuiltInLabel(deviceLabel) || (!deviceLabel && !targetId);
 
+    // Si acabó abriéndose el micrófono del teléfono, se activa la limpieza del
+    // navegador (eco + ruido). Mejor una voz algo procesada que una toma con el
+    // altavoz de vuelta, que es lo que se oye como "eco".
+    if (usingBuiltIn && echoSetting) {
+      try {
+        await track?.applyConstraints?.({ echoCancellation: true, noiseSuppression: true });
+      } catch {
+        /* el dispositivo no admite cambios en caliente */
+      }
+    }
+
+    this.lastDeviceId = settings.deviceId ?? targetId ?? '';
     this.input = {
       stream,
       source,
@@ -419,13 +511,16 @@ export class StudioEngine {
       gain,
       bus,
       analyser,
-      deviceId: deviceId ?? settings.deviceId ?? null,
+      deviceId: this.lastDeviceId || null,
       channelMode: previousMode,
       latencyEstimate: Number(settings.latency) || 0,
       monitoring: false,
       sampleRate: settings.sampleRate ?? null,
       channelCount: settings.channelCount ?? 1,
-      deviceLabel: stream.getAudioTracks()[0]?.label ?? '',
+      deviceLabel,
+      isBuiltIn: usingBuiltIn,
+      echoCancellation: Boolean(settings.echoCancellation ?? usingBuiltIn),
+      noiseSuppression: Boolean(settings.noiseSuppression ?? usingBuiltIn),
     };
 
     this.applyChannelMode(this.input.channelMode);

@@ -740,6 +740,15 @@ export class StudioApp {
       this.dialogs.openInputDialog();
       return;
     }
+    if (this.engine.input.isBuiltIn && !this.builtInWarningShown) {
+      this.builtInWarningShown = true;
+      toast(
+        'Estás grabando con el micrófono del teléfono: de ahí vienen el eco y el ruido. ' +
+          'Conecta la V8 por USB y elígela en Pistas › Micrófono.',
+        'error',
+        10000
+      );
+    }
     let track = this.project.tracks.find((t) => t.armed) ?? this.selectedTrack ?? this.project.tracks[0];
     if (!track) {
       this.addTrackInternal();
@@ -909,6 +918,22 @@ export class StudioApp {
     toast('Clip cortado', 'ok', 1600);
   }
 
+  /** Elimina varios clips por id (p. ej. las tomas que quedaron en silencio). */
+  removeClips(ids = [], label = 'Eliminar clips') {
+    const remove = new Set(ids);
+    if (!remove.size) return 0;
+    const before = this.project.clips.length;
+    this.pushUndo(label);
+    this.project.clips = this.project.clips.filter((clip) => !remove.has(clip.id));
+    if (this.selectedClipId && remove.has(this.selectedClipId)) this.selectedClipId = null;
+    const removed = before - this.project.clips.length;
+    if (removed) {
+      this.renderAll();
+      this.markDirty();
+    }
+    return removed;
+  }
+
   deleteSelectedClip() {
     if (!this.selectedClipId) return;
     this.pushUndo('Eliminar clip');
@@ -1048,8 +1073,13 @@ export class StudioApp {
     const cta = document.getElementById('input-cta');
     if (cta) cta.hidden = visible;
     if (visible) {
-      this.els.inputStripLabel.textContent = input.deviceLabel || 'Entrada activa';
-      this.els.statusDevice.textContent = input.deviceLabel || 'Entrada activa';
+      const name = input.deviceLabel || 'Entrada activa';
+      const phone = input.isBuiltIn ? ' · del teléfono' : '';
+      this.els.inputStripLabel.textContent = `${name}${phone}`;
+      this.els.statusDevice.textContent = `${name}${phone}`;
+      this.els.inputStripLabel.title = input.isBuiltIn
+        ? 'Estás grabando con el micrófono del teléfono: produce eco y ruido. Conecta la V8 por USB.'
+        : name;
       this.els.statusDevice.classList.remove('status-item--muted');
       this.els.statusDevice.classList.add('is-ok');
       const buttonLabel = document.getElementById('input-btn-label');

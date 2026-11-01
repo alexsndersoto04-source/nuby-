@@ -146,10 +146,14 @@ export class Dialogs {
       }
       fillSelect(
         select,
-        devices.map((d, index) => ({
-          value: d.deviceId,
-          label: d.label && d.label !== 'Entrada sin nombre' ? d.label : `Entrada ${index + 1}`,
-        })),
+        devices.map((d, index) => {
+          const name = d.label && d.label !== 'Entrada sin nombre' ? d.label : `Entrada ${index + 1}`;
+          const tags = [];
+          if (d.external) tags.push('externa');
+          if (d.builtIn) tags.push('del teléfono');
+          const suffix = tags.length ? ` (${tags.join(' · ')})` : '';
+          return { value: d.deviceId, label: `${index === 0 && d.external ? '★ ' : ''}${name}${suffix}` };
+        }),
         current || devices[0].deviceId
       );
     } catch (error) {
@@ -167,7 +171,16 @@ export class Dialogs {
     this.app.updateInputUi();
     await this.refreshDevices();
     const label = info.deviceLabel || 'entrada';
-    toast(`Entrada abierta: ${label}`, 'ok');
+    if (info.isBuiltIn) {
+      toast(
+        `Se abrió el micrófono del teléfono (${label}). Es la causa del eco y del ruido: ` +
+          'conecta la V8 por USB y elígela en esta lista.',
+        'error',
+        11000
+      );
+    } else {
+      toast(`Entrada abierta: ${label}`, 'ok');
+    }
     if (requestPermission) closeDialog('dialog-input');
     return info;
   }
@@ -281,6 +294,25 @@ export class Dialogs {
     document.getElementById('export-summary-duration').textContent = formatTime(duration, false);
     document.getElementById('export-summary-tracks').textContent = String(tracksWithAudio);
 
+    // Rango real que se va a exportar y aviso si hay clips mudos que solo
+    // alargan el archivo (el clásico "exporta 1:46 y no se oye nada").
+    const end = computeProjectEnd(project);
+    const rangeEl = document.getElementById('export-summary-range');
+    if (rangeEl) rangeEl.textContent = `${formatTime(0)} → ${formatTime(end)}`;
+    const silentClips = project.clips.filter((clip) => {
+      const peaks = this.app.peaks?.get?.(clip.bufferId);
+      return peaks && (peaks.peak ?? 0) < 1e-5;
+    });
+    const warning = document.getElementById('export-summary-warning');
+    const actions = document.getElementById('export-silent-actions');
+    if (warning) {
+      warning.hidden = !silentClips.length;
+      if (silentClips.length) {
+        warning.textContent = `${silentClips.length} clip(s) de este proyecto no tienen sonido: alargan el archivo con minutos de silencio.`;
+      }
+    }
+    if (actions) actions.hidden = !silentClips.length;
+
     const format = document.getElementById('export-format').value;
     const summary = document.getElementById('export-summary-format');
     if (format === 'mp3') {
@@ -292,6 +324,21 @@ export class Dialogs {
     }
     document.getElementById('export-summary-lufs').textContent = 'se calcula al exportar';
     document.getElementById('export-range').disabled = !project.session.loop?.on;
+  }
+
+  /** Quita del proyecto los clips que no tienen audio (tomas mudas antiguas). */
+  dropSilentClips() {
+    const silent = this.project.clips.filter((clip) => {
+      const peaks = this.app.peaks?.get?.(clip.bufferId);
+      return peaks && (peaks.peak ?? 0) < 1e-5;
+    });
+    if (!silent.length) {
+      toast('No hay clips sin sonido', 'ok');
+      return;
+    }
+    const removed = this.app.removeClips(silent.map((clip) => clip.id), 'Quitar clips sin sonido');
+    toast(`${removed} clip(s) sin sonido eliminados`, 'ok');
+    this.updateExportSummary();
   }
 
   async runExport() {
@@ -550,6 +597,127 @@ export class Dialogs {
   bindDiagnostics() {
     document.getElementById('btn-run-diagnostics').addEventListener('click', () => this.runDiagnostics());
     document.getElementById('btn-test-encoder').addEventListener('click', () => this.testEncoder());
+    document.getElementById('btn-drop-silent')?.addEventListener('click', () => this.dropSilentClips());
+    document.getElementById('btn-copy-report')?.addEventListener('click', () => this.copyReport());
+    document.getElementById('btn-check-layout')?.addEventListener('click', () => {
+      const { problems, viewport } = this.checkLayout();
+      const log = document.getElementById('diag-log');
+      if (log) {
+        log.textContent = problems.length
+          ? `Desbordes a ${viewport} px de ancho:\n${problems
+              .map((p) => `· ${p.selector} → se sale ${p.over} px por la ${p.side} (ancho ${p.width} px)`)
+              .join('\n')}`
+          : `Sin desbordes a ${viewport} px de ancho: todo cabe en pantalla.`;
+      }
+      toast(
+        problems.length ? `${problems.length} elemento(s) se salen de la pantalla` : 'Nada se sale de la pantalla',
+        problems.length ? 'warn' : 'ok',
+        6000
+      );
+    });
+  }
+
+  /**
+   * Busca elementos que se salen de la pantalla (el usuario lo nota como
+   * "la interfaz se desborda"). Devuelve una lista corta y legible.
+   */
+  checkLayout(limit = 12) {
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const problems = [];
+    const seen = new Set();
+    for (const el of document.querySelectorAll('.app *, dialog[open] *')) {
+      if (!(el instanceof HTMLElement)) continue;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) continue;
+      const overRight = Math.round(rect.right - vw);
+      const overLeft = Math.round(-rect.left);
+      if (overRight <= 1 && overLeft <= 1) continue;
+      const id = `${el.tagName}#${el.id}.${el.className}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      problems.push({
+        selector: `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${
+          typeof el.className === 'string' && el.className ? `.${el.className.trim().split(/\s+/).join('.')}` : ''
+        }`,
+        over: Math.max(overRight, overLeft),
+        side: overRight >= overLeft ? 'derecha' : 'izquierda',
+        width: Math.round(rect.width),
+      });
+      if (problems.length >= limit) break;
+    }
+    return { problems, viewport: vw };
+  }
+
+  /** Informe en texto plano para copiar y enviar. */
+  buildReport() {
+    const lines = [];
+    const now = new Date();
+    lines.push(`Nuby Studio ${APP_VERSION} · informe del ${now.toLocaleString()}`);
+    lines.push(`Pantalla: ${window.innerWidth}×${window.innerHeight} CSS px · DPR ${window.devicePixelRatio}`);
+    lines.push(`Navegador: ${navigator.userAgent}`);
+    const ctx = this.engine?.ctx;
+    lines.push(
+      `Motor: ${ctx ? `${ctx.state} · ${ctx.sampleRate} Hz · base ${(ctx.baseLatency ?? 0).toFixed(3)} s · salida ${(
+        ctx.outputLatency ?? 0
+      ).toFixed(3)} s` : 'sin contexto'}`
+    );
+    lines.push(
+      `Procesadores: worklets ${this.engine?.workletsReady ? 'sí' : 'no'}${
+        this.engine?.processingCheck ? ` · verificación ${this.engine.processingCheck.ok ? 'ok' : 'falla'}` : ''
+      }`
+    );
+    const input = this.engine?.input;
+    lines.push(
+      input?.stream
+        ? `Entrada: "${input.deviceLabel}" ${input.isBuiltIn ? '(DEL TELÉFONO)' : '(externa)'} · ${
+            input.sampleRate ?? '?'
+          } Hz · ${input.channelCount ?? '?'} canales · modo ${input.channelMode} · eco ${
+            input.echoCancellation ? 'on' : 'off'
+          } · ruido ${input.noiseSuppression ? 'on' : 'off'}`
+        : 'Entrada: sin abrir'
+    );
+    const report = this.engine?.recorder?.lastReport;
+    lines.push(
+      report
+        ? `Última toma: camino ${report.source} · grabado ${(report.windowFrames / report.sampleRate).toFixed(2)} s · toma ${(
+            report.frames / report.sampleRate
+          ).toFixed(2)} s · recorte ${Math.round(
+            (report.headTrim / report.sampleRate) * 1000
+          )} ms · pico ${formatDb(this.engine.recorder.lastPeak)}`
+        : 'Última toma: ninguna'
+    );
+    const clips = this.project?.clips ?? [];
+    lines.push(`Proyecto: ${clips.length} clips · ${this.project?.tracks?.length ?? 0} pistas`);
+    for (const clip of clips.slice(0, 20)) {
+      const peaks = this.app.peaks?.get?.(clip.bufferId);
+      lines.push(
+        `  · ${clip.name}: ${formatTime(clip.start)} → ${formatTime(clip.start + clip.duration)} · pico ${
+          peaks ? formatDb(peaks.peak ?? 0) : 'sin datos'
+        }`
+      );
+    }
+    const layout = this.checkLayout();
+    lines.push(
+      `Desbordes de interfaz: ${layout.problems.length}${
+        layout.problems.length ? ` → ${layout.problems.map((p) => `${p.selector} +${p.over}px`).join(', ')}` : ''
+      }`
+    );
+    return lines.join('\n');
+  }
+
+  async copyReport() {
+    const text = this.buildReport();
+    const log = document.getElementById('diag-log');
+    if (log) log.textContent = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Informe copiado', 'ok');
+    } catch {
+      toast('El informe está abajo: selecciónalo y cópialo', 'warn', 6000);
+    }
+    return text;
   }
 
   async openDiagnostics() {
@@ -601,14 +769,66 @@ export class Dialogs {
     const recorder = this.engine?.recorder;
     if (recorder) {
       const peak = recorder.lastPeak ?? 0;
-      add(
-        'Última grabación',
-        peak > 1e-5 ? 'ok' : 'warn',
-        recorder.lastSource
-          ? `Camino ${recorder.lastSource === 'worklet' ? 'AudioWorklet' : 'ScriptProcessor'} · pico ${
-              peak > 0 ? `${(20 * Math.log10(peak)).toFixed(1)} dBFS` : 'silencio'
-            }`
-          : 'Todavía no se ha grabado nada en esta sesión.'
+      const report = recorder.lastReport;
+      const detail = recorder.lastSource
+        ? [
+            `Camino ${recorder.lastSource === 'worklet' ? 'AudioWorklet' : 'ScriptProcessor'}`,
+            `pico ${peak > 0 ? `${(20 * Math.log10(peak)).toFixed(1)} dBFS` : 'silencio'}`,
+            report
+              ? `grabado ${(report.windowFrames / report.sampleRate).toFixed(2)} s · toma ${(
+                  report.frames / report.sampleRate
+                ).toFixed(2)} s · recorte inicial ${Math.round(
+                  (report.headTrim / report.sampleRate) * 1000
+                )} ms`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : 'Todavía no se ha grabado nada en esta sesión.';
+      add('Última grabación', peak > 1e-5 ? 'ok' : 'warn', detail);
+    }
+
+    // Contenido real del proyecto: muestra qué clips hay y si tienen sonido.
+    const clips = this.project?.clips ?? [];
+    const silent = [];
+    for (const clip of clips) {
+      const peaks = this.app.peaks?.get?.(clip.bufferId);
+      if (peaks && (peaks.peak ?? 0) < 1e-5) silent.push(clip);
+    }
+    const totalEnd = clips.reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0);
+    add(
+      'Contenido del proyecto',
+      clips.length ? (silent.length ? 'warn' : 'ok') : 'warn',
+      clips.length
+        ? `${clips.length} clip(s) · dura ${formatTime(totalEnd)}${
+            silent.length ? ` · ${silent.length} sin sonido (se pueden quitar abajo)` : ''
+          }`
+        : 'El proyecto está vacío: graba algo para empezar.'
+    );
+    if (silent.length) {
+      const clean = h('button', {
+        type: 'button',
+        class: 'btn btn--ghost btn--sm',
+        text: `Quitar ${silent.length} clip(s) en silencio`,
+      });
+      clean.addEventListener('click', () => {
+        this.app.removeClips(silent.map((clip) => clip.id), 'Quitar clips en silencio');
+        toast(`${silent.length} clip(s) sin sonido eliminados`, 'ok');
+        this.runDiagnostics();
+      });
+      container.appendChild(
+        h(
+          'div',
+          { class: 'diag__row' },
+          h('span', { class: 'diag__badge diag__badge--warn', text: '!' }),
+          h(
+            'div',
+            { class: 'diag__text' },
+            h('div', { class: 'diag__title', text: 'Clips sin sonido en la línea de tiempo' }),
+            h('div', { class: 'diag__detail', text: 'Alargan la exportación con minutos de nada.' }),
+            clean
+          )
+        )
       );
     }
 
