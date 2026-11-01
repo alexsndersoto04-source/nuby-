@@ -1,0 +1,63 @@
+==========================================================
+  NUBY STUDIO — CÓMO ABRIRLO (2 minutos)
+==========================================================
+
+1) DESCOMPRIME ESTE ARCHIVO
+   Clic derecho sobre el ZIP > "Extraer todo" (Windows) o doble clic (Mac).
+   IMPORTANTE: no lo abras desde dentro del ZIP.
+
+2) DOBLE CLIC EN EL LANZADOR SEGÚN TU SISTEMA
+   - Windows:  ABRIR-EN-WINDOWS.bat
+   - Mac:      ABRIR-EN-MAC.command
+   - Linux:    ABRIR-EN-LINUX.sh
+
+3) SE ABRE EL NAVEGADOR CON EL ESTUDIO
+   Aparecerá una ventana negra (la consola). No la cierres mientras
+   trabajas: es el motor que sirve la app. Al terminar, ciérrala.
+   Si el navegador no se abre solo, entra a:  http://localhost:4173
+
+4) PERMISO DE MICRÓFONO
+   La primera vez el navegador preguntará si permites el micrófono.
+   Pulsa PERMITIR (o en el candado de la barra de direcciones).
+
+----------------------------------------------------------
+  ¿POR QUÉ NO SE ABRE CON DOBLE CLIC EN index.html?
+----------------------------------------------------------
+Porque los navegadores bloquean el micrófono y los procesadores de
+audio (AudioWorklet) cuando la página se abre como archivo (file://).
+El lanzador crea un servidor local (localhost) y eso SÍ es seguro para
+el micrófono. Por eso hay que usarlo.
+
+----------------------------------------------------------
+  REQUISITOS
+----------------------------------------------------------
+- Navegador: Chrome, Edge o Firefox actualizados. (No Internet Explorer.)
+- Python 3 o Node.js instalados, cualquiera de los dos:
+    Python:  https://www.python.org/downloads/
+             >>> al instalar, marca "Add Python to PATH" <<<
+    Node.js: https://nodejs.org/
+- Si Windows muestra un aviso azul al abrir el .bat:
+  "Más información" > "Ejecutar de todas formas".
+
+----------------------------------------------------------
+  TU MICRÓFONO: BM800 + TARJETA V8
+----------------------------------------------------------
+1. Conecta el BM800 al XLR de la V8 con cable XLR.
+2. Activa +48V (alimentación fantasma) en la V8. Sin eso no suena.
+3. Conecta la V8 por USB a la computadora.
+4. En la app: botón "Micrófono" > elige la V8 en la lista.
+5. Apaga el ECO/REVERB de la V8 (aquí añades reverb con control real).
+6. Sube el gain de la V8 hasta que la voz marque entre -18 y -12 dBFS
+   (verde, sin llegar al rojo).
+7. Arma la pista (círculo rojo), pulsa GRABAR. Usa auriculares.
+
+----------------------------------------------------------
+  GRABAR Y EXPORTAR
+----------------------------------------------------------
+- Metrónomo + cuenta de entrada: botón "Metrónomo".
+- Efectos por pista: panel derecho, pestaña "Pista".
+- Máster (EQ, compresor, limitador, LUFS): pestaña "Máster".
+- Exportar MP3 320 kbps o WAV: botón "Exportar" (abajo a la derecha).
+- Los proyectos se guardan solos en el equipo (IndexedDB).
+
+Dentro de la app, la pestaña "Guía" tiene el detalle completo.

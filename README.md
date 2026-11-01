@@ -13,13 +13,38 @@ se exporta (la mezcla se recalcula con la misma cadena de efectos).
 
 ## Cómo usarlo
 
+### Opción A — descargar y abrir con doble clic (sin instalar nada)
+
+1. Descarga `Nuby-Studio-1.0.zip` (se genera con `python3 tools/empaquetar.py`).
+2. Descomprímelo y ejecuta el lanzador de tu sistema:
+   - Windows: `ABRIR-EN-WINDOWS.bat`
+   - macOS: `ABRIR-EN-MAC.command`
+   - Linux: `ABRIR-EN-LINUX.sh`
+3. Se abre el navegador con el estudio. **No cierres la ventana negra** mientras
+   trabajas: es el motor local. Necesita tener instalado **Python 3** o **Node.js**
+   (el lanzador usa el que encuentre).
+
+El lanzador hace falta porque los navegadores solo permiten micrófono y
+`AudioWorklet` en `localhost` o HTTPS: abriendo `index.html` con doble clic
+(`file://`) el micrófono queda bloqueado.
+
+### Opción B — servidor de desarrollo
+
 ```bash
 npm install        # solo para las pruebas automáticas
-npm run dev        # servidor local en http://localhost:4173
+npm run dev        # http://localhost:4173
 ```
 
-Abre `http://localhost:4173` en **Chrome, Edge o Firefox** de escritorio.
-El micrófono exige un contexto seguro: `localhost` o HTTPS.
+### Opción C — publicarlo como sitio (GitHub Pages, Netlify, etc.)
+
+Es un sitio 100 % estático: basta con subir el contenido del repositorio. En este
+repositorio GitHub Pages ya está configurado para servir la rama `main` en
+`https://alexsndersoto04-source.github.io/nuby-/`; al fusionar los cambios, la
+app queda disponible en esa dirección y se puede **instalar como aplicación**
+desde Chrome (menú > Instalar Nuby Studio), también en Android.
+
+Abre la dirección en **Chrome, Edge o Firefox** de escritorio. El micrófono exige
+un contexto seguro: `localhost` o HTTPS.
 
 También se puede publicar como sitio estático (GitHub Pages, Netlify, etc.):
 no hay backend, todo ocurre en el equipo del usuario. Al ser una PWA se puede
