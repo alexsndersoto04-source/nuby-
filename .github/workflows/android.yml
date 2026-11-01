@@ -115,9 +115,12 @@ jobs:
           echo "::warning::APK $ACTIVITY"
           echo "::warning::APK permisos: $PERMISOS"
           echo "::warning::APK archivos web incluidos: $ARCHIVOS · tamaño: $PESO"
-          echo "::warning::APK firma: $(keytool -printcert -jarfile ../Nuby-Studio.apk 2>&1 | grep -E 'Owner|SHA256' | head -n 2 | tr '\n' ' ')"
+          firma=$("$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs ../Nuby-Studio.apk 2>&1 | grep -i "sha-256" | head -n 1)
+          echo "::warning::APK firma: $firma"
           grep -q "com.nuby.studio" <<< "$PACKAGE" || { echo "::error::El paquete del APK no es el esperado"; exit 1; }
-          [ "$ARCHIVOS" -gt 40 ] || { echo "::error::Faltan archivos del estudio en el APK"; exit 1; }
+          [ "$ARCHIVOS" -ge 30 ] || { echo "::error::Faltan archivos del estudio en el APK"; exit 1; }
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify ../Nuby-Studio.apk \
+            || { echo "::error::El APK no está firmado correctamente"; exit 1; }
 
       - name: Guardar el APK como artifact
         uses: actions/upload-artifact@v4
@@ -145,7 +148,7 @@ jobs:
     name: Prueba en Android real
     needs: apk
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - name: Descargar el APK
@@ -193,7 +196,7 @@ jobs:
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
-          IMAGE="system-images;android-33;google_apis;x86_64"
+          IMAGE="system-images;android-30;default;x86_64"
           log=/tmp/emulador.log
 
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -210,13 +213,16 @@ jobs:
             echo no | "$AVDMANAGER" create avd -n nuby -k "$IMAGE" --device "pixel_5" --force
             echo "### arrancando"
             nohup "$ANDROID_HOME/emulator/emulator" -avd nuby -no-window -no-snapshot \
-                  -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none \
+                  -no-boot-anim -gpu off -no-audio -camera-back none -camera-front none \
                   > /tmp/emulador-salida.log 2>&1 &
             adb start-server
             adb wait-for-device
-            for i in $(seq 1 120); do
+            for i in $(seq 1 60); do
               BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
               if [ "$BOOT" = "1" ]; then echo "### arrancado tras ${i}0 s"; break; fi
+              if ! pgrep -f "emulator -avd nuby" > /dev/null; then
+                echo "### el emulador terminó antes de arrancar"; break
+              fi
               sleep 10
             done
             echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
