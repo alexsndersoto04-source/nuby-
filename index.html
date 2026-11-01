@@ -113,9 +113,9 @@
         </div>
         <canvas id="input-meter" class="meter" width="260" height="10"></canvas>
         <div class="input-strip__row input-strip__row--controls">
-          <label class="slider-inline" title="Ganancia de entrada">
-            <span>Ganancia</span>
-            <input id="input-gain" type="range" min="0" max="2" step="0.01" value="1">
+          <label class="slider-inline" title="Ganancia de entrada (la V8 suele entregar señal baja)">
+            <span id="input-gain-label">Ganancia 0 dB</span>
+            <input id="input-gain" type="range" min="0" max="8" step="0.05" value="1">
           </label>
           <button id="btn-monitor" class="btn btn--ghost btn--sm" aria-pressed="false" title="Escuchar la entrada (usa auriculares)">
             Escucha
@@ -277,14 +277,25 @@
           </div>
           <label class="slider-row">
             <span>Ganancia de entrada</span>
-            <input id="setup-gain" type="range" min="0" max="2" step="0.01" value="1">
+            <input id="setup-gain" type="range" min="0" max="8" step="0.05" value="1">
             <output id="setup-gain-value">0.0 dB</output>
+          </label>
+          <label class="field field--block">
+            <span class="field__label">Canales de la toma</span>
+            <select id="record-channels" class="field__input">
+              <option value="1">Mono — solo la voz</option>
+              <option value="2">Estéreo — lo que sale de la V8 (voz + pista del teléfono)</option>
+            </select>
           </label>
           <label class="check">
             <input id="setup-monitor" type="checkbox">
-            <span>Escuchar la entrada (monitorización)</span>
+            <span>Escuchar la entrada desde la app</span>
           </label>
-          <p class="hint hint--warn">Usa auriculares. Con altavoces, el micrófono puede acoplar (realimentación).</p>
+          <p class="hint hint--warn">
+            <strong>Si la voz suena con eco:</strong> baja a cero el mando <strong>ECHO/REVERB de la V8</strong> y
+            deja esta casilla desmarcada (la V8 ya te deja oírte por su salida de auriculares, sin retardo).
+            La escucha de la app tarda ~150 ms y, por el altavoz del teléfono, acopla.
+          </p>
         </div>
 
         <div class="setup-col">
