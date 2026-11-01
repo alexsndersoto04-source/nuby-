@@ -16,8 +16,16 @@ import { buildTrackChain, buildMasterChain } from './track-chain.js';
 import { createImpulseResponse, REVERB_PRESETS } from './impulse.js';
 import { InputRecorder } from './recorder.js';
 import { Metronome } from './metronome.js';
+import { getSetting } from '../state/settings.js';
 
+/** Frecuencia por defecto (la V8 y la mayoría de interfaces entregan 48 kHz). */
 export const SAMPLE_RATE = 48000;
+
+/** Frecuencia configurada en Ajustes. */
+export function preferredSampleRate() {
+  const value = Number(getSetting('sampleRate'));
+  return Number.isFinite(value) && value >= 8000 ? value : SAMPLE_RATE;
+}
 const WORKLET_FILES = [
   'recorder-processor.js',
   'gate-processor.js',
@@ -53,7 +61,8 @@ export class StudioEngine {
     if (this.ctx) return this.ctx;
 
     const Ctx = window.AudioContext ?? window.webkitAudioContext;
-    this.ctx = new Ctx({ latencyHint: 'interactive', sampleRate: SAMPLE_RATE });
+    const latencyHint = getSetting('latencyHint') ?? 'interactive';
+    this.ctx = new Ctx({ latencyHint, sampleRate: preferredSampleRate() });
 
     await this.loadWorklets(this.ctx);
 
@@ -287,7 +296,7 @@ export class StudioEngine {
       noiseSuppression: false,
       autoGainControl: false,
       channelCount: { ideal: 2 },
-      sampleRate: { ideal: SAMPLE_RATE },
+      sampleRate: { ideal: this.ctx?.sampleRate ?? preferredSampleRate() },
       latency: { ideal: 0 },
     };
     const preferred = {
@@ -509,7 +518,7 @@ export class StudioEngine {
 
   /** Latencia declarada por el navegador (salida + base). */
   getLatencyInfo() {
-    if (!this.ctx) return { base: 0, output: 0, total: 0, sampleRate: SAMPLE_RATE };
+    if (!this.ctx) return { base: 0, output: 0, total: 0, sampleRate: preferredSampleRate() };
     const base = this.ctx.baseLatency ?? 0;
     const output = this.ctx.outputLatency ?? 0;
     return { base, output, total: base + output, sampleRate: this.ctx.sampleRate };

@@ -12,6 +12,13 @@ import { encodeMp3 } from '../audio/mp3.js';
 import { encodeWav } from '../audio/wav.js';
 import { integratedLoudness, truePeakDb } from '../audio/lufs.js';
 import * as db from '../storage/db.js';
+import {
+  SETTINGS_SECTIONS,
+  getSetting,
+  getSettings,
+  resetSettings,
+  updateSetting,
+} from '../state/settings.js';
 
 export class Dialogs {
   constructor({ app }) {
@@ -25,6 +32,7 @@ export class Dialogs {
     this.bindExportDialog();
     this.bindProjectDialog();
     this.bindDiagnostics();
+    this.bindSettings();
   }
 
   get engine() {
@@ -131,8 +139,8 @@ export class Dialogs {
   async openDevice(deviceId, requestPermission = false) {
     await this.app.ensureAudio();
     const info = await this.engine.openInput(deviceId || undefined);
-    this.app.inputGain = 1;
-    this.engine.setInputGain(1);
+    // La ganancia configurada en Ajustes se respeta al abrir la entrada.
+    this.app.setInputGain?.(getSetting('inputGain'));
     document.getElementById('setup-monitor').checked = Boolean(this.project.session.monitor);
     this.engine.setMonitoring(Boolean(this.project.session.monitor));
     this.app.updateInputUi();
@@ -233,6 +241,7 @@ export class Dialogs {
     document.getElementById('btn-download').hidden = true;
     document.getElementById('export-status').textContent =
       'La mezcla se calcula en tu equipo; no se sube nada a internet.';
+    this.applyExportDefaults();
     this.syncExportFields();
     this.updateExportSummary();
   }
@@ -641,6 +650,231 @@ export class Dialogs {
       `Audio en memoria: ${this.app.buffers.size} buffers`,
       `Sonoridad del máster: ${Number.isFinite(this.engine?.lufsValues?.integrated) ? this.engine.lufsValues.integrated.toFixed(1) : '−∞'} LUFS`,
     ].join('\n');
+  }
+
+  // ========================================================== Configuración
+  bindSettings() {
+    const reset = document.getElementById('btn-settings-reset');
+    reset?.addEventListener('click', () => {
+      if (!window.confirm('¿Volver a la configuración de fábrica?')) return;
+      resetSettings();
+      this.renderSettings();
+      this.applyAllSettings();
+      toast('Configuración restaurada', 'ok');
+    });
+  }
+
+  openSettings() {
+    this.renderSettings();
+    openDialog('dialog-settings');
+  }
+
+  /** Genera la pantalla de configuración a partir de la lista de opciones. */
+  renderSettings() {
+    const container = document.getElementById('settings-sections');
+    if (!container) return;
+    clear(container);
+    const values = getSettings();
+
+    for (const section of SETTINGS_SECTIONS) {
+      const box = h('section', { class: 'settings-section' }, h('h3', { class: 'setup-title', text: section.title }));
+      if (section.hint) box.appendChild(h('p', { class: 'hint', text: section.hint }));
+
+      for (const item of section.items) {
+        const value = values[item.key];
+        const row = h(
+          'div',
+          { class: 'settings-row' },
+          h(
+            'div',
+            { class: 'settings-row__text' },
+            h('span', { class: 'settings-row__label', text: item.label }),
+            item.hint ? h('span', { class: 'settings-row__hint', text: item.hint }) : null
+          )
+        );
+
+        let control;
+        if (item.type === 'select') {
+          control = h('select', { class: 'field__input field__input--select' });
+          for (const option of item.options) {
+            const node = h('option', { value: String(option.value), text: option.label });
+            if (String(option.value) === String(value)) node.selected = true;
+            control.appendChild(node);
+          }
+          control.addEventListener('change', () => {
+            const chosen = item.options.find((option) => String(option.value) === control.value);
+            this.onSettingChanged(item.key, chosen ? chosen.value : control.value);
+          });
+        } else if (item.type === 'toggle') {
+          control = h('input', { type: 'checkbox' });
+          control.checked = Boolean(value);
+          control.addEventListener('change', () => this.onSettingChanged(item.key, control.checked));
+        } else {
+          control = h('input', {
+            type: 'number',
+            class: 'field__input field__input--num',
+            min: String(item.min ?? 0),
+            max: String(item.max ?? 100),
+            step: String(item.step ?? 1),
+            value: String(value),
+          });
+          control.addEventListener('change', () => {
+            let next = Number(control.value);
+            if (!Number.isFinite(next)) next = value;
+            next = Math.min(Number(item.max ?? 100), Math.max(Number(item.min ?? 0), next));
+            control.value = String(next);
+            this.onSettingChanged(item.key, next);
+          });
+        }
+
+        const controlBox = h('div', { class: 'settings-row__control' }, control);
+        if (item.unit) controlBox.appendChild(h('span', { class: 'settings-row__unit', text: item.unit }));
+        row.appendChild(controlBox);
+        box.appendChild(row);
+      }
+
+      container.appendChild(box);
+    }
+
+    container.appendChild(this.buildSystemSection());
+  }
+
+  /** Sección de estado real del equipo (no es una preferencia). */
+  buildSystemSection() {
+    const engine = this.engine;
+    const native = window.NubyNative;
+    const input = engine?.input;
+    const device = input?.stream
+      ? input.deviceLabel ?? 'micrófono'
+      : 'Sin abrir';
+
+    const box = h('section', { class: 'settings-section' },
+      h('h3', { class: 'setup-title', text: 'Sistema' }),
+      h('p', { class: 'hint', text: 'Estado real del dispositivo en este momento.' })
+    );
+
+    const line = (label, value, ok) =>
+      h(
+        'div',
+        { class: 'settings-row settings-row--status' },
+        h('div', { class: 'settings-row__text' }, h('span', { class: 'settings-row__label', text: label })),
+        h('div', { class: 'settings-row__control' },
+          h('span', { class: `settings-status ${ok ? 'is-ok' : 'is-warn'}`, text: value }))
+      );
+
+    box.append(
+      line('Micrófono abierto', device, Boolean(input?.stream)),
+      line('Motor de audio',
+        engine?.ctx ? `${engine.ctx.sampleRate} Hz · ${engine.ctx.state}` : 'Aún no iniciado',
+        Boolean(engine?.ctx && engine.ctx.state === 'running')),
+      line('Procesadores avanzados', engine?.workletsReady ? 'AudioWorklet activo' : 'Modo de respaldo', Boolean(engine?.workletsReady)),
+      line('Aplicación', native?.isAndroid?.() ? 'Android (APK)' : 'Navegador', true)
+    );
+
+    const actions = h('div', { class: 'settings-actions' });
+    const micButton = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: 'Probar micrófono' });
+    micButton.addEventListener('click', () => {
+      closeDialog('dialog-settings');
+      this.openInputDialog();
+    });
+    const granted = native?.hasMicrophone?.() ?? true;
+    const nativePermission = h('button', {
+      type: 'button',
+      class: 'btn btn--ghost btn--sm',
+      text: granted ? 'Permisos de Android' : 'Dar permiso al micrófono',
+    });
+    nativePermission.addEventListener('click', () => {
+      if (!native?.requestMicrophone) {
+        toast('Solo disponible en la app Android', 'warn');
+        return;
+      }
+      if (granted) {
+        native.openAppSettings?.();
+        return;
+      }
+      native.requestMicrophone();
+      toast('Acepta el permiso de micrófono que muestra Android', 'info', 6000);
+    });
+    const diagnostics = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: 'Diagnóstico completo' });
+    diagnostics.addEventListener('click', () => {
+      closeDialog('dialog-settings');
+      this.openDiagnostics();
+    });
+    actions.append(micButton);
+    if (native?.isAndroid?.()) actions.append(nativePermission);
+    actions.append(diagnostics);
+    box.appendChild(actions);
+    return box;
+  }
+
+  onSettingChanged(key, value) {
+    updateSetting(key, value);
+    this.applySetting(key, value);
+  }
+
+  /** Aplica una preferencia al estudio en marcha. */
+  applySetting(key, value) {
+    const engine = this.engine;
+    const project = this.project;
+    try {
+      switch (key) {
+        case 'channelMode':
+          engine?.applyChannelMode?.(value);
+          this.app.updateInputUi?.();
+          break;
+        case 'inputGain':
+          this.app.setInputGain?.(value);
+          break;
+        case 'monitor':
+          if (engine?.input?.stream) engine.setMonitoring?.(value);
+          if (project?.session) project.session.monitor = Boolean(value);
+          this.app.updateInputUi?.();
+          break;
+        case 'countInBeats':
+          if (project?.session) project.session.countInBeats = Number(value);
+          break;
+        case 'metronomeVolume':
+          if (project?.session?.metronome) project.session.metronome.volume = Number(value);
+          engine?.metronome?.setVolume?.(Number(value));
+          break;
+        case 'autoScroll':
+          if (this.app.timeline) this.app.timeline.follow = Boolean(value);
+          break;
+        case 'autoSave':
+          this.app.autoSave = Boolean(value);
+          if (value) this.app.markDirty?.();
+          break;
+        case 'keepScreenOn':
+          window.NubyNative?.setKeepScreenOn?.(Boolean(value));
+          break;
+        case 'density':
+          document.body.dataset.density = String(value);
+          break;
+        default:
+          // Las demás se aplican la próxima vez (nuevo proyecto, exportar o recargar).
+          break;
+      }
+    } catch (error) {
+      console.warn(`No se pudo aplicar "${key}"`, error);
+    }
+  }
+
+  applyAllSettings() {
+    for (const section of SETTINGS_SECTIONS) {
+      for (const item of section.items) {
+        this.applySetting(item.key, getSetting(item.key));
+      }
+    }
+    if (this.app.timeline) this.app.timeline.follow = Boolean(getSetting('autoScroll'));
+  }
+
+  /** Vuelca las preferencias de exportación al diálogo. */
+  applyExportDefaults() {
+    document.getElementById('export-format').value = getSetting('exportFormat');
+    document.getElementById('export-bitrate').value = String(getSetting('exportBitrate'));
+    document.getElementById('export-depth').value = String(getSetting('exportDepth'));
+    document.getElementById('export-normalize').checked = Boolean(getSetting('exportNormalize'));
+    document.getElementById('export-master').checked = Boolean(getSetting('exportMaster'));
   }
 
   async testEncoder() {

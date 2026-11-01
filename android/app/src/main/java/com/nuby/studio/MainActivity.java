@@ -61,6 +61,8 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> fileCallback;
     private ExportSession exportSession;
+    /** Petición de micrófono del WebView esperando el permiso del sistema. */
+    private PermissionRequest pendingPermission;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -160,12 +162,24 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
         if (code != REQ_PERMISSIONS) return;
+
+        boolean denied = false;
         for (int index = 0; index < permissions.length; index++) {
             if (Manifest.permission.RECORD_AUDIO.equals(permissions[index])
                     && results[index] != PackageManager.PERMISSION_GRANTED) {
+                denied = true;
                 toast("Sin permiso de micrófono no se puede grabar. "
                         + "Actívalo en Ajustes › Aplicaciones › Nuby Studio › Permisos.");
             }
+        }
+
+        if (pendingPermission != null) {
+            if (!denied && hasMicrophonePermission()) {
+                pendingPermission.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            } else {
+                pendingPermission.deny();
+            }
+            pendingPermission = null;
         }
     }
 
@@ -303,12 +317,18 @@ public class MainActivity extends Activity {
                             grant.add(resource);
                         }
                     }
-                    if (!grant.isEmpty() && hasMicrophonePermission()) {
-                        request.grant(grant.toArray(new String[0]));
-                    } else {
+                    if (grant.isEmpty()) {
                         request.deny();
-                        requestPermissionsIfNeeded();
+                        return;
                     }
+                    if (hasMicrophonePermission()) {
+                        request.grant(grant.toArray(new String[0]));
+                        return;
+                    }
+                    // El permiso del sistema todavía no está: se guarda la petición
+                    // y se concede en cuanto el usuario acepta el aviso de Android.
+                    pendingPermission = request;
+                    requestPermissionsIfNeeded();
                 }
             });
         }
@@ -399,6 +419,52 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isAndroid() {
             return true;
+        }
+
+        @JavascriptInterface
+        public boolean hasMicrophone() {
+            return hasMicrophonePermission();
+        }
+
+        @JavascriptInterface
+        public void requestMicrophone() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    requestPermissionsIfNeeded();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void openAppSettings() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Intent intent = new Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", getPackageName(), null));
+                        startActivity(intent);
+                    } catch (Exception error) {
+                        toast("Abre Ajustes › Aplicaciones › Nuby Studio");
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setKeepScreenOn(final boolean enabled) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (enabled) {
+                        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    } else {
+                        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    }
+                }
+            });
         }
     }
 
