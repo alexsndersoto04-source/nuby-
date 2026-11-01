@@ -101,6 +101,24 @@ jobs:
           "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs ../Nuby-Studio.apk | head -n 5
           unzip -l ../Nuby-Studio.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)'
 
+      - name: Inspeccionar el APK
+        working-directory: android
+        run: |
+          set +e
+          AAPT="${ANDROID_HOME}/build-tools/34.0.0/aapt2"
+          PACKAGE=$("$AAPT" dump badging ../Nuby-Studio.apk 2>&1 | grep "^package:" | head -n 1)
+          ACTIVITY=$("$AAPT" dump badging ../Nuby-Studio.apk 2>&1 | grep "launchable-activity" | head -n 1)
+          PERMISOS=$("$AAPT" dump permissions ../Nuby-Studio.apk 2>&1 | grep "uses-permission" | sed 's/uses-permission: name=//' | tr -d "'" | tr '\n' ' ')
+          ARCHIVOS=$(unzip -l ../Nuby-Studio.apk | grep -c "assets/www/")
+          PESO=$(du -h ../Nuby-Studio.apk | cut -f1)
+          echo "::warning::APK $PACKAGE"
+          echo "::warning::APK $ACTIVITY"
+          echo "::warning::APK permisos: $PERMISOS"
+          echo "::warning::APK archivos web incluidos: $ARCHIVOS · tamaño: $PESO"
+          echo "::warning::APK firma: $(keytool -printcert -jarfile ../Nuby-Studio.apk 2>&1 | grep -E 'Owner|SHA256' | head -n 2 | tr '\n' ' ')"
+          grep -q "com.nuby.studio" <<< "$PACKAGE" || { echo "::error::El paquete del APK no es el esperado"; exit 1; }
+          [ "$ARCHIVOS" -gt 40 ] || { echo "::error::Faltan archivos del estudio en el APK"; exit 1; }
+
       - name: Guardar el APK como artifact
         uses: actions/upload-artifact@v4
         with:
