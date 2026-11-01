@@ -12,6 +12,7 @@ import { encodeMp3 } from '../audio/mp3.js';
 import { encodeWav } from '../audio/wav.js';
 import { integratedLoudness, truePeakDb } from '../audio/lufs.js';
 import * as db from '../storage/db.js';
+import { APP_VERSION } from '../version.js';
 import {
   SETTINGS_SECTIONS,
   getSetting,
@@ -768,7 +769,7 @@ export class Dialogs {
         engine?.ctx ? `${engine.ctx.sampleRate} Hz · ${engine.ctx.state}` : 'Aún no iniciado',
         Boolean(engine?.ctx && engine.ctx.state === 'running')),
       line('Procesadores avanzados', engine?.workletsReady ? 'AudioWorklet activo' : 'Modo de respaldo', Boolean(engine?.workletsReady)),
-      line('Aplicación', native?.isAndroid?.() ? 'Android (APK)' : 'Navegador', true)
+      line('Aplicación', native?.isAndroid?.() ? `Android (APK) · ${APP_VERSION}` : `Navegador · ${APP_VERSION}`, true)
     );
 
     const actions = h('div', { class: 'settings-actions' });
@@ -800,9 +801,16 @@ export class Dialogs {
       closeDialog('dialog-settings');
       this.openDiagnostics();
     });
+    const reload = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: 'Reiniciar el estudio' });
+    reload.addEventListener('click', () => {
+      // Sirve para aplicar la frecuencia de muestreo o recuperar el audio si el
+      // motor se queda bloqueado en el teléfono. El proyecto está autoguardado.
+      window.location.reload();
+    });
+
     actions.append(micButton);
     if (native?.isAndroid?.()) actions.append(nativePermission);
-    actions.append(diagnostics);
+    actions.append(diagnostics, reload);
     box.appendChild(actions);
     return box;
   }
