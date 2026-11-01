@@ -135,6 +135,33 @@ jobs:
         with:
           name: Nuby-Studio-APK
 
+      - name: Comprobar el entorno del emulador
+        run: |
+          set +e
+          {
+            echo "--- /dev/kvm ---"
+            ls -l /dev/kvm
+            echo "--- virtualización en la CPU (# de flags) ---"
+            grep -c -E 'vmx|svm' /proc/cpuinfo
+            echo "--- ANDROID_HOME ---"
+            echo "$ANDROID_HOME"
+            ls "$ANDROID_HOME"
+            echo "--- plataformas instaladas ---"
+            ls "$ANDROID_HOME/platforms" 2>&1
+            echo "--- imágenes de sistema ---"
+            ls "$ANDROID_HOME/system-images" 2>&1
+            echo "--- memoria y CPUs ---"
+            nproc
+            free -m | head -n 2
+            echo "--- APK ---"
+            ls -lh Nuby-Studio.apk
+          } > /tmp/diag.txt 2>&1
+          cat /tmp/diag.txt
+          # Las anotaciones sí se pueden leer desde fuera, aunque el log no.
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::warning::DIAG $line"
+          done < /tmp/diag.txt
+
       - name: Activar KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -153,20 +180,21 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-boot-anim -no-window -gpu swiftshader_indirect
           script: |
-            set -x
             adb install -r Nuby-Studio.apk
             adb shell pm grant com.nuby.studio android.permission.RECORD_AUDIO || true
             adb shell am start -W -n com.nuby.studio/.MainActivity
             sleep 30
-            echo "--- ¿sigue vivo? ---"
             adb shell pidof com.nuby.studio
             adb logcat -d -s NubyStudio:* NubyJS:* AndroidRuntime:E > logcat.txt || true
             cat logcat.txt
             adb exec-out screencap -p > pantalla.png || true
-            grep -q "NUBY-OK" logcat.txt || {
+            if ! grep -q "NUBY-OK" logcat.txt; then
+              while IFS= read -r line; do
+                [ -n "$line" ] && echo "::error::LOGCAT $line"
+              done < logcat.txt
               echo "::error::La app no llegó a cargar el estudio"
               exit 1
-            }
+            fi
 
       - name: Guardar la captura de pantalla
         if: always()
@@ -177,30 +205,3 @@ jobs:
             pantalla.png
             logcat.txt
           if-no-files-found: warn
-
-      # Los registros de Actions no siempre se pueden leer; si algo falla, el
-      # diagnóstico se publica en el pull request para poder revisarlo.
-      - name: Publicar el diagnóstico del fallo
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          adb devices -l > /tmp/diag.txt 2>&1
-          adb logcat -d -s NubyStudio:* NubyJS:* AndroidRuntime:E >> /tmp/diag.txt 2>&1
-          echo "--- logcat.txt ---" >> /tmp/diag.txt
-          cat logcat.txt >> /tmp/diag.txt 2>&1
-          echo "--- archivos ---" >> /tmp/diag.txt
-          ls -la >> /tmp/diag.txt 2>&1
-
-          PR=$(gh pr list --head "$GITHUB_REF_NAME" --json number -q '.[0].number' 2>/dev/null)
-          if [ -z "$PR" ]; then PR=$(gh pr list --state open --limit 1 --json number -q '.[0].number' 2>/dev/null); fi
-          if [ -n "$PR" ]; then
-            {
-              echo "### Diagnóstico automático de la prueba en Android"
-              echo '```'
-              tail -n 120 /tmp/diag.txt
-              echo '```'
-            } > /tmp/cuerpo.md
-            gh pr comment "$PR" --body-file /tmp/cuerpo.md
-          fi
