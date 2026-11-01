@@ -312,6 +312,7 @@ export class Dialogs {
         end,
         includeMasterFx: applyMaster,
         normalize,
+        allowWorklets: this.engine?.processingWorklets !== false,
         onProgress: (value) => {
           bar.style.width = `${Math.round(4 + value * 60)}%`;
         },
@@ -408,6 +409,7 @@ export class Dialogs {
           end,
           includeMasterFx: false,
           soloTrackId: track.id,
+          allowWorklets: this.engine?.processingWorklets !== false,
         });
         const channels = [rendered.buffer.getChannelData(0), rendered.buffer.getChannelData(1)];
         const name = safeFileName(`${project.name}-${track.name}`, 'stem');
@@ -563,13 +565,32 @@ export class Dialogs {
       ctx ? `Estado: ${ctx.state} · ${ctx.sampleRate} Hz · base ${(ctx.baseLatency ?? 0).toFixed(3)} s` : 'Aún no se ha creado (abre la entrada o pulsa reproducir)'
     );
 
+    const check = this.engine?.processingCheck;
+    const processing = this.engine?.workletsReady && this.engine?.processingWorklets !== false;
     add(
       'AudioWorklet (procesadores avanzados)',
-      this.engine?.workletsReady ? 'ok' : 'warn',
-      this.engine?.workletsReady
-        ? 'Puerta de ruido, limitador con lookahead, grabador PCM y medidor LUFS activos.'
-        : this.engine?.workletError ?? 'No disponible: la grabación usará el modo de respaldo (menos preciso).'
+      processing ? 'ok' : 'warn',
+      processing
+        ? `Puerta de ruido, limitador y medidor LUFS activos. Verificado con un tono de prueba${
+            check ? ` (salida ${(20 * Math.log10(Math.max(check.peak, 1e-6))).toFixed(1)} dBFS)` : ''
+          }.`
+        : this.engine?.workletError ??
+          'No disponible: se usa el modo de respaldo (suena igual, con menos precisión).'
     );
+
+    const recorder = this.engine?.recorder;
+    if (recorder) {
+      const peak = recorder.lastPeak ?? 0;
+      add(
+        'Última grabación',
+        peak > 1e-5 ? 'ok' : 'warn',
+        recorder.lastSource
+          ? `Camino ${recorder.lastSource === 'worklet' ? 'AudioWorklet' : 'ScriptProcessor'} · pico ${
+              peak > 0 ? `${(20 * Math.log10(peak)).toFixed(1)} dBFS` : 'silencio'
+            }`
+          : 'Todavía no se ha grabado nada en esta sesión.'
+      );
+    }
 
     const devices = await this.engine?.listInputDevices?.().catch(() => []) ?? [];
     add(
@@ -801,6 +822,16 @@ export class Dialogs {
       closeDialog('dialog-settings');
       this.openDiagnostics();
     });
+    const tone = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: 'Probar sonido' });
+    tone.addEventListener('click', async () => {
+      try {
+        await this.engine.playTestTone(1.2);
+        toast('Si oyes un pitido, la salida de audio funciona', 'info', 4000);
+      } catch (error) {
+        toast(`No se pudo reproducir: ${error.message}`, 'error', 6000);
+      }
+    });
+
     const reload = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: 'Reiniciar el estudio' });
     reload.addEventListener('click', () => {
       // Sirve para aplicar la frecuencia de muestreo o recuperar el audio si el
@@ -810,7 +841,7 @@ export class Dialogs {
 
     actions.append(micButton);
     if (native?.isAndroid?.()) actions.append(nativePermission);
-    actions.append(diagnostics, reload);
+    actions.append(tone, diagnostics, reload);
     box.appendChild(actions);
     return box;
   }

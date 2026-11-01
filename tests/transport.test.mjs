@@ -120,10 +120,11 @@ test('activar o desactivar un efecto recablea la cadena de la pista', () => {
 test('la latencia de entrada desplaza la toma para que quede alineada', async () => {
   app.project.clips = [];
   app.project.session.latencyOffset = 100; // 100 ms manuales + 12 ms del dispositivo simulado
+  app.project.session.metronome.on = false;
   app.seek(2);
 
   await app.toggleRecord();
-  feedAudio(ctx, 0.6);
+  feedAudio(ctx, 0.7);
   await app.stopTransport();
 
   assert.equal(app.project.clips.length, 1);

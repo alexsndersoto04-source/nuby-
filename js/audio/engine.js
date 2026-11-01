@@ -39,6 +39,14 @@ export class StudioEngine {
     this.tracks = new Map();
     this.workletsReady = false;
     this.workletError = null;
+    /**
+     * ¿Los procesadores de audio dejan pasar la señal en este navegador?
+     * En algunos WebView de Android los AudioWorklet reciben la entrada vacía y
+     * devolverían silencio: se comprueba al arrancar y, si fallan, se usa el
+     * camino de respaldo (que suena igual, con menos precisión).
+     */
+    this.processingWorklets = true;
+    this.processingCheck = null;
     this.input = {
       stream: null,
       source: null,
@@ -65,6 +73,15 @@ export class StudioEngine {
     this.ctx = new Ctx({ latencyHint, sampleRate: preferredSampleRate() });
 
     await this.loadWorklets(this.ctx);
+    if (this.workletsReady) {
+      this.processingWorklets = await this.checkProcessing();
+      if (!this.processingWorklets) {
+        this.workletError =
+          'Los procesadores de audio no reciben señal en este dispositivo: se usa el modo de respaldo.';
+      }
+    } else {
+      this.processingWorklets = false;
+    }
 
     this.buildMaster();
     this.buildBuses();
@@ -73,7 +90,9 @@ export class StudioEngine {
     this.recorder = new InputRecorder(this.ctx, { worklets: this.workletsReady });
     this.recorderSilence = this.ctx.createGain();
     this.recorderSilence.gain.value = 0;
-    this.recorder.node.connect(this.recorderSilence);
+    // Las dos salidas de captura se mantienen conectadas (aunque sea en silencio):
+    // sin conexión al destino el navegador no las hace correr.
+    this.recorder.connectOutput(this.recorderSilence);
     this.recorderSilence.connect(this.ctx.destination);
 
     this.metronome = new Metronome(this.ctx);
@@ -99,9 +118,53 @@ export class StudioEngine {
     }
   }
 
+  /**
+   * Comprueba de verdad que un AudioWorklet deja pasar el audio en este equipo:
+   * renderiza un tono a través de la cadena maestra en un contexto offline y
+   * mide la salida. Si sale en silencio, el dispositivo no sirve para los
+   * procesadores y hay que usar el respaldo.
+   * @returns {Promise<boolean>}
+   */
+  async checkProcessing() {
+    const OfflineCtx = window.OfflineAudioContext ?? window.webkitOfflineAudioContext;
+    if (!OfflineCtx) return false;
+    const rate = this.ctx?.sampleRate ?? 48000;
+    try {
+      const offline = new OfflineCtx(2, Math.round(rate * 0.2), rate);
+      for (const file of WORKLET_FILES) {
+        await offline.audioWorklet.addModule(new URL(`./worklets/${file}`, import.meta.url).href);
+      }
+      const master = buildMasterChain(offline, {}, { worklets: true, safe: true });
+      master.output.connect(offline.destination);
+      const osc = offline.createOscillator();
+      osc.frequency.value = 440;
+      const level = offline.createGain();
+      level.gain.value = 0.5;
+      osc.connect(level);
+      level.connect(master.input);
+      osc.start(0);
+      osc.stop(0.19);
+      const rendered = await offline.startRendering();
+      let peak = 0;
+      const from = Math.round(rate * 0.02);
+      for (let c = 0; c < rendered.numberOfChannels; c++) {
+        const data = rendered.getChannelData(c);
+        for (let i = from; i < data.length; i++) {
+          const value = data[i] < 0 ? -data[i] : data[i];
+          if (value > peak) peak = value;
+        }
+      }
+      this.processingCheck = { peak, ok: peak > 0.01 };
+      return this.processingCheck.ok;
+    } catch (error) {
+      this.processingCheck = { peak: 0, ok: false, error: String(error?.message ?? error) };
+      return false;
+    }
+  }
+
   buildMaster() {
     const ctx = this.ctx;
-    this.master = buildMasterChain(ctx, {});
+    this.master = buildMasterChain(ctx, {}, { worklets: this.processingWorklets });
     // buildMasterChain ya conecta entrada → EQ → compresor → limitador → salida.
     // (Una conexión directa entrada→salida duplicaría la señal y saltaría el máster.)
 
@@ -214,7 +277,7 @@ export class StudioEngine {
     const chain = buildTrackChain(
       ctx,
       { ...track.fx, fader: track.fader, pan: track.pan, muted: track.muted },
-      { worklets: this.workletsReady }
+      { worklets: this.processingWorklets }
     );
     chain.sends.reverb.connect(this.reverbInput);
     chain.sends.delay.connect(this.delayInput);
@@ -522,6 +585,28 @@ export class StudioEngine {
     const base = this.ctx.baseLatency ?? 0;
     const output = this.ctx.outputLatency ?? 0;
     return { base, output, total: base + output, sampleRate: this.ctx.sampleRate };
+  }
+
+  /** Tono corto a través del máster, para comprobar que se oye. */
+  async playTestTone(seconds = 1) {
+    await this.resume();
+    const ctx = this.ctx;
+    if (!ctx || !this.master) return false;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 440;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.2;
+    const now = ctx.currentTime + 0.02;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.2, now + 0.02);
+    gain.gain.setValueAtTime(0.2, now + Math.max(0.1, seconds - 0.08));
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+    osc.connect(gain);
+    gain.connect(this.master.input);
+    osc.start(now);
+    osc.stop(now + seconds + 0.02);
+    return true;
   }
 
   async resume() {

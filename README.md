@@ -174,6 +174,15 @@ El `Gradle` copia `index.html`, `css/`, `js/` y `assets/` dentro de
 `assets/www` en cada compilación, así que el APK siempre lleva la última versión
 del estudio sin duplicar código en el repositorio.
 
+**Audio que se comprueba solo.** Al arrancar, el estudio renderiza un tono de
+prueba a través de la cadena maestra en un contexto offline. Si el dispositivo
+no deja pasar la señal por los `AudioWorklet` (pasa en algunos WebView de
+Android, donde la entrada llega vacía y todo sonaría en silencio), la app pasa
+automáticamente al camino de respaldo —limitador suave, grabación por
+`ScriptProcessorNode`— y lo avisa en **Diagnóstico**. La grabación, además,
+captura por los dos caminos a la vez y se queda con el que trae señal, así que
+una toma no puede quedar muda sin avisar.
+
 El workflow **"Compilar APK"** (`.github/workflows/android.yml`) compila, firma y
 comprueba el APK en cada envío de código, e incluye una prueba opcional que
 instala el APK en un emulador de Android para verificar que la interfaz arranca
