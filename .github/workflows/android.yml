@@ -169,32 +169,66 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Arrancar el emulador y probar la app
-        id: emulador
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          target: google_apis
-          arch: x86_64
-          emulator-boot-timeout: 900
-          disable-animations: true
-          emulator-options: -no-snapshot -no-boot-anim -no-window -gpu swiftshader_indirect
-          script: |
+      - name: Arrancar el emulador
+        run: |
+          set -uo pipefail
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          IMAGE="system-images;android-33;google_apis;x86_64"
+          log=/tmp/emulador.log
+          {
+            echo "### instalando imagen del sistema"
+            yes | sdkmanager --licenses > /dev/null 2>&1 || true
+            sdkmanager --install "$IMAGE" "emulator" "platform-tools"
+            echo "### creando dispositivo"
+            echo no | avdmanager create avd -n nuby -k "$IMAGE" --device "pixel_5" --force
+            echo "### arrancando"
+            nohup "$ANDROID_HOME/emulator/emulator" -avd nuby -no-window -no-snapshot \
+                  -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none \
+                  > /tmp/emulador-salida.log 2>&1 &
+            adb start-server
+            adb wait-for-device
+            for i in $(seq 1 120); do
+              BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+              if [ "$BOOT" = "1" ]; then echo "### arrancado en ${i}0 s"; break; fi
+              sleep 10
+            done
+            adb shell getprop sys.boot_completed
+            adb devices -l
+          } > "$log" 2>&1
+          status=$?
+          cat "$log"
+          tail -n 15 /tmp/emulador-salida.log 2>/dev/null
+          if [ "$status" -ne 0 ] || ! grep -q '^1$' "$log"; then
+            tail -n 25 "$log" | while IFS= read -r line; do [ -n "$line" ] && echo "::error::EMULADOR $line"; done
+            tail -n 25 /tmp/emulador-salida.log 2>/dev/null | while IFS= read -r line; do [ -n "$line" ] && echo "::error::SALIDA $line"; done
+            exit 1
+          fi
+
+      - name: Instalar y probar Nuby Studio
+        run: |
+          set -uo pipefail
+          log=/tmp/prueba.log
+          {
             adb install -r Nuby-Studio.apk
             adb shell pm grant com.nuby.studio android.permission.RECORD_AUDIO || true
             adb shell am start -W -n com.nuby.studio/.MainActivity
-            sleep 30
+            sleep 35
+            echo "--- proceso vivo ---"
             adb shell pidof com.nuby.studio
-            adb logcat -d -s NubyStudio:* NubyJS:* AndroidRuntime:E > logcat.txt || true
+            adb logcat -d -s NubyStudio:* NubyJS:* > logcat.txt || true
             cat logcat.txt
             adb exec-out screencap -p > pantalla.png || true
-            if ! grep -q "NUBY-OK" logcat.txt; then
-              while IFS= read -r line; do
-                [ -n "$line" ] && echo "::error::LOGCAT $line"
-              done < logcat.txt
-              echo "::error::La app no llegó a cargar el estudio"
-              exit 1
-            fi
+            ls -l pantalla.png
+          } > "$log" 2>&1
+          cat "$log"
+          if ! grep -q "NUBY-OK" logcat.txt 2>/dev/null; then
+            tail -n 40 "$log" | while IFS= read -r line; do [ -n "$line" ] && echo "::error::PRUEBA $line"; done
+            grep -iE "fatal|exception|error" logcat.txt 2>/dev/null | head -n 20 | while IFS= read -r line; do echo "::error::LOGCAT $line"; done
+            exit 1
+          fi
+          echo "La interfaz del estudio se cargó correctamente en Android."
+          adb logcat -d -s AndroidRuntime:E | head -n 5
 
       - name: Guardar la captura de pantalla
         if: always()
