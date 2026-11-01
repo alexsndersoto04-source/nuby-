@@ -19,6 +19,7 @@ export class TimelineView {
     this.selectedTrackId = null;
     this.zoom = 80;
     this.drag = null;
+    this.follow = true; // seguir al cabezal (preferencia «autoScroll»)
 
     // El cabezal y la región de bucle viven dentro del contenido desplazable.
     this.els.lanes.appendChild(this.els.playhead);
@@ -283,6 +284,7 @@ export class TimelineView {
     this.els.playhead.classList.toggle('is-recording', recording);
 
     // Desplazamiento automático para seguir al cabezal.
+    if (this.follow === false) return;
     const wrap = this.els.wrap;
     const margin = 60;
     if (x > wrap.scrollLeft + wrap.clientWidth - margin) {

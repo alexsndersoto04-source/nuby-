@@ -16,6 +16,7 @@ import {
   projectDuration,
 } from '../state.js';
 import * as db from '../storage/db.js';
+import { getSetting, getSettings } from '../state/settings.js';
 import { encodeWav } from '../audio/wav.js';
 import { TrackStrips } from './strips.js';
 import { TimelineView } from './timeline.js';
@@ -59,6 +60,7 @@ export class StudioApp {
     this.lastMeterUpdate = 0;
     this.lastTextUpdate = 0;
     this.countInUntil = 0;
+    this.autoSave = true; // se ajusta con las preferencias al arrancar
   }
 
   // ------------------------------------------------------------------ Arranque
@@ -80,6 +82,8 @@ export class StudioApp {
     }
 
     this.selectedTrackId = this.project.tracks[0]?.id ?? null;
+    this.autoSave = Boolean(getSetting('autoSave'));
+    this.applyPreferences();
     this.applyProjectToUi();
     this.bindEvents();
     this.bindKeyboard();
@@ -304,7 +308,31 @@ export class StudioApp {
     this.timeline.updatePlayhead(this.playheadPosition);
   }
 
+  /** Aplica las preferencias guardadas (densidad, seguimiento, ganancia…). */
+  applyPreferences() {
+    const prefs = getSettings();
+    document.body.dataset.density = String(prefs.density ?? 'comoda');
+    this.inputGain = Number(prefs.inputGain ?? 1);
+    if (this.els?.inputGain) this.els.inputGain.value = String(this.inputGain);
+    if (this.timeline) this.timeline.follow = Boolean(prefs.autoScroll);
+    this.dialogs?.applyAllSettings?.();
+  }
+
+  /** Ganancia de entrada desde cualquier sitio (ajustes, pista, diálogo). */
+  setInputGain(value) {
+    const gain = Math.max(0.05, Number(value) || 1);
+    this.inputGain = gain;
+    if (this.els?.inputGain) this.els.inputGain.value = String(Math.min(2, gain));
+    this.engine?.setInputGain(gain);
+    return gain;
+  }
+
   markDirty() {
+    if (!this.autoSave) {
+      this.dirty = true;
+      this.updateSaveState();
+      return;
+    }
     this.dirty = true;
     this.updateSaveState();
     clearTimeout(this.saveTimer);
@@ -970,6 +998,8 @@ export class StudioApp {
     const input = this.engine?.input;
     const visible = Boolean(input?.stream);
     this.els.inputStrip.hidden = !visible;
+    const cta = document.getElementById('input-cta');
+    if (cta) cta.hidden = visible;
     if (visible) {
       this.els.inputStripLabel.textContent = input.deviceLabel || 'Entrada activa';
       this.els.statusDevice.textContent = input.deviceLabel || 'Entrada activa';
@@ -1109,10 +1139,28 @@ export class StudioApp {
 
     document.getElementById('btn-add-track').addEventListener('click', () => this.addTrack());
     document.getElementById('btn-input').addEventListener('click', () => this.dialogs.openInputDialog());
+    document.getElementById('btn-activate-input').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      const label = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Activando…';
+      try {
+        await this.dialogs.openDevice(undefined, true);
+        toast('Micrófono listo. Elige la pista y pulsa Grabar.', 'ok', 6000);
+      } catch (error) {
+        // Si el dispositivo falla, se abre el diálogo para elegir otro.
+        toast(error.message ?? 'No se pudo abrir el micrófono', 'error', 7000);
+        this.dialogs.openInputDialog();
+      } finally {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    });
     document.getElementById('btn-empty-setup').addEventListener('click', () => this.dialogs.openInputDialog());
     document.getElementById('btn-export').addEventListener('click', () => this.dialogs.openExportDialog());
     document.getElementById('btn-projects').addEventListener('click', () => this.dialogs.openProjectsDialog());
     document.getElementById('btn-diagnostics').addEventListener('click', () => this.dialogs.openDiagnostics());
+    document.getElementById('btn-settings').addEventListener('click', () => this.dialogs.openSettings());
     document.getElementById('btn-mix-view').addEventListener('click', (event) => {
       const on = this.els.app.classList.toggle('app--mix');
       event.currentTarget.setAttribute('aria-pressed', String(on));

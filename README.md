@@ -68,6 +68,17 @@ Abre la dirección en **Chrome, Edge o Firefox**. El micrófono exige un context
 seguro: `localhost` o HTTPS. No hay backend, todo ocurre en el propio equipo, y
 al ser una PWA se puede instalar y usar sin conexión.
 
+### Primeros pasos en el teléfono (Redmi 9C y similares)
+
+1. Abre la app y toca **Activar micrófono** (tarjeta amarilla en *Pistas*).
+   Android pedirá permiso: acéptalo. Es lo único que hace falta para empezar.
+2. Conecta la **V8** por USB-OTG y elige la entrada en **Ajustes › Sistema ›
+   Probar micrófono**. Si no aparece, revisa que el cable OTG sea de datos.
+3. Abajo en la barra hay tres pestañas: **Pistas · Editor · Canal**. En el
+   teléfono se ve un panel a la vez; el editor ocupa toda la pantalla.
+4. Al grabar, la pantalla se queda encendida y el botón *atrás* solo cierra el
+   diálogo abierto (no cierra la app ni pierde la sesión).
+
 ### Primeros pasos con el BM800 + V8
 
 1. Conecta el BM800 a la entrada **XLR** de la V8 con cable XLR.

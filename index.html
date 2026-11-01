@@ -98,6 +98,14 @@
           </button>
         </div>
       </div>
+      <div id="input-cta" class="input-cta">
+        <div class="input-cta__text">
+          <strong>Micrófono sin activar</strong>
+          <span>Conecta la V8 por USB y actívala para grabar con el BM800.</span>
+        </div>
+        <button id="btn-activate-input" class="btn btn--primary btn--sm" type="button">Activar micrófono</button>
+      </div>
+
       <div id="input-strip" class="input-strip" hidden>
         <div class="input-strip__row">
           <span class="input-strip__label" id="input-strip-label">Entrada</span>
@@ -222,6 +230,10 @@
     <div class="statusbar__group statusbar__group--right">
       <span id="status-engine" class="status-item">Motor detenido</span>
       <button id="btn-diagnostics" class="btn btn--ghost btn--sm">Diagnóstico</button>
+      <button id="btn-settings" class="btn btn--ghost btn--sm" title="Configuración del estudio" aria-label="Configuración del estudio">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 13.5a7.6 7.6 0 000-3l1.8-1.3-2-3.4-2.1.9a7.6 7.6 0 00-2.6-1.5L14.2 3H9.8l-.3 2.2a7.6 7.6 0 00-2.6 1.5l-2.1-.9-2 3.4L4.6 10.5a7.6 7.6 0 000 3l-1.8 1.3 2 3.4 2.1-.9a7.6 7.6 0 002.6 1.5l.3 2.2h4.4l.3-2.2a7.6 7.6 0 002.6-1.5l2.1.9 2-3.4-1.8-1.3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <span class="btn__label">Ajustes</span>
+      </button>
       <button id="btn-projects" class="btn btn--ghost btn--sm">Proyectos</button>
       <button id="btn-export" class="btn btn--primary btn--sm">Exportar</button>
     </div>
@@ -396,6 +408,24 @@
       <p id="storage-info" class="hint"></p>
     </div>
     <footer class="dialog__foot">
+      <button class="btn btn--ghost" value="close">Cerrar</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ===================== Diálogo: configuración ===================== -->
+<dialog id="dialog-settings" class="dialog dialog--wide">
+  <form method="dialog" class="dialog__form">
+    <header class="dialog__head">
+      <h2>Configuración del estudio</h2>
+      <button class="dialog__close" value="close" aria-label="Cerrar">✕</button>
+    </header>
+    <div class="dialog__body">
+      <div id="settings-sections" class="settings-sections"></div>
+    </div>
+    <footer class="dialog__foot">
+      <button type="button" id="btn-settings-reset" class="btn btn--ghost">Restaurar valores de fábrica</button>
+      <span class="hint dialog__foot-note">Los cambios se guardan solos.</span>
       <button class="btn btn--ghost" value="close">Cerrar</button>
     </footer>
   </form>

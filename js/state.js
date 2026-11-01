@@ -8,6 +8,7 @@
 
 import { uid } from './util/format.js';
 import { FX_DEFAULTS, MASTER_DEFAULTS } from './audio/track-chain.js';
+import { getSettings, parseTimeSig } from './state/settings.js';
 
 export const TRACK_COLORS = [
   '#5b8fb9',
@@ -39,12 +40,14 @@ export function createTrack(overrides = {}) {
 
 /** Proyecto nuevo con dos pistas listas para grabar. */
 export function createProject(name = 'Sesión sin título') {
+  // Un proyecto nuevo hereda los valores configurados en Ajustes.
+  const prefs = getSettings();
   return {
     id: uid('prj'),
     name,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    sampleRate: 48000,
+    sampleRate: prefs.sampleRate ?? 48000,
     tracks: [
       createTrack({ name: 'Voz principal', colorIndex: 0 }),
       createTrack({ name: 'Dobles', colorIndex: 1 }),
@@ -59,16 +62,16 @@ export function createProject(name = 'Sesión sin título') {
       delayReturn: 0.8,
     },
     session: {
-      bpm: 120,
-      timeSig: [4, 4],
-      metronome: { on: false, volume: 0.55 },
+      bpm: prefs.bpm ?? 120,
+      timeSig: parseTimeSig(prefs.timeSig),
+      metronome: { on: Boolean(prefs.metronomeOn), volume: prefs.metronomeVolume ?? 0.55 },
       loop: { on: false, start: 0, end: 8 },
       snap: 0,
       zoom: 80, // píxeles por segundo
-      countInBeats: 4,
+      countInBeats: prefs.countInBeats ?? 4,
       latencyOffset: 0, // ms añadidos a la compensación automática
       recordChannels: 1,
-      monitor: false,
+      monitor: Boolean(prefs.monitor),
     },
   };
 }
