@@ -707,6 +707,26 @@ input[type="range"].fader-v::-webkit-slider-thumb {
 .toast--ok { border-left-color: var(--green); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
+/* ---------------------------------------------------------------- Navegación móvil */
+/* En el teléfono se ve un panel a la vez; en el ordenador no existe. */
+.mobile-nav { display: none; }
+.mobile-tab {
+  flex: 1 1 0;
+  padding: 9px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: #14181b;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.mobile-tab.is-active {
+  color: var(--text);
+  background: #1d2327;
+  border-color: #2d363c;
+}
+
 /* ---------------------------------------------------------------- Responsive */
 @media (max-width: 1240px) {
   .workspace { grid-template-columns: 266px minmax(0, 1fr) 300px; }
@@ -720,16 +740,33 @@ input[type="range"].fader-v::-webkit-slider-thumb {
   .setup-grid, .export-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
-  .app { grid-template-rows: auto minmax(0, 1fr) auto; }
+  .app { grid-template-rows: auto auto minmax(0, 1fr) auto; }
   .topbar { padding: 6px 8px; gap: 8px; }
   .topbar__project { display: none; }
   .topbar__meters { display: none; }
-  .workspace { grid-template-columns: 1fr; }
-  .panel--tracks { display: none; }
   .statusbar { flex-wrap: wrap; font-size: 10px; }
   .statusbar__group { gap: 6px; }
   .shortcuts { grid-template-columns: 1fr; }
   .dialog, .dialog--wide { width: calc(100vw - 16px); }
+
+  /* Un panel a la vez, elegido con la barra de navegación. */
+  .mobile-nav {
+    display: flex;
+    gap: 6px;
+    padding: 6px 8px;
+    background: #101315;
+    border-bottom: 1px solid var(--line);
+  }
+  .workspace { grid-template-columns: 1fr; }
+  .panel--tracks, .panel--inspector, .arrange { display: none; }
+  .workspace[data-view='tracks'] .panel--tracks { display: flex; }
+  .workspace[data-view='editor'] .arrange { display: flex; }
+  .workspace[data-view='inspector'] .panel--inspector { display: flex; }
+  .app--mix .workspace[data-view='inspector'] .panel--inspector { display: flex; }
+
+  /* Dedos, no ratón: objetivos de toque más cómodos. */
+  .tbtn, .chip, .btn, .tool { min-height: 34px; }
+  .track-list { padding-bottom: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

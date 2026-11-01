@@ -74,8 +74,15 @@
     </div>
   </header>
 
+  <!-- ===================== Navegación (solo en teléfono) ===================== -->
+  <nav class="mobile-nav" aria-label="Paneles del estudio">
+    <button class="mobile-tab" data-view="tracks" type="button">Pistas</button>
+    <button class="mobile-tab is-active" data-view="editor" type="button">Editor</button>
+    <button class="mobile-tab" data-view="inspector" type="button">Canal</button>
+  </nav>
+
   <!-- ===================== Área principal ===================== -->
-  <main class="workspace">
+  <main class="workspace" data-view="editor">
 
     <!-- Pistas -->
     <aside class="panel panel--tracks" aria-label="Pistas">

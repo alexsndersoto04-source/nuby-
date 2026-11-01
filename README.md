@@ -13,7 +13,28 @@ se exporta (la mezcla se recalcula con la misma cadena de efectos).
 
 ## Cómo usarlo
 
-### Opción A — descargar y abrir con doble clic (sin instalar nada)
+### Opción A — instalar la app en Android (APK)
+
+1. Entra en la pestaña **Actions** del repositorio y abre el workflow
+   **"Compilar APK"**.
+2. Pulsa **Run workflow** (rama `main`) y espera unos minutos.
+3. Al terminar, descarga **Nuby-Studio.apk** desde *Artifacts* — o, si la
+   compilación vino de `main`, desde **Releases** (`Nuby Studio — APK`), que no
+   pide cuenta.
+4. Abre el archivo en el teléfono y acepta instalar desde "origen desconocido".
+   Es un APK **firmado**; las versiones siguientes se instalan encima sin
+   desinstalar.
+
+La app es la misma que esta web, dentro de un contenedor nativo: el teléfono no
+necesita internet ni servidor. Los archivos exportados se guardan en
+**Descargas/Nuby Studio**. Al ser una pantalla pequeña, abajo aparece una barra
+con **Pistas · Editor · Canal** para cambiar de panel.
+
+En Android el audio llega por la entrada USB de la V8 (con el cable OTG
+correspondiente) o por el micrófono del teléfono. Si el teléfono no detecta la
+V8, revisa en el diálogo **Micrófono** que esté elegida como entrada.
+
+### Opción B — abrir la web en el ordenador
 
 1. Descarga `Nuby-Studio-1.0.zip` (se genera con `python3 tools/empaquetar.py`).
 2. Descomprímelo y ejecuta el lanzador de tu sistema:
@@ -28,14 +49,14 @@ El lanzador hace falta porque los navegadores solo permiten micrófono y
 `AudioWorklet` en `localhost` o HTTPS: abriendo `index.html` con doble clic
 (`file://`) el micrófono queda bloqueado.
 
-### Opción B — servidor de desarrollo
+### Opción C — servidor de desarrollo
 
 ```bash
 npm install        # solo para las pruebas automáticas
 npm run dev        # http://localhost:4173
 ```
 
-### Opción C — publicarlo como sitio (GitHub Pages, Netlify, etc.)
+### Opción D — publicarlo como sitio (GitHub Pages, Netlify, etc.)
 
 Es un sitio 100 % estático: basta con subir el contenido del repositorio. En este
 repositorio GitHub Pages ya está configurado para servir la rama `main` en
@@ -43,12 +64,9 @@ repositorio GitHub Pages ya está configurado para servir la rama `main` en
 app queda disponible en esa dirección y se puede **instalar como aplicación**
 desde Chrome (menú > Instalar Nuby Studio), también en Android.
 
-Abre la dirección en **Chrome, Edge o Firefox** de escritorio. El micrófono exige
-un contexto seguro: `localhost` o HTTPS.
-
-También se puede publicar como sitio estático (GitHub Pages, Netlify, etc.):
-no hay backend, todo ocurre en el equipo del usuario. Al ser una PWA se puede
-instalar y usar sin conexión.
+Abre la dirección en **Chrome, Edge o Firefox**. El micrófono exige un contexto
+seguro: `localhost` o HTTPS. No hay backend, todo ocurre en el propio equipo, y
+al ser una PWA se puede instalar y usar sin conexión.
 
 ### Primeros pasos con el BM800 + V8
 
@@ -124,6 +142,33 @@ Usa **auriculares** si vas a monitorizar: con altavoces el micrófono acopla.
 - Funcionamiento sin conexión e instalación como aplicación (PWA).
 
 ---
+
+## La app Android (carpeta `android/`)
+
+El APK no es otra aplicación: es este mismo estudio dentro de un `WebView`. El
+contenedor nativo (`android/app/src/main/java/com/nuby/studio/MainActivity.java`)
+solo añade lo que el navegador no puede dar:
+
+| Necesidad | Cómo se resuelve |
+| --- | --- |
+| Micrófono y `AudioWorklet` | Los archivos se sirven como `https://localhost/...` interceptando las peticiones: es un *origen seguro*, así que `getUserMedia` y los worklets funcionan. Con `file://` no funcionarían. |
+| Permiso de micrófono | `RECORD_AUDIO` al arrancar y concesión del permiso al `WebView` en `onPermissionRequest`. |
+| Exportar MP3/WAV | Los archivos no se pueden descargar desde un `WebView`: JavaScript envía el `Blob` por el puente `window.NubyNative` y Java lo escribe en **Descargas/Nuby Studio** (`MediaStore` en Android 10+, carpeta pública en versiones anteriores). |
+| Importar audio | Selector de archivos nativo (`onShowFileChooser`). |
+| Grabaciones largas | Pantalla siempre encendida (`FLAG_KEEP_SCREEN_ON`) y `largeHeap`. |
+| Pantalla pequeña | Barra **Pistas · Editor · Canal** para ver un panel a la vez. |
+| Botón atrás | Cierra el diálogo abierto; si no hay ninguno, deja la app en segundo plano sin perder la sesión. |
+
+El `Gradle` copia `index.html`, `css/`, `js/` y `assets/` dentro de
+`assets/www` en cada compilación, así que el APK siempre lleva la última versión
+del estudio sin duplicar código en el repositorio.
+
+**Firma.** `android/nuby-release.p12` es la clave con la que se firma el APK
+(contraseña `nuby-studio-apk`, alias `nuby`). Al ser siempre la misma, las
+actualizaciones se instalan encima de la versión anterior. Está en el repositorio
+a propósito para que GitHub Actions pueda firmar sin configurar secretos; si
+alguna vez publicas la app en Google Play, genera tu propia clave y no compartas
+esta.
 
 ## Cómo está construido
 

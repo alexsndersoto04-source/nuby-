@@ -284,8 +284,32 @@ export function fillSelect(select, options, selectedValue) {
   }
 }
 
-/** Descarga un Blob como archivo. */
+/** ¿Estamos dentro de la app Android? (el contenedor nativo inyecta `NubyNative`). */
+export function isNativeApp() {
+  return Boolean(typeof window !== 'undefined' && window.NubyNative && window.NubyNative.isAndroid?.());
+}
+
+/** Convierte bytes a base64 sin reventar la pila con archivos grandes. */
+function bytesToBase64(bytes) {
+  if (typeof btoa !== 'function') throw new Error('btoa no disponible');
+  let binary = '';
+  const step = 0x8000;
+  for (let index = 0; index < bytes.length; index += step) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(index, index + step));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Guarda un Blob como archivo.
+ * - En la app Android lo escribe el código nativo en Descargas/Nuby Studio,
+ *   porque las descargas del navegador no existen dentro de un WebView.
+ * - En un navegador usa la descarga normal.
+ * Devuelve una promesa (se puede ignorar: los botones no esperan).
+ */
 export function downloadBlob(blob, filename) {
+  if (isNativeApp()) return saveToAndroid(blob, filename);
+
   const url = URL.createObjectURL(blob);
   const link = h('a', { href: url, download: filename, style: { display: 'none' } });
   document.body.appendChild(link);
@@ -294,6 +318,37 @@ export function downloadBlob(blob, filename) {
     link.remove();
     URL.revokeObjectURL(url);
   }, 4000);
+  return Promise.resolve(filename);
+}
+
+/** Escribe el archivo en el almacenamiento del teléfono a través del puente nativo. */
+async function saveToAndroid(blob, filename) {
+  const bridge = window.NubyNative;
+  const safeName = String(filename || 'nuby-export').replace(/[\\/:*?"<>|]/g, '-');
+  const mime = blob.type || (/\.wav$/i.test(safeName) ? 'audio/wav' : 'audio/mpeg');
+
+  if (!bridge.start(safeName, mime)) {
+    toast('No se pudo crear el archivo en el teléfono', 'error', 8000);
+    throw new Error('El almacenamiento del teléfono rechazó el archivo');
+  }
+
+  try {
+    const CHUNK = 512 * 1024;
+    for (let offset = 0; offset < blob.size; offset += CHUNK) {
+      const slice = blob.slice(offset, offset + CHUNK);
+      const buffer = await slice.arrayBuffer();
+      bridge.chunk(bytesToBase64(new Uint8Array(buffer)));
+      // Cede el hilo para que la interfaz siga respondiendo en archivos grandes.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const location = bridge.finish();
+    toast(`Guardado en ${location}`, 'ok', 7000);
+    return location;
+  } catch (error) {
+    bridge.abort();
+    toast(`No se pudo guardar el archivo: ${error.message}`, 'error', 8000);
+    throw error;
+  }
 }
 
 /** Escapa texto para insertarlo en HTML (por si se usa innerHTML con contenido dinámico). */

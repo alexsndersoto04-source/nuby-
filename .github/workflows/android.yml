@@ -1,0 +1,84 @@
+name: Compilar APK
+
+# Genera el APK instalable de Nuby Studio.
+# Se puede lanzar a mano desde la pestaña "Actions" → "Compilar APK" → "Run workflow".
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: APK instalable
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Preparar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar plataforma Android 34
+        run: |
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null
+          echo "SDK listo"
+
+      - name: Preparar Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Comprobar la firma del APK
+        working-directory: android
+        run: |
+          keytool -list -keystore nuby-release.p12 -storetype PKCS12 \
+                  -storepass nuby-studio-apk -alias nuby
+
+      - name: Compilar APK firmado
+        working-directory: android
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Renombrar y comprobar
+        working-directory: android
+        run: |
+          set -e
+          SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "APK generado: $SRC"
+          cp "$SRC" ../Nuby-Studio.apk
+          ls -lh ../Nuby-Studio.apk
+          # Comprobación real: el APK debe estar firmado y contener el estudio.
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs ../Nuby-Studio.apk | head -n 5
+          unzip -l ../Nuby-Studio.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)' || {
+            echo "ERROR: el APK no contiene la aplicación web"; exit 1; }
+
+      - name: Guardar el APK como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuby-Studio-APK
+          path: Nuby-Studio.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publicar el APK para descarga directa
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk
+          name: Nuby Studio — APK
+          body: |
+            APK firmado de Nuby Studio, generado automáticamente desde la rama principal.
+            Descarga **Nuby-Studio.apk** en "Assets" e instálalo en el teléfono.
+          files: Nuby-Studio.apk
+          make_latest: true

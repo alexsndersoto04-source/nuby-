@@ -21,7 +21,7 @@ import { TrackStrips } from './strips.js';
 import { TimelineView } from './timeline.js';
 import { Inspector } from './inspector.js';
 import { Dialogs } from './dialogs.js';
-import { h, clear, toast, openDialog, drawMeter } from './dom.js';
+import { h, clear, toast, openDialog, drawMeter, isNativeApp } from './dom.js';
 import { formatTime, formatDb, uid, clamp } from '../util/format.js';
 
 /** Crea un AudioBuffer sin AudioContext (navegadores modernos y respaldo). */
@@ -1169,7 +1169,35 @@ export class StudioApp {
       });
     });
 
+    this.bindMobileNav();
     this.addImportButton();
+  }
+
+  /**
+   * Barra de navegación del teléfono: en pantallas pequeñas solo cabe un panel.
+   * En el ordenador esta barra está oculta y no cambia nada.
+   */
+  bindMobileNav() {
+    const nav = document.querySelector('.mobile-nav');
+    const workspace = document.querySelector('.workspace');
+    if (!nav || !workspace) return;
+    const tabs = [...nav.querySelectorAll('.mobile-tab')];
+    const select = (view) => {
+      workspace.dataset.view = view;
+      for (const tab of tabs) {
+        const active = tab.dataset.view === view;
+        tab.classList.toggle('is-active', active);
+        tab.setAttribute('aria-selected', String(active));
+      }
+      // Al cambiar de panel el lienzo necesita saber su ancho real.
+      if (view === 'editor') {
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+      }
+    };
+    for (const tab of tabs) {
+      tab.addEventListener('click', () => select(tab.dataset.view || 'editor'));
+    }
+    select(workspace.dataset.view || 'editor');
   }
 
   addImportButton() {
@@ -1302,6 +1330,9 @@ export class StudioApp {
   }
 
   registerServiceWorker() {
+    // En la app Android los archivos ya viven dentro del teléfono: un service
+    // worker solo serviría versiones antiguas después de actualizar.
+    if (isNativeApp()) return;
     if (!('serviceWorker' in navigator)) return;
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').catch((error) => {
