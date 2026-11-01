@@ -145,8 +145,13 @@ jobs:
   # Prueba real: instala el APK en un Android de verdad (emulador) y comprueba
   # que la interfaz del estudio se carga sin errores.
   prueba:
-    name: Prueba en Android real
+    name: Prueba en Android real (opcional)
     needs: apk
+    # Arrancar un emulador de Android dentro de un runner es lento y depende de
+    # la virtualización del servidor: por eso es una prueba manual y no bloquea
+    # la entrega del APK. Lánzala desde "Actions" → "Run workflow".
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

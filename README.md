@@ -19,8 +19,8 @@ se exporta (la mezcla se recalcula con la misma cadena de efectos).
    **"Compilar APK"**.
 2. Pulsa **Run workflow** (rama `main`) y espera unos minutos.
 3. Al terminar, descarga **Nuby-Studio.apk** desde *Artifacts* — o, si la
-   compilación vino de `main`, desde **Releases** (`Nuby Studio — APK`), que no
-   pide cuenta.
+   compilación vino de `main`, desde **Releases**, que no pide cuenta:
+   <https://github.com/alexsndersoto04-source/nuby-/releases/download/apk/Nuby-Studio.apk>
 4. Abre el archivo en el teléfono y acepta instalar desde "origen desconocido".
    Es un APK **firmado**; las versiones siguientes se instalan encima sin
    desinstalar.
@@ -162,6 +162,12 @@ solo añade lo que el navegador no puede dar:
 El `Gradle` copia `index.html`, `css/`, `js/` y `assets/` dentro de
 `assets/www` en cada compilación, así que el APK siempre lleva la última versión
 del estudio sin duplicar código en el repositorio.
+
+El workflow **"Compilar APK"** (`.github/workflows/android.yml`) compila, firma y
+comprueba el APK en cada envío de código, e incluye una prueba opcional que
+instala el APK en un emulador de Android para verificar que la interfaz arranca
+(se lanza a mano desde *Actions › Compilar APK › Run workflow*; no bloquea la
+entrega porque depende de la virtualización del servidor).
 
 **Firma.** `android/nuby-release.p12` es la clave con la que se firma el APK
 (contraseña `nuby-studio-apk`, alias `nuby`). Al ser siempre la misma, las
