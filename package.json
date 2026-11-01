@@ -1,0 +1,19 @@
+{
+  "name": "nuby-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Estudio de grabación multitrack en el navegador con grabación real, efectos, mezcla y exportación WAV/MP3.",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "test": "node --test tests/core.test.mjs tests/ui.test.mjs tests/transport.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.7",
+    "jsdom": "^30.1.3"
+  }
+}

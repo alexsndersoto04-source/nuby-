@@ -1,0 +1,278 @@
+name: Compilar APK
+
+# Genera el APK instalable de Nuby Studio.
+# Se puede lanzar a mano desde la pestaña "Actions" → "Compilar APK" → "Run workflow".
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # Cualquier fallo se publica como anotación legible, no solo como log.
+  GRADLE_OPTS: >-
+    -Dorg.gradle.daemon=false
+    -Dorg.gradle.jvmargs=-Xmx3g
+    -Dorg.gradle.console=plain
+
+jobs:
+  apk:
+    name: APK instalable
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Preparar Android SDK
+        run: |
+          set -uo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          log=/tmp/sdk.log
+          {
+            SDKMANAGER=$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")
+            echo "sdkmanager: $SDKMANAGER"
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+            ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+          } > "$log" 2>&1
+          status=$?
+          tail -n 20 "$log"
+          if [ "$status" -ne 0 ]; then
+            msg=$(tail -n 20 "$log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::No se pudo preparar el SDK de Android: $msg"
+            exit "$status"
+          fi
+
+      - name: Preparar Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Comprobar la firma del APK
+        working-directory: android
+        run: |
+          set -uo pipefail
+          log=/tmp/firma.log
+          { keytool -list -keystore nuby-release.p12 -storetype PKCS12 \
+                     -storepass nuby-studio-apk -alias nuby; } > "$log" 2>&1
+          status=$?
+          tail -n 20 "$log"
+          if [ "$status" -ne 0 ]; then
+            msg=$(tail -n 20 "$log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::El almacén de claves no se pudo leer: $msg"
+            exit "$status"
+          fi
+
+      - name: Compilar APK firmado
+        working-directory: android
+        run: |
+          set -uo pipefail
+          log=/tmp/gradle.log
+          gradle --no-daemon --stacktrace assembleRelease > "$log" 2>&1
+          status=$?
+          tail -n 40 "$log"
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -iE "error|fail|caused by|what went wrong" -A 3 "$log" | head -n 40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::Gradle falló: $msg"
+            exit "$status"
+          fi
+
+      - name: Renombrar y comprobar
+        working-directory: android
+        run: |
+          set -euo pipefail
+          SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "APK generado: $SRC"
+          cp "$SRC" ../Nuby-Studio.apk
+          ls -lh ../Nuby-Studio.apk
+          # Comprobación real: el APK debe estar firmado y contener el estudio.
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs ../Nuby-Studio.apk | head -n 5
+          unzip -l ../Nuby-Studio.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)'
+
+      - name: Inspeccionar el APK
+        working-directory: android
+        run: |
+          set +e
+          AAPT="${ANDROID_HOME}/build-tools/34.0.0/aapt2"
+          PACKAGE=$("$AAPT" dump badging ../Nuby-Studio.apk 2>&1 | grep "^package:" | head -n 1)
+          ACTIVITY=$("$AAPT" dump badging ../Nuby-Studio.apk 2>&1 | grep "launchable-activity" | head -n 1)
+          PERMISOS=$("$AAPT" dump permissions ../Nuby-Studio.apk 2>&1 | grep "uses-permission" | sed 's/uses-permission: name=//' | tr -d "'" | tr '\n' ' ')
+          ARCHIVOS=$(unzip -l ../Nuby-Studio.apk | grep -c "assets/www/")
+          PESO=$(du -h ../Nuby-Studio.apk | cut -f1)
+          echo "::warning::APK $PACKAGE"
+          echo "::warning::APK $ACTIVITY"
+          echo "::warning::APK permisos: $PERMISOS"
+          echo "::warning::APK archivos web incluidos: $ARCHIVOS · tamaño: $PESO"
+          firma=$("$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs ../Nuby-Studio.apk 2>&1 | grep -i "sha-256" | head -n 1)
+          echo "::warning::APK firma: $firma"
+          grep -q "com.nuby.studio" <<< "$PACKAGE" || { echo "::error::El paquete del APK no es el esperado"; exit 1; }
+          [ "$ARCHIVOS" -ge 30 ] || { echo "::error::Faltan archivos del estudio en el APK"; exit 1; }
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify ../Nuby-Studio.apk \
+            || { echo "::error::El APK no está firmado correctamente"; exit 1; }
+
+      - name: Guardar el APK como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuby-Studio-APK
+          path: Nuby-Studio.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publicar el APK para descarga directa
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk
+          name: Nuby Studio — APK
+          body: |
+            APK firmado de Nuby Studio, generado automáticamente desde la rama principal.
+            Descarga **Nuby-Studio.apk** en "Assets" e instálalo en el teléfono.
+          files: Nuby-Studio.apk
+          make_latest: true
+
+  # Prueba real: instala el APK en un Android de verdad (emulador) y comprueba
+  # que la interfaz del estudio se carga sin errores.
+  prueba:
+    name: Prueba en Android real (opcional)
+    needs: apk
+    # Arrancar un emulador de Android dentro de un runner es lento y depende de
+    # la virtualización del servidor: por eso es una prueba manual y no bloquea
+    # la entrega del APK. Lánzala desde "Actions" → "Run workflow".
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Descargar el APK
+        uses: actions/download-artifact@v4
+        with:
+          name: Nuby-Studio-APK
+
+      - name: Comprobar el entorno del emulador
+        run: |
+          set +e
+          {
+            echo "--- /dev/kvm ---"
+            ls -l /dev/kvm
+            echo "--- virtualización en la CPU (# de flags) ---"
+            grep -c -E 'vmx|svm' /proc/cpuinfo
+            echo "--- ANDROID_HOME ---"
+            echo "$ANDROID_HOME"
+            ls "$ANDROID_HOME"
+            echo "--- plataformas instaladas ---"
+            ls "$ANDROID_HOME/platforms" 2>&1
+            echo "--- imágenes de sistema ---"
+            ls "$ANDROID_HOME/system-images" 2>&1
+            echo "--- memoria y CPUs ---"
+            nproc
+            free -m | head -n 2
+            echo "--- APK ---"
+            ls -lh Nuby-Studio.apk
+          } > /tmp/diag.txt 2>&1
+          cat /tmp/diag.txt
+          # Las anotaciones sí se pueden leer desde fuera, aunque el log no.
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::warning::DIAG $line"
+          done < /tmp/diag.txt
+
+      - name: Activar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Arrancar el emulador
+        run: |
+          set +e
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          IMAGE="system-images;android-30;default;x86_64"
+          log=/tmp/emulador.log
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER=$(command -v sdkmanager)
+          AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          [ -x "$AVDMANAGER" ] || AVDMANAGER=$(command -v avdmanager)
+          echo "sdkmanager=$SDKMANAGER avdmanager=$AVDMANAGER" > "$log"
+
+          {
+            echo "### instalando imagen del sistema"
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1
+            "$SDKMANAGER" --install "$IMAGE" "emulator" "platform-tools"
+            echo "### creando dispositivo"
+            echo no | "$AVDMANAGER" create avd -n nuby -k "$IMAGE" --device "pixel_5" --force
+            echo "### arrancando"
+            nohup "$ANDROID_HOME/emulator/emulator" -avd nuby -no-window -no-snapshot \
+                  -no-boot-anim -gpu off -no-audio -camera-back none -camera-front none \
+                  > /tmp/emulador-salida.log 2>&1 &
+            adb start-server
+            adb wait-for-device
+            for i in $(seq 1 60); do
+              BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+              if [ "$BOOT" = "1" ]; then echo "### arrancado tras ${i}0 s"; break; fi
+              if ! pgrep -f "emulator -avd nuby" > /dev/null; then
+                echo "### el emulador terminó antes de arrancar"; break
+              fi
+              sleep 10
+            done
+            echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
+            adb devices -l
+          } >> "$log" 2>&1
+
+          cat "$log"
+          if ! grep -q 'boot_completed=1' "$log"; then
+            tail -n 20 "$log" | while IFS= read -r line; do [ -n "$line" ] && echo "::error::EMULADOR $line"; done
+            tail -n 20 /tmp/emulador-salida.log 2>/dev/null | while IFS= read -r line; do [ -n "$line" ] && echo "::error::SALIDA $line"; done
+            exit 1
+          fi
+
+      - name: Instalar y probar Nuby Studio
+        run: |
+          set +e
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          log=/tmp/prueba.log
+          {
+            adb install -r Nuby-Studio.apk
+            adb shell pm grant com.nuby.studio android.permission.RECORD_AUDIO || true
+            adb shell am start -W -n com.nuby.studio/.MainActivity
+            sleep 35
+            echo "--- proceso vivo ---"
+            adb shell pidof com.nuby.studio
+            adb logcat -d -s NubyStudio:* NubyJS:* > logcat.txt || true
+            cat logcat.txt
+            adb exec-out screencap -p > pantalla.png || true
+            ls -l pantalla.png
+          } > "$log" 2>&1
+          cat "$log"
+          if ! grep -q "NUBY-OK" logcat.txt 2>/dev/null; then
+            tail -n 40 "$log" | while IFS= read -r line; do [ -n "$line" ] && echo "::error::PRUEBA $line"; done
+            grep -iE "fatal|exception|error" logcat.txt 2>/dev/null | head -n 20 | while IFS= read -r line; do echo "::error::LOGCAT $line"; done
+            exit 1
+          fi
+          echo "La interfaz del estudio se cargó correctamente en Android."
+          adb logcat -d -s AndroidRuntime:E | head -n 5
+
+      - name: Guardar la captura de pantalla
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuby-Studio-captura
+          path: |
+            pantalla.png
+            logcat.txt
+          if-no-files-found: warn
