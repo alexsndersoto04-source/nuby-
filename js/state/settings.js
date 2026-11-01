@@ -17,6 +17,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({
   inputGain: 1,
   monitor: false,
   autoGainTakes: true,
+  phoneMicProcessing: true,
   // Grabación
   countInBeats: 4,
   metronomeOn: true,
@@ -68,6 +69,12 @@ export const SETTINGS_SECTIONS = [
         max: 8,
         step: 0.05,
         unit: '×',
+      },
+      {
+        key: 'phoneMicProcessing',
+        label: 'Reducir eco en el micrófono del teléfono',
+        hint: 'Activa la cancelación de eco y la limpieza del navegador cuando la entrada es la del teléfono. Con una V8 (USB) se desactiva sola para no perder calidad.',
+        type: 'toggle',
       },
       {
         key: 'autoGainTakes',
