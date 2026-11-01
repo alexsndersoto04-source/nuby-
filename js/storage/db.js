@@ -153,8 +153,12 @@ export async function collectGarbage() {
 /** Espacio usado y disponible (si el navegador lo informa). */
 export async function storageEstimate() {
   if (!navigator.storage?.estimate) return null;
-  const { usage, quota } = await navigator.storage.estimate();
-  return { usage, quota };
+  try {
+    const { usage, quota } = await navigator.storage.estimate();
+    return { usage, quota };
+  } catch {
+    return null;
+  }
 }
 
 /** ¿La app está instalada / en modo autónomo? */

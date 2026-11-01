@@ -494,6 +494,15 @@ export class StudioEngine {
     return analyseSamples(data);
   }
 
+  /** Reinicia la integración del medidor LUFS (al empezar una pasada). */
+  resetLufs() {
+    try {
+      this.lufsNode?.port.postMessage({ type: 'reset' });
+    } catch {
+      /* sin medidor */
+    }
+  }
+
   readLimiterReduction() {
     return this.limiterReduction ?? 0;
   }

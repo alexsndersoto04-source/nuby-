@@ -631,6 +631,7 @@ export class StudioApp {
   }
 
   seek(position) {
+    if (this.transport?.state === 'recording' || this.transport?.state === 'count-in') return;
     const target = Math.max(0, position);
     this.playheadPosition = target;
     if (this.transport?.isPlaying()) {
@@ -693,6 +694,7 @@ export class StudioApp {
       return;
     }
     this.engine.setArmedTracks(this.project.tracks.filter((t) => t.armed).map((t) => t.id));
+    this.engine.resetLufs();
     this.transport.play(this.playheadPosition);
     this.els.statusEngine.textContent = 'Reproduciendo';
   }

@@ -26,6 +26,17 @@ class LufsProcessor extends AudioWorkletProcessor {
     this.integrated = -Infinity;
     this.samplePeak = 0;
     this.reportCounter = 0;
+
+    this.port.onmessage = (event) => {
+      if (event.data?.type === 'reset') {
+        this.history = [];
+        this.blockLoudness = [];
+        this.integrated = -Infinity;
+        this.hopEnergy = 0;
+        this.hopCount = 0;
+        this.samplePeak = 0;
+      }
+    };
   }
 
   process(inputs, outputs) {
