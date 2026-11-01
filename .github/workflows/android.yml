@@ -125,7 +125,6 @@ jobs:
   prueba:
     name: Prueba en Android real
     needs: apk
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
