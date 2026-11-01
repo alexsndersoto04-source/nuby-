@@ -16,6 +16,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({
   channelMode: 'mono-left',
   inputGain: 1,
   monitor: false,
+  autoGainTakes: true,
   // Grabación
   countInBeats: 4,
   metronomeOn: true,
@@ -61,12 +62,18 @@ export const SETTINGS_SECTIONS = [
       {
         key: 'inputGain',
         label: 'Ganancia de entrada',
-        hint: 'Se multiplica la señal antes de la pista. 1× es neutro.',
+        hint: 'La V8 suele entregar señal baja: +12 dB (4×) es normal. 1× es neutro.',
         type: 'number',
         min: 0.1,
-        max: 4,
+        max: 8,
         step: 0.05,
         unit: '×',
+      },
+      {
+        key: 'autoGainTakes',
+        label: 'Nivelar las tomas al grabar',
+        hint: 'Si la toma llega baja, se le aplica ganancia hasta dejarla audible (sin comprimir ni recortar).',
+        type: 'toggle',
       },
       {
         key: 'monitor',

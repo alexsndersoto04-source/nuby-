@@ -320,9 +320,11 @@ export class StudioApp {
 
   /** Ganancia de entrada desde cualquier sitio (ajustes, pista, diálogo). */
   setInputGain(value) {
-    const gain = Math.max(0.05, Number(value) || 1);
+    const gain = Math.max(0.05, Math.min(8, Number(value) || 1));
     this.inputGain = gain;
-    if (this.els?.inputGain) this.els.inputGain.value = String(Math.min(2, gain));
+    if (this.els?.inputGain) this.els.inputGain.value = String(gain);
+    const label = document.getElementById('input-gain-label');
+    if (label) label.textContent = `Ganancia ${formatDb(20 * Math.log10(gain))}`;
     this.engine?.setInputGain(gain);
     return gain;
   }
@@ -819,6 +821,7 @@ export class StudioApp {
       console.warn('Toma silenciosa', { source: result.source, frames });
     }
     this.lastRecordingPeak = peak;
+    const peakDb = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
 
     const bufferId = uid('buf');
     this.buffers.set(bufferId, buffer);
@@ -844,6 +847,30 @@ export class StudioApp {
       fadeIn: 0.005,
       fadeOut: 0.01,
     });
+    // La V8 entrega la señal baja: si la toma quedó floja se le da ganancia
+    // (un solo ajuste lineal, sin comprimir ni recortar) hasta −6 dBFS de pico.
+    const targetPeak = 0.5; // ≈ −6 dBFS
+    if (getSetting('autoGainTakes') !== false && peak > 1e-5 && peak < targetPeak) {
+      clip.gain = Math.min(8, targetPeak / peak);
+      const applied = 20 * Math.log10(clip.gain);
+      toast(
+        `Nivel de la toma ajustado ${applied >= 0 ? '+' : ''}${applied.toFixed(1)} dB (entró a ${formatDb(peakDb)})`,
+        'ok',
+        6000
+      );
+    } else if (peak > 1e-5) {
+      toast(`Toma grabada · pico ${formatDb(peakDb)}`, 'ok', 4000);
+    }
+
+    if (peak > 1e-5 && peakDb < -30) {
+      toast(
+        'La V8 está entregando muy poca señal. Sube el gain de la tarjeta (y revisa +48V), ' +
+          'o sube «Ganancia» en la tira de entrada.',
+        'warn',
+        9000
+      );
+    }
+
     this.project.clips.push(clip);
     this.selectedClipId = clip.id;
     this.seek(start);
@@ -1188,8 +1215,7 @@ export class StudioApp {
     });
 
     document.getElementById('input-gain').addEventListener('input', (event) => {
-      this.inputGain = Number(event.target.value);
-      this.engine?.setInputGain(this.inputGain);
+      this.setInputGain(Number(event.target.value));
       const setup = document.getElementById('setup-gain');
       if (setup) setup.value = event.target.value;
     });
@@ -1199,6 +1225,17 @@ export class StudioApp {
       this.engine?.setMonitoring(Boolean(this.project.session.monitor));
       this.syncInputButton();
       this.markDirty();
+      if (this.project.session.monitor && !this.monitorWarningShown) {
+        this.monitorWarningShown = true;
+        const latency = this.engine?.getLatencyInfo?.();
+        const ms = latency ? Math.round((latency.total ?? 0) * 1000) : 0;
+        toast(
+          `Escucha activada${ms ? ` (${ms} ms de retardo)` : ''}. Usa cascos y, si grabas con la V8, ` +
+            'apaga esta escucha y usa el monitor directo de la tarjeta: es instantáneo y no acopla.',
+          'warn',
+          9000
+        );
+      }
     });
 
     document.getElementById('tool-select').addEventListener('click', () => this.setTool('select'));

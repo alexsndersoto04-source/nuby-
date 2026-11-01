@@ -70,6 +70,9 @@ test('grabar una toma crea un clip alineado y guarda el audio', async () => {
   assert.ok(app.buffers.has(clip.bufferId), 'el buffer debe estar en memoria');
   assert.ok(app.peaks.has(clip.bufferId), 'deben calcularse los picos');
   assert.ok(clip.start <= 2.01, 'la toma se coloca en el cabezal con compensación de latencia');
+  // La señal de prueba entra a 0,3 (−10 dBFS): se nivela hasta ≈ −6 dBFS.
+  assert.ok(clip.gain > 1, `la toma baja debe nivelarse (ganancia ${clip.gain})`);
+  assert.ok(clip.gain <= 8, 'la nivelación no debe pasarse de +18 dB');
 });
 
 test('exportar MP3 produce un archivo real y descargable', async () => {

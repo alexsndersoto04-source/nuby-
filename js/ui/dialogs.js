@@ -56,15 +56,33 @@ export class Dialogs {
 
     document.getElementById('channel-mode').addEventListener('change', (event) => {
       this.engine.applyChannelMode(event.target.value);
+      // En estéreo se graba lo que entrega la tarjeta (voz + pista del móvil).
+      if (event.target.value === 'stereo') {
+        const channels = document.getElementById('record-channels');
+        if (channels) channels.value = '2';
+        this.project.session.recordChannels = 2;
+      }
       this.app.updateInputUi();
+    });
+
+    document.getElementById('record-channels')?.addEventListener('change', (event) => {
+      const channels = Number(event.target.value) === 2 ? 2 : 1;
+      this.project.session.recordChannels = channels;
+      this.app.markDirty();
+      toast(
+        channels === 2
+          ? 'La toma se grabará en estéreo (lo que salga de la V8).'
+          : 'La toma se grabará en mono.',
+        'info',
+        4000
+      );
     });
 
     document.getElementById('setup-gain').addEventListener('input', (event) => {
       const value = Number(event.target.value);
+      this.app.setInputGain?.(value);
       this.engine.setInputGain(value);
       document.getElementById('setup-gain-value').textContent = formatDb(20 * Math.log10(Math.max(value, 1e-6)));
-      const stripGain = document.getElementById('input-gain');
-      if (stripGain) stripGain.value = String(value);
     });
 
     document.getElementById('setup-monitor').addEventListener('change', (event) => {
@@ -112,6 +130,8 @@ export class Dialogs {
     if (this.engine?.input?.channelMode) {
       document.getElementById('channel-mode').value = this.engine.input.channelMode;
     }
+    const channelsField = document.getElementById('record-channels');
+    if (channelsField) channelsField.value = String(session.recordChannels === 2 ? 2 : 1);
   }
 
   async refreshDevices() {

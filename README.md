@@ -68,6 +68,19 @@ Abre la dirección en **Chrome, Edge o Firefox**. El micrófono exige un context
 seguro: `localhost` o HTTPS. No hay backend, todo ocurre en el propio equipo, y
 al ser una PWA se puede instalar y usar sin conexión.
 
+### Nivel, eco y la pista del teléfono en la V8
+
+- **La V8 entrega la señal baja.** Por eso «Ganancia» de la tira de entrada llega a
+  **+18 dB (8×)** y, al grabar, la toma se **nivela sola** hasta ≈ −6 dBFS con un
+  único ajuste lineal (no comprime ni recorta). Se puede desactivar en
+  **Ajustes › Entrada y captura › Nivelar las tomas al grabar**.
+- **Eco al escucharte:** el mando **ECHO/REVERB de la V8** debe estar a cero y la
+  casilla «Escuchar la entrada desde la app» desmarcada. La V8 ya te deja oírte
+  por su salida de auriculares sin retardo; la escucha de la app añade ~150 ms.
+- **Pista del teléfono por las entradas de la V8:** pon el canal de entrada en
+  **Estéreo** y «Canales de la toma» en **Estéreo** para grabar juntos la voz del
+  BM800 y lo que entra por las otras entradas de la tarjeta.
+
 ### Primeros pasos en el teléfono (Redmi 9C y similares)
 
 1. Abre la app y toca **Activar micrófono** (tarjeta amarilla en *Pistas*).
