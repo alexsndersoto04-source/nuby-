@@ -307,8 +307,15 @@ function bytesToBase64(bytes) {
  * - En un navegador usa la descarga normal.
  * Devuelve una promesa (se puede ignorar: los botones no esperan).
  */
+let saveQueue = Promise.resolve();
+
 export function downloadBlob(blob, filename) {
-  if (isNativeApp()) return saveToAndroid(blob, filename);
+  if (isNativeApp()) {
+    // En el teléfono los archivos se escriben de uno en uno: si se exportan
+    // varios stems seguidos, no pueden pisarse entre ellos.
+    saveQueue = saveQueue.then(() => saveToAndroid(blob, filename)).catch(() => {});
+    return saveQueue;
+  }
 
   const url = URL.createObjectURL(blob);
   const link = h('a', { href: url, download: filename, style: { display: 'none' } });
