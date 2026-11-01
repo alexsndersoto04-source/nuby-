@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#101315">
+<title>Nuby Studio — Estudio de grabación</title>
+<meta name="description" content="Estudio de grabación multitrack en el navegador: grabación real de micrófono, efectos, mezcla y exportación a WAV y MP3.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app" class="app" aria-busy="true">
+
+  <!-- ===================== Barra superior ===================== -->
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 12h2.2l1.8-6 3 14 2.6-11 2.2 8 1.6-4H21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <div class="brand-text">
+        <input id="project-name" class="project-name" value="Sesión sin título" aria-label="Nombre del proyecto" spellcheck="false">
+        <span id="save-state" class="save-state" title="Estado de guardado">Sin cambios</span>
+      </div>
+    </div>
+
+    <div class="transport" role="group" aria-label="Transporte">
+      <button id="btn-rewind" class="tbtn" title="Volver al inicio (Inicio)" aria-label="Volver al inicio">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 5v14M19 5l-9 7 9 7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="btn-play" class="tbtn tbtn--play" title="Reproducir (Espacio)" aria-label="Reproducir">
+        <svg class="icon-play" viewBox="0 0 24 24" width="18" height="18"><path d="M7 5l12 7-12 7z" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-stop" class="tbtn" title="Detener (Espacio)" aria-label="Detener">
+        <svg viewBox="0 0 24 24" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-record" class="tbtn tbtn--record" title="Grabar (R)" aria-label="Grabar">
+        <span class="rec-dot"></span>
+      </button>
+      <div class="transport__time" id="time-display" title="Posición del cabezal">0:00.00</div>
+    </div>
+
+    <div class="topbar__project">
+      <label class="field field--inline">
+        <span class="field__label">BPM</span>
+        <input id="bpm-input" class="field__input field__input--num" type="number" min="20" max="300" step="1" value="120">
+      </label>
+      <label class="field field--inline">
+        <span class="field__label">Compás</span>
+        <select id="timesig-select" class="field__input field__input--select">
+          <option value="4/4" selected>4/4</option>
+          <option value="3/4">3/4</option>
+          <option value="6/8">6/8</option>
+          <option value="2/4">2/4</option>
+        </select>
+      </label>
+      <button id="btn-metronome" class="chip" title="Metrónomo (M)" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M9 3h6l3 18H6L9 3zm3 3v10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Metrónomo
+      </button>
+      <button id="btn-loop" class="chip" title="Bucle (L)" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M4 10a6 6 0 016-6h5l-2-2m2 2l-2 2M20 14a6 6 0 01-6 6H9l2 2m-2-2l2-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Bucle
+      </button>
+    </div>
+
+    <div class="topbar__meters">
+      <div class="meter-block" title="Nivel de salida del máster (dBFS)">
+        <canvas id="master-meter" class="meter meter--master" width="220" height="16"></canvas>
+        <div class="meter-labels"><span id="master-peak-label">−∞</span><span id="lufs-label">LUFS −∞</span></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== Área principal ===================== -->
+  <main class="workspace">
+
+    <!-- Pistas -->
+    <aside class="panel panel--tracks" aria-label="Pistas">
+      <div class="panel__head">
+        <h2 class="panel__title">Pistas</h2>
+        <div class="panel__actions">
+          <button id="btn-input" class="btn btn--ghost btn--sm" title="Configurar micrófono y tarjeta">
+            <svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 3a3 3 0 013 3v6a3 3 0 01-6 0V6a3 3 0 013-3zM6 11a6 6 0 0012 0M12 17v4m-3 0h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span id="input-btn-label">Micrófono</span>
+          </button>
+          <button id="btn-add-track" class="btn btn--ghost btn--icon" title="Añadir pista">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="input-strip" class="input-strip" hidden>
+        <div class="input-strip__row">
+          <span class="input-strip__label" id="input-strip-label">Entrada</span>
+          <span class="input-strip__db" id="input-peak-label">−∞ dBFS</span>
+        </div>
+        <canvas id="input-meter" class="meter" width="260" height="10"></canvas>
+        <div class="input-strip__row input-strip__row--controls">
+          <label class="slider-inline" title="Ganancia de entrada">
+            <span>Ganancia</span>
+            <input id="input-gain" type="range" min="0" max="2" step="0.01" value="1">
+          </label>
+          <button id="btn-monitor" class="btn btn--ghost btn--sm" aria-pressed="false" title="Escuchar la entrada (usa auriculares)">
+            Escucha
+          </button>
+        </div>
+      </div>
+      <div id="track-list" class="track-list"></div>
+      <div class="panel__foot">
+        <button id="btn-mix-view" class="btn btn--ghost btn--sm" aria-pressed="false">Vista de mezcla</button>
+      </div>
+    </aside>
+
+    <!-- Arreglo -->
+    <section class="arrange" aria-label="Línea de tiempo">
+      <div class="arrange__toolbar">
+        <div class="toolgroup" role="group" aria-label="Herramientas">
+          <button id="tool-select" class="tool is-active" title="Seleccionar / mover (V)" aria-pressed="true">
+            <svg viewBox="0 0 24 24" width="15" height="15"><path d="M5 3l14 9-6 1-3 6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="tool-cut" class="tool" title="Cortar en el cabezal (C)" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="15" height="15"><circle cx="7" cy="7" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="17" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 8.5L20 18M9 15.5L20 6" stroke="currentColor" stroke-width="1.5"/></svg>
+          </button>
+        </div>
+        <div class="toolgroup">
+          <label class="field field--inline">
+            <span class="field__label">Ajuste</span>
+            <select id="snap-select" class="field__input field__input--select" title="Ajuste a la rejilla">
+              <option value="0">Libre</option>
+              <option value="0.0625">1/64</option>
+              <option value="0.125">1/32</option>
+              <option value="0.25">1/16</option>
+              <option value="0.5">1/8</option>
+              <option value="1">1/4</option>
+              <option value="2">1/2</option>
+              <option value="4">Compás</option>
+            </select>
+          </label>
+        </div>
+        <div class="toolgroup">
+          <button id="btn-undo" class="tool" title="Deshacer (Ctrl+Z)" disabled>
+            <svg viewBox="0 0 24 24" width="15" height="15"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 010 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" transform="translate(0,-3)"/></svg>
+          </button>
+          <button id="btn-redo" class="tool" title="Rehacer (Ctrl+Mayús+Z)" disabled>
+            <svg viewBox="0 0 24 24" width="15" height="15"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 000 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" transform="translate(0,-3)"/></svg>
+          </button>
+        </div>
+        <div class="toolgroup toolgroup--right">
+          <button id="btn-zoom-out" class="tool" title="Alejar (−)">−</button>
+          <button id="btn-zoom-in" class="tool" title="Acercar (+)">+</button>
+          <button id="btn-zoom-fit" class="btn btn--ghost btn--sm" title="Ajustar a la sesión">Ajustar</button>
+        </div>
+      </div>
+
+      <div class="arrange__body" id="arrange-body">
+        <div class="ruler-wrap">
+          <canvas id="ruler" class="ruler" height="26"></canvas>
+        </div>
+        <div class="lanes-wrap" id="lanes-wrap">
+          <div id="lanes" class="lanes"></div>
+          <div id="playhead" class="playhead" hidden><span class="playhead__cap"></span></div>
+          <div id="loop-region" class="loop-region" hidden></div>
+          <div id="empty-hint" class="empty-hint">
+            <h3>Todavía no hay audio</h3>
+            <p>Conecta tu micrófono (BM800 + tarjeta V8), arma una pista y pulsa <strong>Grabar</strong>.</p>
+            <button id="btn-empty-setup" class="btn btn--primary btn--sm">Configurar entrada</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrange__footer">
+        <div class="clip-tools" id="clip-tools" hidden>
+          <span class="clip-tools__name" id="clip-tools-name">Clip</span>
+          <button id="clip-split" class="btn btn--ghost btn--sm" title="Cortar en el cabezal (S)">Cortar</button>
+          <button id="clip-duplicate" class="btn btn--ghost btn--sm" title="Duplicar (Ctrl+D)">Duplicar</button>
+          <button id="clip-normalize" class="btn btn--ghost btn--sm" title="Normalizar a −1 dBFS">Normalizar</button>
+          <button id="clip-reverse" class="btn btn--ghost btn--sm" title="Invertir el audio">Invertir</button>
+          <button id="clip-trim" class="btn btn--ghost btn--sm" title="Recortar silencios">Recortar silencios</button>
+          <button id="clip-delete" class="btn btn--danger-ghost btn--sm" title="Eliminar (Supr)">Eliminar</button>
+        </div>
+        <div class="arrange__info" id="arrange-info">—</div>
+      </div>
+    </section>
+
+    <!-- Inspector -->
+    <aside class="panel panel--inspector" aria-label="Inspector">
+      <div class="tabs" role="tablist">
+        <button class="tab is-active" data-tab="track" role="tab" aria-selected="true">Pista</button>
+        <button class="tab" data-tab="master" role="tab" aria-selected="false">Máster</button>
+        <button class="tab" data-tab="session" role="tab" aria-selected="false">Sesión</button>
+        <button class="tab" data-tab="help" role="tab" aria-selected="false">Guía</button>
+      </div>
+      <div class="panel__scroll">
+        <div id="panel-track" class="tabpanel is-active" role="tabpanel"></div>
+        <div id="panel-master" class="tabpanel" role="tabpanel"></div>
+        <div id="panel-session" class="tabpanel" role="tabpanel"></div>
+        <div id="panel-help" class="tabpanel" role="tabpanel"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ===================== Barra de estado ===================== -->
+  <footer class="statusbar">
+    <div class="statusbar__group">
+      <span id="status-device" class="status-item status-item--muted">Entrada no configurada</span>
+      <span class="status-sep"></span>
+      <span id="status-sr" class="status-item status-item--muted">48 kHz</span>
+      <span class="status-sep"></span>
+      <span id="status-latency" class="status-item status-item--muted">Latencia —</span>
+      <span class="status-sep"></span>
+      <span id="status-storage" class="status-item status-item--muted">—</span>
+    </div>
+    <div class="statusbar__group statusbar__group--right">
+      <span id="status-engine" class="status-item">Motor detenido</span>
+      <button id="btn-diagnostics" class="btn btn--ghost btn--sm">Diagnóstico</button>
+      <button id="btn-projects" class="btn btn--ghost btn--sm">Proyectos</button>
+      <button id="btn-export" class="btn btn--primary btn--sm">Exportar</button>
+    </div>
+  </footer>
+
+  <!-- ===================== Avisos ===================== -->
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+</div>
+
+<!-- ===================== Diálogo: entrada de audio ===================== -->
+<dialog id="dialog-input" class="dialog">
+  <form method="dialog" class="dialog__form">
+    <header class="dialog__head">
+      <h2>Entrada de audio</h2>
+      <button class="dialog__close" value="close" aria-label="Cerrar">✕</button>
+    </header>
+    <div class="dialog__body">
+      <p class="dialog__lead">Selecciona tu tarjeta (V8) y ajusta la ganancia hasta que la voz llegue fuerte pero sin llegar al rojo.</p>
+
+      <div class="setup-grid">
+        <div class="setup-col">
+          <label class="field field--block">
+            <span class="field__label">Dispositivo de entrada</span>
+            <select id="device-select" class="field__input">
+              <option value="">Detectando…</option>
+            </select>
+          </label>
+          <label class="field field--block">
+            <span class="field__label">Canal</span>
+            <select id="channel-mode" class="field__input">
+              <option value="mono-left">Mono (canal izquierdo)</option>
+              <option value="mono-right">Mono (canal derecho)</option>
+              <option value="mono-sum">Mono (suma L+R)</option>
+              <option value="stereo">Estéreo</option>
+            </select>
+          </label>
+          <div class="field field--block">
+            <span class="field__label">Nivel de entrada</span>
+            <canvas id="setup-meter" class="meter meter--tall" width="320" height="18"></canvas>
+            <div class="meter-labels"><span id="setup-peak-label">−∞ dBFS</span><span id="setup-clip-label"></span></div>
+          </div>
+          <label class="slider-row">
+            <span>Ganancia de entrada</span>
+            <input id="setup-gain" type="range" min="0" max="2" step="0.01" value="1">
+            <output id="setup-gain-value">0.0 dB</output>
+          </label>
+          <label class="check">
+            <input id="setup-monitor" type="checkbox">
+            <span>Escuchar la entrada (monitorización)</span>
+          </label>
+          <p class="hint hint--warn">Usa auriculares. Con altavoces, el micrófono puede acoplar (realimentación).</p>
+        </div>
+
+        <div class="setup-col">
+          <h3 class="setup-title">Conexión BM800 + V8</h3>
+          <ol class="steps">
+            <li>Conecta el <strong>BM800</strong> a la entrada XLR de la <strong>V8</strong> con cable XLR.</li>
+            <li>Activa <strong>+48V</strong> (alimentación fantasma) en la V8. Sin esto el BM800 no suena.</li>
+            <li>Conecta la V8 por USB a la computadora. Debe aparecer como <em>V8</em> en la lista.</li>
+            <li>Pon el <strong>eco/reverb de la V8 en OFF</strong>: grabamos en seco y añadimos reverb aquí, con control real.</li>
+            <li>Sube el <strong>gain</strong> de la V8 hasta que la voz llegue a −18/−12 dBFS en este medidor.</li>
+          </ol>
+          <div class="callout">
+            <strong>Compensación de latencia</strong>
+            <p>Si al grabar la toma queda corrida unos milisegundos, ajusta aquí. Empieza en 0 ms.</p>
+            <label class="slider-row">
+              <span>Desfase</span>
+              <input id="setup-latency" type="range" min="-150" max="150" step="1" value="0">
+              <output id="setup-latency-value">0 ms</output>
+            </label>
+          </div>
+          <div class="callout">
+            <strong>Prueba real de grabación</strong>
+            <p>Graba 3 segundos y escúchalos. Así compruebas cable, ganancia y ajuste de latencia.</p>
+            <div class="callout__actions">
+              <button type="button" id="btn-test-record" class="btn btn--ghost btn--sm">Grabar 3 s</button>
+              <button type="button" id="btn-test-play" class="btn btn--ghost btn--sm" disabled>Escuchar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="dialog__foot">
+      <span id="input-permission-hint" class="hint">El navegador pedirá permiso para usar el micrófono.</span>
+      <button type="button" id="btn-open-input" class="btn btn--primary">Abrir entrada</button>
+      <button class="btn btn--ghost" value="close">Listo</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ===================== Diálogo: exportar ===================== -->
+<dialog id="dialog-export" class="dialog dialog--wide">
+  <form method="dialog" class="dialog__form">
+    <header class="dialog__head">
+      <h2>Exportar mezcla</h2>
+      <button class="dialog__close" value="close" aria-label="Cerrar">✕</button>
+    </header>
+    <div class="dialog__body">
+      <div class="export-grid">
+        <div class="setup-col">
+          <label class="field field--block">
+            <span class="field__label">Formato</span>
+            <select id="export-format" class="field__input">
+              <option value="mp3">MP3 — comprimido, para compartir</option>
+              <option value="wav">WAV — sin pérdida, para máster</option>
+            </select>
+          </label>
+          <label class="field field--block" id="export-bitrate-field">
+            <span class="field__label">Calidad MP3</span>
+            <select id="export-bitrate" class="field__input">
+              <option value="320" selected>320 kbps — máxima</option>
+              <option value="256">256 kbps — alta</option>
+              <option value="192">192 kbps — buena</option>
+              <option value="128">128 kbps — compacta</option>
+            </select>
+          </label>
+          <label class="field field--block" id="export-depth-field" hidden>
+            <span class="field__label">Profundidad WAV</span>
+            <select id="export-depth" class="field__input">
+              <option value="24" selected>24 bits (recomendado)</option>
+              <option value="16">16 bits (CD)</option>
+              <option value="32">32 bits float</option>
+            </select>
+          </label>
+          <label class="field field--block">
+            <span class="field__label">Rango</span>
+            <select id="export-range" class="field__input">
+              <option value="project" selected>Toda la sesión</option>
+              <option value="loop">Solo el bucle</option>
+            </select>
+          </label>
+          <label class="check"><input id="export-master" type="checkbox" checked> <span>Aplicar máster (EQ, compresor, limitador)</span></label>
+          <label class="check"><input id="export-normalize" type="checkbox"> <span>Normalizar a −1 dBFS</span></label>
+          <label class="check"><input id="export-stems" type="checkbox"> <span>Exportar también cada pista por separado</span></label>
+        </div>
+        <div class="setup-col">
+          <h3 class="setup-title">Resumen</h3>
+          <dl class="summary">
+            <div><dt>Duración</dt><dd id="export-summary-duration">—</dd></div>
+            <div><dt>Pistas con audio</dt><dd id="export-summary-tracks">—</dd></div>
+            <div><dt>Formato</dt><dd id="export-summary-format">—</dd></div>
+            <div><dt>Sonoridad estimada</dt><dd id="export-summary-lufs">—</dd></div>
+          </dl>
+          <div class="progress" id="export-progress" hidden><div class="progress__bar" id="export-progress-bar"></div></div>
+          <p class="hint" id="export-status">La mezcla se calcula en tu equipo; no se sube nada a internet.</p>
+          <div id="export-result" class="result" hidden></div>
+        </div>
+      </div>
+    </div>
+    <footer class="dialog__foot">
+      <button type="button" id="btn-do-export" class="btn btn--primary">Exportar</button>
+      <button type="button" id="btn-download" class="btn btn--ghost" hidden>Descargar archivo</button>
+      <button class="btn btn--ghost" value="close">Cerrar</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ===================== Diálogo: proyectos ===================== -->
+<dialog id="dialog-projects" class="dialog">
+  <form method="dialog" class="dialog__form">
+    <header class="dialog__head">
+      <h2>Proyectos</h2>
+      <button class="dialog__close" value="close" aria-label="Cerrar">✕</button>
+    </header>
+    <div class="dialog__body">
+      <div class="dialog__toolbar">
+        <button type="button" id="btn-new-project" class="btn btn--primary btn--sm">Nuevo proyecto</button>
+        <button type="button" id="btn-save-project" class="btn btn--ghost btn--sm">Guardar ahora</button>
+        <button type="button" id="btn-clean-storage" class="btn btn--ghost btn--sm">Limpiar audios sin uso</button>
+      </div>
+      <div id="project-list" class="project-list"></div>
+      <p id="storage-info" class="hint"></p>
+    </div>
+    <footer class="dialog__foot">
+      <button class="btn btn--ghost" value="close">Cerrar</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ===================== Diálogo: diagnóstico ===================== -->
+<dialog id="dialog-diagnostics" class="dialog dialog--wide">
+  <form method="dialog" class="dialog__form">
+    <header class="dialog__head">
+      <h2>Diagnóstico del estudio</h2>
+      <button class="dialog__close" value="close" aria-label="Cerrar">✕</button>
+    </header>
+    <div class="dialog__body">
+      <div id="diag-checks" class="diag"></div>
+      <div class="dialog__toolbar">
+        <button type="button" id="btn-run-diagnostics" class="btn btn--ghost btn--sm">Repetir comprobaciones</button>
+        <button type="button" id="btn-test-encoder" class="btn btn--ghost btn--sm">Probar codificador MP3</button>
+      </div>
+      <pre id="diag-log" class="diag-log" aria-live="polite"></pre>
+    </div>
+    <footer class="dialog__foot">
+      <button class="btn btn--ghost" value="close">Cerrar</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ===================== Diálogo: atajos ===================== -->
+<dialog id="dialog-shortcuts" class="dialog">
+  <form method="dialog" class="dialog__form">
+    <header class="dialog__head">
+      <h2>Atajos de teclado</h2>
+      <button class="dialog__close" value="close" aria-label="Cerrar">✕</button>
+    </header>
+    <div class="dialog__body">
+      <dl class="shortcuts">
+        <div><dt>Espacio</dt><dd>Reproducir / detener</dd></div>
+        <div><dt>R</dt><dd>Grabar</dd></div>
+        <div><dt>Inicio</dt><dd>Volver al inicio</dd></div>
+        <div><dt>M</dt><dd>Metrónomo</dd></div>
+        <div><dt>L</dt><dd>Bucle</dd></div>
+        <div><dt>S</dt><dd>Cortar clip en el cabezal</dd></div>
+        <div><dt>Supr</dt><dd>Eliminar clip seleccionado</dd></div>
+        <div><dt>Ctrl/⌘ + D</dt><dd>Duplicar clip</dd></div>
+        <div><dt>Ctrl/⌘ + Z</dt><dd>Deshacer</dd></div>
+        <div><dt>Ctrl/⌘ + Mayús + Z</dt><dd>Rehacer</dd></div>
+        <div><dt>Ctrl/⌘ + S</dt><dd>Guardar</dd></div>
+        <div><dt>Ctrl/⌘ + E</dt><dd>Exportar</dd></div>
+        <div><dt>+ / −</dt><dd>Zoom de la línea de tiempo</dd></div>
+        <div><dt>F</dt><dd>Ajustar a la sesión</dd></div>
+      </dl>
+    </div>
+    <footer class="dialog__foot"><button class="btn btn--ghost" value="close">Cerrar</button></footer>
+  </form>
+</dialog>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

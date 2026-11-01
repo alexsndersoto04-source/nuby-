@@ -1,0 +1,18 @@
+{
+  "name": "Nuby Studio — Estudio de grabación",
+  "short_name": "Nuby Studio",
+  "description": "Estudio de grabación multitrack en el navegador: grabación real de micrófono, efectos, mezcla y exportación a WAV y MP3.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#101315",
+  "theme_color": "#15191d",
+  "categories": ["music", "productivity", "audio"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
