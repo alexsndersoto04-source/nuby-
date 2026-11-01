@@ -800,6 +800,26 @@ export class StudioApp {
     const buffer = ctx.createBuffer(channels.length, frames, sampleRate);
     channels.forEach((channel, index) => buffer.copyToChannel(channel, index));
 
+    // Comprobación real de la toma: si llegó todo a cero, hay que avisar en vez
+    // de dejar un clip vacío que parece que grabó.
+    let peak = 0;
+    for (const channel of channels) {
+      for (let i = 0; i < channel.length; i++) {
+        const value = channel[i] < 0 ? -channel[i] : channel[i];
+        if (value > peak) peak = value;
+      }
+    }
+    if (peak < 1e-5) {
+      toast(
+        'La toma llegó en silencio: el micrófono está abierto pero no entrega señal al grabador. ' +
+          'Pulsa Grabar otra vez o revisa Ajustes › Sistema.',
+        'error',
+        9000
+      );
+      console.warn('Toma silenciosa', { source: result.source, frames });
+    }
+    this.lastRecordingPeak = peak;
+
     const bufferId = uid('buf');
     this.buffers.set(bufferId, buffer);
     this.peaks.set(bufferId, computePeaks(channels, 256));

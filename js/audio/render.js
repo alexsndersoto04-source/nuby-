@@ -60,6 +60,9 @@ export async function renderProject(project, options) {
   } catch {
     worklets = false;
   }
+  // Si el motor comprobó que los procesadores no dejan pasar la señal en este
+  // equipo, el render usa exactamente el mismo camino que la escucha.
+  if (options.allowWorklets === false) worklets = false;
 
   const masterFx = includeMasterFx
     ? masterSettings

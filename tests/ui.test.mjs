@@ -51,19 +51,22 @@ test('el motor de audio se inicializa con la entrada simulada (V8)', async () =>
 test('grabar una toma crea un clip alineado y guarda el audio', async () => {
   const trackId = app.project.tracks[0].id;
   app.selectTrack(trackId);
+  // Sin cuenta de entrada: esta prueba mide la alineación de la toma.
+  app.project.session.metronome.on = false;
   app.seek(2);
 
   await app.toggleRecord();
   assert.ok(['recording', 'count-in'].includes(app.transport.state), 'debe entrar en grabación');
 
-  feedAudio(app.engine.ctx, 1.0);
+  // El grabador descarta los 100 ms de pre-roll previos al inicio exacto.
+  feedAudio(app.engine.ctx, 1.1);
 
   await app.stopTransport();
 
   assert.equal(app.project.clips.length, 1, 'debe existir un clip');
   const clip = app.project.clips[0];
   assert.equal(clip.trackId, trackId);
-  assert.ok(clip.duration > 0.9 && clip.duration < 1.2, `duración ${clip.duration}`);
+  assert.ok(clip.duration > 0.85 && clip.duration < 1.2, `duración ${clip.duration}`);
   assert.ok(app.buffers.has(clip.bufferId), 'el buffer debe estar en memoria');
   assert.ok(app.peaks.has(clip.bufferId), 'deben calcularse los picos');
   assert.ok(clip.start <= 2.01, 'la toma se coloca en el cabezal con compensación de latencia');
