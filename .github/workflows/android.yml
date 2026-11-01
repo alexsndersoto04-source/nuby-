@@ -11,6 +11,13 @@ on:
 permissions:
   contents: write
 
+env:
+  # Cualquier fallo se publica como anotación legible, no solo como log.
+  GRADLE_OPTS: >-
+    -Dorg.gradle.daemon=false
+    -Dorg.gradle.jvmargs=-Xmx3g
+    -Dorg.gradle.console=plain
+
 jobs:
   apk:
     name: APK instalable
@@ -28,12 +35,24 @@ jobs:
           java-version: '17'
 
       - name: Preparar Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Instalar plataforma Android 34
         run: |
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null
-          echo "SDK listo"
+          set -uo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          log=/tmp/sdk.log
+          {
+            SDKMANAGER=$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")
+            echo "sdkmanager: $SDKMANAGER"
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+            ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+          } > "$log" 2>&1
+          status=$?
+          tail -n 20 "$log"
+          if [ "$status" -ne 0 ]; then
+            msg=$(tail -n 20 "$log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::No se pudo preparar el SDK de Android: $msg"
+            exit "$status"
+          fi
 
       - name: Preparar Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -43,25 +62,43 @@ jobs:
       - name: Comprobar la firma del APK
         working-directory: android
         run: |
-          keytool -list -keystore nuby-release.p12 -storetype PKCS12 \
-                  -storepass nuby-studio-apk -alias nuby
+          set -uo pipefail
+          log=/tmp/firma.log
+          { keytool -list -keystore nuby-release.p12 -storetype PKCS12 \
+                     -storepass nuby-studio-apk -alias nuby; } > "$log" 2>&1
+          status=$?
+          tail -n 20 "$log"
+          if [ "$status" -ne 0 ]; then
+            msg=$(tail -n 20 "$log" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::El almacén de claves no se pudo leer: $msg"
+            exit "$status"
+          fi
 
       - name: Compilar APK firmado
         working-directory: android
-        run: gradle --no-daemon --stacktrace assembleRelease
+        run: |
+          set -uo pipefail
+          log=/tmp/gradle.log
+          gradle --no-daemon --stacktrace assembleRelease > "$log" 2>&1
+          status=$?
+          tail -n 40 "$log"
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -iE "error|fail|caused by|what went wrong" -A 3 "$log" | head -n 40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::Gradle falló: $msg"
+            exit "$status"
+          fi
 
       - name: Renombrar y comprobar
         working-directory: android
         run: |
-          set -e
+          set -euo pipefail
           SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
           echo "APK generado: $SRC"
           cp "$SRC" ../Nuby-Studio.apk
           ls -lh ../Nuby-Studio.apk
           # Comprobación real: el APK debe estar firmado y contener el estudio.
-          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs ../Nuby-Studio.apk | head -n 5
-          unzip -l ../Nuby-Studio.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)' || {
-            echo "ERROR: el APK no contiene la aplicación web"; exit 1; }
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs ../Nuby-Studio.apk | head -n 5
+          unzip -l ../Nuby-Studio.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)'
 
       - name: Guardar el APK como artifact
         uses: actions/upload-artifact@v4
