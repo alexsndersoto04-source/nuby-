@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.util.Log;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -52,6 +53,7 @@ public class MainActivity extends Activity {
 
     private static final int REQ_PERMISSIONS = 1001;
     private static final int REQ_FILE = 1002;
+    private static final String TAG = "NubyStudio";
     private static final String HOST = "localhost";
     private static final String BASE_URL = "https://" + HOST + "/";
     private static final String ENCODING = "utf-8";
@@ -188,6 +190,26 @@ public class MainActivity extends Activity {
     /** Sirve los archivos del APK como si fueran un sitio en https://localhost. */
     private class LocalContentClient extends WebViewClient {
         @Override
+        public void onPageFinished(WebView view, String url) {
+            // Deja constancia en el registro de que la interfaz se cargó de verdad.
+            view.evaluateJavascript(
+                    "(function(){try{"
+                            + "var app=document.getElementById('app');"
+                            + "return (app?'NUBY-OK ':'NUBY-EMPTY ')+document.title;"
+                            + "}catch(error){return 'NUBY-ERROR '+error.message;}})()",
+                    value -> Log.i(TAG, "ARRANQUE " + value)
+            );
+        }
+
+        @Override
+        public void onReceivedError(WebView view, WebResourceRequest request,
+                                    android.webkit.WebResourceError error) {
+            if (request != null && request.isForMainFrame()) {
+                Log.e(TAG, "No se pudo cargar la interfaz: " + error.getDescription());
+            }
+        }
+
+        @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
             if (uri == null || !HOST.equals(uri.getHost())) return null;
@@ -260,8 +282,16 @@ public class MainActivity extends Activity {
         return "application/octet-stream";
     }
 
-    /** Permite el micrófono al WebView y abre el selector de archivos. */
+    /** Permite el micrófono al WebView, abre el selector de archivos y registra errores. */
     private class StudioChromeClient extends WebChromeClient {
+        @Override
+        public boolean onConsoleMessage(android.webkit.ConsoleMessage message) {
+            if (message == null) return false;
+            Log.i("NubyJS", message.messageLevel() + " " + message.message()
+                    + " (" + message.sourceId() + ":" + message.lineNumber() + ")");
+            return true;
+        }
+
         @Override
         public void onPermissionRequest(final PermissionRequest request) {
             runOnUiThread(new Runnable() {

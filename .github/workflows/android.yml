@@ -119,3 +119,59 @@ jobs:
             Descarga **Nuby-Studio.apk** en "Assets" e instálalo en el teléfono.
           files: Nuby-Studio.apk
           make_latest: true
+
+  # Prueba real: instala el APK en un Android de verdad (emulador) y comprueba
+  # que la interfaz del estudio se carga sin errores.
+  prueba:
+    name: Prueba en Android real
+    needs: apk
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Descargar el APK
+        uses: actions/download-artifact@v4
+        with:
+          name: Nuby-Studio-APK
+
+      - name: Activar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Arrancar el emulador y probar la app
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-snapshot -no-boot-anim -no-window -gpu swiftshader_indirect
+          script: |
+            set -x
+            adb install -r Nuby-Studio.apk
+            adb shell pm grant com.nuby.studio android.permission.RECORD_AUDIO || true
+            adb shell am start -W -n com.nuby.studio/.MainActivity
+            sleep 30
+            echo "--- ¿sigue vivo? ---"
+            adb shell pidof com.nuby.studio
+            adb logcat -d -s NubyStudio:* NubyJS:* AndroidRuntime:E > logcat.txt || true
+            cat logcat.txt
+            adb exec-out screencap -p > pantalla.png || true
+            grep -q "NUBY-OK" logcat.txt || {
+              echo "::error::La app no llegó a cargar el estudio"
+              exit 1
+            }
+
+      - name: Guardar la captura de pantalla
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nuby-Studio-captura
+          path: |
+            pantalla.png
+            logcat.txt
+          if-no-files-found: warn
