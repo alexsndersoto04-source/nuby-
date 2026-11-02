@@ -88,6 +88,30 @@ reposo. Eso es memoria de trabajo, y es la condición para que haya contexto.
 Efecto colateral interesante: las sinapsis subieron de 3.062 a 4.887 porque las
 interneuronas proyectan mucho más ancho. Es el coste de tener freno específico.
 
+### El test de memoria, y su resultado real
+
+Se añadió `cortex_lm bench`: memorizar una clave, N símbolos de relleno, recordarla.
+
+**Versión fácil** (1 clave, 6 de relleno): 100 %. **Falso positivo.** El readout
+solo tenía que leer "qué símbolo apareció", no recordarlo.
+
+**Versión dura** (40 claves distintas, 10 de relleno):
+
+```
+epoca  1  acierto   1.2 %  (1/80)
+epoca 60  acierto   0.0 %  (0/80)
+sin relleno:   3.8 %
+con relleno:   0.0 %
+```
+
+3,8 % sin relleno está en el nivel del azar (1/120 = 0,8 %). Es decir: **el
+readout no puede ni identificar qué clave se acaba de presentar**, mucho menos
+recordarla después del relleno.
+
+Esto corrige la lectura anterior. La reverberación de 17 ticks que se midió sí
+existe, pero **no transporta la identidad de la clave**. Es actividad, no
+información. Son cosas distintas y la diferencia es todo el proyecto.
+
 ### Lo que esto NO arregla todavía
 
 El corpus no mejora por sí solo: sigue en ~4,4 bpc. La reverberación existe pero
@@ -96,9 +120,12 @@ demostrado que ajuste la recurrencia de forma útil.
 
 Orden correcto de aquí en adelante:
 
-1. Validar la regla local en una tarea de memoria (no texto). Si no aprende ahí,
-   no aprenderá lenguaje.
-2. Solo entonces, volver al corpus.
+1. **Arreglar la codificación de identidad.** Que la clave deje una huella
+   distinguible en el estado y que esa huella sobreviva al relleno. Hoy no
+   ocurre. Candidatos: entrada más fuerte y más dispersa, trazas por neurona que
+   se actualicen con el disparo (no con la tasa), o codificación por latencia.
+2. Repetir el bench duro hasta que pase. Es el criterio objetivo.
+3. Solo entonces, volver al corpus.
 
 ### Opciones descartadas, con el motivo
 

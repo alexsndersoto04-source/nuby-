@@ -1,6 +1,7 @@
 // cortex_lm_main.cpp — utilidades de linea de comandos
 //
 //   cortex_lm smoke <archivo>         prueba de vida: red pequena, latido
+//   cortex_lm bench <archivo>         prueba de memoria de trabajo
 //   cortex_lm train <archivo> <datos> <pasos> [--small]
 //   cortex_lm eval  <archivo> <datos>
 //
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#include <string>
 #include <cstdlib>
 
 using namespace cortex;
@@ -184,6 +186,110 @@ static void cmd_smoke(const std::string& path) {
                 e2.n_neurons(), e2.n_synapses(), sp.c_str());
 }
 
+
+// ---------------------------------------------------------------------------
+// Bench: la prueba que decide si la regla de aprendizaje local sirve.
+//
+// Tarea de memoria de trabajo. Se presenta un simbolo A, luego K simbolos de
+// relleno, y despues hay que recordar A. La red solo puede acertar si mantiene
+// informacion a traves del relleno: es exactamente lo que el corpus exige y
+// exactamente lo que no estaba pasando.
+//
+// Se entrena SOLO el readout, con la recurrencia congelada (READOUT_ONLY) y con
+// la regla local activa. Si el readout acierta y la regla local no estropea,
+// la memoria existe. Si el readout no pasa del azar, el estado no se conserva.
+// ---------------------------------------------------------------------------
+
+static double bench_recall(Engine& eng, int key, int filler_len, int trials,
+                           bool train, int* correct_out) {
+    Params p = eng.params();
+    std::vector<float> logits(p.n_chars), err(p.n_chars);
+    int correct = 0;
+    for (int t = 0; t < trials; ++t) {
+        eng.begin_symbol();
+        eng.feed(key);                       // clave
+        for (int f = 0; f < filler_len; ++f)
+            eng.feed(32 + ((t * 7 + f * 3) % 40));   // relleno variable
+        eng.readout(logits.data());
+
+        // argmax
+        int best = 0;
+        for (int k = 1; k < p.n_chars; ++k) if (logits[k] > logits[best]) best = k;
+        if (best == key) correct++;
+
+        if (train) {
+            float mx = *std::max_element(logits.begin(), logits.end());
+            std::vector<float> prob(p.n_chars);
+            float s = 0;
+            for (int k = 0; k < p.n_chars; ++k) { prob[k] = std::exp(logits[k] - mx); s += prob[k]; }
+            for (int k = 0; k < p.n_chars; ++k) err[k] = prob[k] / s;
+            err[key] -= 1.0f;
+            eng.learn(err.data());
+        }
+    }
+    if (correct_out) *correct_out = correct;
+    return (double)correct / trials;
+}
+
+static void cmd_bench(const std::string& path) {
+    Params p;
+    p.layer_size = 256;
+    p.n_layers = 1;
+    p.density = 0.05f;
+    p.w_init_scale = 0.105f;   // ventana de reverberacion medida
+    p.input_gain = 0.62f;
+
+    Engine eng(p);
+    eng.build_random(p.seed);
+
+    // Version dura: 40 claves DISTINTAS, relleno mas largo, y prueba en claves
+    // que no se usaron en el entrenamiento. Si el readout solo lee "que simbolo
+    // aparecio", aprueba la version facil sin tener memoria. Esta no la pasa.
+    const int filler = 10;
+    const int TRIALS = 40;
+    const int EPOCHS = 60;
+    const int KEYS = 40;
+
+    std::printf("tarea: memorizar una clave entre %d, %d de relleno, recordarla\n",
+                KEYS, filler);
+    std::printf("azar: %.1f %%\n\n", 100.0 / p.n_chars);
+
+    double acc = 0;
+    for (int e = 0; e < EPOCHS; ++e) {
+        int c = 0, tot = 0;
+        for (int kk = 0; kk < KEYS; ++kk) {
+            int ck = 0;
+            bench_recall(eng, kk, filler, 2, true, &ck);
+            c += ck; tot += 2;
+        }
+        acc = (double)c / tot;
+        if (e % 10 == 0 || e == EPOCHS - 1)
+            std::printf("epoca %2d  acierto %5.1f %%  (%d/%d)\n", e + 1, acc * 100, c, tot);
+        std::fflush(stdout);
+    }
+
+    // sin relleno, la misma tarea: mide si el readout funciona en absoluto
+    int c0 = 0, t0 = 0;
+    for (int kk = 0; kk < KEYS; ++kk) { int ck = 0; bench_recall(eng, kk, 0, 2, false, &ck); c0 += ck; t0 += 2; }
+    double acc0 = (double)c0 / t0;
+    std::printf("\nsin relleno:   %5.1f %%\n", acc0 * 100);
+    std::printf("con relleno:   %5.1f %%  (%d claves distintas)\n", acc * 100, KEYS);
+
+    std::printf("\n--- VEREDICTO ---\n");
+    if (acc0 < 0.5) {
+        std::printf("LA RED NO RECUERDA NI EL ULTIMO SIMBOLO.\n");
+        std::printf("El problema es el readout o el estado, no la regla.\n");
+    } else if (acc < 0.5) {
+        std::printf("RECUERDA EL PRESENTE, NO EL PASADO.\n");
+        std::printf("El estado no cruza el relleno: no hay memoria de trabajo.\n");
+    } else {
+        std::printf("TIENE MEMORIA DE TRABAJO.\n");
+        std::printf("La informacion sobrevive al relleno. Es la condicion\n");
+        std::printf("para que el modelo pueda aprender contexto.\n");
+    }
+    eng.save(state_path(path.c_str()));
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::printf("uso:\n  cortex_lm smoke <archivo>\n"
@@ -193,6 +299,7 @@ int main(int argc, char** argv) {
     std::string cmd = argv[1], path = argv[2];
     try {
         if (cmd == "smoke") { cmd_smoke(path); return 0; }
+        if (cmd == "bench") { cmd_bench(path); return 0; }
         if (cmd == "train") {
             if (argc < 5) { std::printf("faltan argumentos\n"); return 2; }
             bool small = (argc > 5 && std::strcmp(argv[5], "--small") == 0);
