@@ -130,6 +130,36 @@ fatiga no aporta contexto de texto.
 
 ---
 
+## Medición nueva: ¿qué guarda la fatiga en texto real?
+
+Protocolo de reposo (estado vacío antes de cada ensayo) y decodificador ridge
+offline con partición train/test, sobre `data/spanish_small.txt`:
+
+| objetivo | acierto |
+|---|---|
+| el byte **anterior** (lag 1) | **97,7 %** |
+| el byte de hace dos (lag 2) | 26,4 % |
+
+La fatiga **sí codifica el símbolo anterior en texto real**, con casi total
+fidelidad. No es un artefacto de la tarea sintética.
+
+Pero el techo de predicción del byte **siguiente** usando el perfil completo:
+
+| vista | techo offline (streaming) | readout en línea |
+|---|---|---|
+| fatiga | 4,99 bpc | 5,30 bpc |
+| tasa | 5,04 bpc | 4,37 bpc |
+| bigrama trivial | — | 2,89 bpc |
+
+La deriva de las features es despreciable (0,004 frente a una escala de 0,004
+salvo en las dimensiones activas), así que el problema **no** es el optimizador
+ni la no estacionariedad.
+
+**La lectura honesta:** la información sobre el símbolo anterior está en la red,
+pero convertirla en predicción del siguiente exige aprender la tabla de
+transiciones del lenguaje, que es un problema mucho más difícil que recuperar la
+clave. Con 6.000 muestras y un decodificador lineal, el techo medido es ~5 bpc.
+
 ## Lo que sigue abierto, sin adornos
 
 **La red no mejora la predicción de texto.** Tiene memoria de trabajo —eso está
@@ -145,11 +175,17 @@ Intentado y descartado en esta sesión:
   y homeostasis: no cambian el resultado en texto.
 - Subir el tamaño: comprobado antes de la reescritura, no escala.
 
-**El siguiente paso honesto** es medir si la fatiga contiene información sobre
-el símbolo anterior en texto real, con el protocolo de reposo y un decodificador
-offline — el mismo que dio 93,5 % en la tarea sintética. Si da azar también
-aquí, la conclusión es que la fatiga no alcanza para texto y hay que cambiar de
-mecanismo de memoria, no de parámetros.
+Ese paso ya está hecho (arriba): **la fatiga sí guarda el símbolo anterior en
+texto real**. Lo que falta es el paso siguiente: que esa representación se
+convierta en predicción. Dos caminos medibles:
+
+1. **Más datos para el decodificador.** El techo de 4,99 bpc se midió con 6.000
+   muestras y 1.024 dimensiones. Duplicar o cuadruplicar las muestras dirá si
+   el techo baja hacia el bigrama o se estanca.
+2. **Un decodificador con capacidad.** Un clasificador lineal desde 1.024
+   dimensiones es pobre para aprender transiciones. Es legítimo usar algo más
+   potente en la lectura: la arquitectura propia está en la red, no en el
+   lector.
 
 ---
 
