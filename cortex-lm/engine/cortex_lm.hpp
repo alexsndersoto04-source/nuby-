@@ -43,6 +43,7 @@ struct Params {
     float v_reset     = 0.0f;
     int   refractory  = 2;
     int   ticks_per_char = 5;
+    int   n_traces    = 4;      // memorias por neurona, actualizadas al DISPARAR
 
     // --- competicion ---
     int   k_wta       = 41;     // ganadores por tick (1 % de 4096)
@@ -85,7 +86,10 @@ struct Params {
     float alpha_m() const { return std::exp(-dt / tau_m); }
     float alpha_e() const { return std::exp(-dt / tau_e); }
     // features del readout: por capa, tasa actual + contexto decaido, + sesgo
-    int n_features() const { return 2 * n_layers * layer_size + 1; }
+    // features: por capa, 1 bloque de tasa + n_traces bloques de traza, + sesgo
+    int n_features() const {
+        return n_layers * layer_size * (1 + n_traces) + 1;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -116,7 +120,11 @@ struct Layer {
     std::vector<float> theta;     // umbral adaptativo extra
     std::vector<float> vtrace;    // traza de disparo (para elegibilidad)
     std::vector<float> rate;      // disparos acumulados en el simbolo actual
-    std::vector<float> ctx;       // promedio decaido (memoria de contexto)
+    // Banco de trazas de disparo con varias constantes de tiempo. Se actualiza
+    // al DISPARAR, no con la tasa: el promedio de tasa borra la identidad del
+    // simbolo (dos entradas distintas con la misma cantidad de disparos son
+    // indistinguibles). El disparo lleva identidad; el conteo, no.
+    std::vector<float> trace;     // N * K, layout [j*K + k]
     std::vector<float> elig;      // traza de elegibilidad (por sinapsis de SALIDA)
     std::vector<float> fast;      // pesos rapidos (por sinapsis de salida)
     std::vector<i32>   last_spike;

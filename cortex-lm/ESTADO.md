@@ -88,6 +88,26 @@ reposo. Eso es memoria de trabajo, y es la condición para que haya contexto.
 Efecto colateral interesante: las sinapsis subieron de 3.062 a 4.887 porque las
 interneuronas proyectan mucho más ancho. Es el coste de tener freno específico.
 
+### Bugs encontrados en la codificación de entrada
+
+Dos defectos reales, encontrados midiendo en lugar de suponiendo:
+
+**1. Colisión de patrones sensoriales.** La proyección de los 8 bits del código
+de carácter usaba siempre las mismas ~24 neuronas para todos los símbolos. Un
+símbolo con código 0 **no encendía absolutamente nada**. Corregido: cada símbolo
+tiene ahora un parche contiguo desplazado (identidad) más un conjunto
+pseudoaleatorio dependiente del símbolo (textura). El uso de neuronas subió del
+34 % al 72 % y el entrenamiento pasó de 10 a 19 pasos/s.
+
+**2. Normalización global de las features.** Con 4 bloques de traza y 1 de tasa
+en un mismo vector, normalizar el conjunto dejaba la tasa con un 20 % de la
+norma: la identidad del símbolo actual se volvía invisible. Corregido:
+normalización **por bloque**, cada canal con su propia escala.
+
+Queda un tercer problema, medido y no resuelto: la separabilidad entre símbolos
+distintos es solo **+0,09** (coseno 0,907 entre claves distintas contra 0,87 del
+mismo símbolo repetido). Las representaciones se parecen demasiado entre sí.
+
 ### El test de memoria, y su resultado real
 
 Se añadió `cortex_lm bench`: memorizar una clave, N símbolos de relleno, recordarla.

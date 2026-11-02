@@ -79,7 +79,7 @@ void Engine::build_random(unsigned seed) {
         Lr.theta.assign(N, 0.0f);
         Lr.vtrace.assign(N, 0.0f);
         Lr.rate.assign(N, 0.0f);
-        Lr.ctx.assign(N, 0.0f);
+        Lr.trace.assign((size_t)N * p_.n_traces, 0.0f);
         Lr.last_spike.assign(N, -1000000);
         Lr.refr.assign(N, 0);
         Lr.spent.assign(N, 0);
@@ -161,7 +161,7 @@ void Engine::reset_state() {
         std::fill(L.theta.begin(), L.theta.end(), 0.0f);
         std::fill(L.vtrace.begin(), L.vtrace.end(), 0.0f);
         std::fill(L.rate.begin(), L.rate.end(), 0.0f);
-        std::fill(L.ctx.begin(), L.ctx.end(), 0.0f);
+        std::fill(L.trace.begin(), L.trace.end(), 0.0f);
         std::fill(L.refr.begin(), L.refr.end(), 0);
         std::fill(L.spent.begin(), L.spent.end(), 0);
         std::fill(L.win_start.begin(), L.win_start.end(), 0);
@@ -199,13 +199,27 @@ void Engine::feed(int ch) {
     const int total = n_neurons();
     std::uniform_int_distribution<int> nd(0, L0.n - 1);
 
-    // proyeccion fija y determinista: misma semilla -> mismo mapa
-    std::mt19937 enc((uint32_t)(p_.seed * 7919u + (uint32_t)ch * 104729u));
-    for (int bit = 0; bit < BITS_PER_CHAR; ++bit) {
-        if (!((ch >> bit) & 1)) continue;
-        for (int k = 0; k < 24; ++k) {
-            int j = (int)(enc() % (uint32_t)L0.n);
+    // Codificacion determinista y DISPERSA:
+    //   1. un parche contiguo desplazado por el simbolo (posicion = identidad)
+    //   2. un conjunto pseudoaleatorio dependiente del simbolo (textura)
+    // La version anterior proyectaba los 8 bits siempre sobre las mismas ~24
+    // neuronas; los patrones colisionaban y un simbolo con codigo 0 no
+    // encendia nada. Aqui cada simbolo tiene su propio conjunto y todos
+    // encienden aproximadamente lo mismo.
+    {
+        const int n_exc = L0.n - (int)(p_.inh_frac * L0.n);
+        const int patch = std::max(4, n_exc / 20);
+        const int start = (int)((uint64_t)ch * 7919u % (uint32_t)n_exc);
+        for (int i = 0; i < patch; ++i) {
+            int j = (start + i) % n_exc;
             L0.v[j] += p_.input_gain;
+            if (!L0.in_active[j]) { L0.in_active[j] = 1; L0.active.push_back(j); }
+        }
+        std::mt19937 enc((uint32_t)(p_.seed * 7919u + (uint32_t)ch * 104729u + 17u));
+        const int tex = std::max(6, n_exc / 12);
+        for (int k = 0; k < tex; ++k) {
+            int j = (int)(enc() % (uint32_t)n_exc);
+            L0.v[j] += p_.input_gain * 0.8f;
             if (!L0.in_active[j]) { L0.in_active[j] = 1; L0.active.push_back(j); }
         }
     }
@@ -214,14 +228,6 @@ void Engine::feed(int ch) {
         step();
     }
 
-    // memoria de contexto: promedio decaido de la tasa. Es lo que permite al
-    // readout ver mas alla del simbolo actual (si no, solo aprende bigramas).
-    const float k = 0.25f;
-    for (auto& L : layers_) {
-        for (int j = 0; j < L.n; ++j) {
-            L.ctx[j] = (1.0f - k) * L.ctx[j] + k * L.rate[j];
-        }
-    }
 
     // activacion media del simbolo -> features del readout
     symbols_++;
@@ -317,6 +323,10 @@ int Engine::step() {
             L.spike_count[j]++;
             L.rate[j] += 1.0f;
             L.vtrace[j] = 1.0f;
+            {
+                float* tr = &L.trace[(size_t)j * p_.n_traces];
+                for (int k = 0; k < p_.n_traces; ++k) tr[k] = 1.0f;  // marca de identidad
+            }
             L.theta[j] += p_.theta_step;
             act_now_[L.offset + j] = 1.0f;
             L.active_next.push_back(j);
@@ -331,10 +341,17 @@ int Engine::step() {
         fired_total += (int)cand.size();
 
         // --- 6. decaimiento de trazas: SOLO las neuronas activas ---
+        static const float tau_t[8] = {0.60f, 0.88f, 0.96f, 0.985f,
+                                       0.993f, 0.997f, 0.9985f, 0.999f};
         for (i32 j : L.active_next) {
             L.vtrace[j] *= 0.90f;
             L.theta[j] *= 0.9995f;
             if (L.vtrace[j] < 1e-4f) L.vtrace[j] = 0.0f;
+            float* tr = &L.trace[(size_t)j * p_.n_traces];
+            for (int k = 0; k < p_.n_traces; ++k) {
+                tr[k] *= tau_t[k];
+                if (tr[k] < 1e-4f) tr[k] = 0.0f;
+            }
         }
 
         L.active.swap(L.active_next);
@@ -368,27 +385,38 @@ int Engine::step() {
 // ---------------------------------------------------------------------------
 
 void Engine::feature_vector(std::vector<float>& out) const {
-    // Por capa: tasa del simbolo actual (que dijo) y contexto decaido
-    // (que venia diciendo). El sesgo cierra el vector.
+    // Bloques normalizados INDEPENDIENTEMENTE: tasa | traza0 | traza1 | ...
+    //
+    // La normalizacion global era el error: al meter 4 bloques de traza y uno
+    // de tasa en un mismo vector y normalizar el conjunto, el bloque de tasa
+    // quedaba con un 20 % de la norma y la identidad del simbolo actual se
+    // volvia invisible para el readout. Normalizando por bloque, cada canal
+    // conserva su propia escala y todos son legibles.
     const int N = p_.layer_size;
+    const int K = p_.n_traces;
     const int F = p_.n_features();
     out.assign(F, 0.0f);
     const float inv = 1.0f / std::max(1, p_.ticks_per_char);
     int idx = 0;
+    auto emit_norm = [&](const float* src, int n, float scale) {
+        float nrm = 0.0f;
+        for (int i = 0; i < n; ++i) nrm += src[i] * src[i];
+        nrm = std::sqrt(nrm);
+        const float g = (nrm > 1e-6f) ? (scale / nrm) : 0.0f;
+        for (int i = 0; i < n && idx < F - 1; ++i) out[idx++] = src[i] * g;
+        if (idx > F - 1) idx = F - 1;
+    };
     for (int li = 0; li < p_.n_layers; ++li) {
         const Layer& L = layers_[li];
-        for (int j = 0; j < N && idx < F - 1; ++j) out[idx++] = L.rate[j] * inv;
-        for (int j = 0; j < N && idx < F - 1; ++j) out[idx++] = L.ctx[j] * inv;
+        emit_norm(L.rate.data(), N, inv);
+        for (int k = 0; k < K; ++k) {
+            // extraer la traza k de todas las neuronas a un buffer contiguo
+            std::vector<float> col(N);
+            for (int j = 0; j < N; ++j) col[j] = L.trace[(size_t)j * K + k];
+            emit_norm(col.data(), N, inv);
+        }
     }
     out[F - 1] = 1.0f;
-    // normalizacion L2: el readout no debe depender de la escala de actividad
-    float nrm = 0.0f;
-    for (int i = 0; i < F - 1; ++i) nrm += out[i] * out[i];
-    nrm = std::sqrt(nrm);
-    if (nrm > 1e-6f) {
-        const float inv2 = 1.0f / nrm;
-        for (int i = 0; i < F - 1; ++i) out[i] *= inv2;
-    }
 }
 
 void Engine::features(std::vector<float>& out) const { feature_vector(out); }
