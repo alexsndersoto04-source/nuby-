@@ -58,23 +58,14 @@ static std::vector<unsigned char> read_corpus(const std::string& path) {
 
 // Mapa byte -> indice. Vocabulario fijo de 120: los bytes imprimibles y los
 // acentuados frecuentes van a sus propios indices; el resto se agrupa.
+// Vocabulario = los 256 valores de byte, identidad pura.
+//
+// La version anterior mapeaba a 120 simbolos con un relleno que dejaba 142
+// valores de byte apuntando al indice 0. Como el corpus esta en UTF-8, cada
+// acentuado son dos bytes y medio texto caia en el mismo simbolo. Las cifras
+// que se midieron con ese mapa estaban contaminadas.
 struct Vocab {
-    int idx[256];
-    int n = 120;
-    Vocab() {
-        for (int i = 0; i < 256; ++i) idx[i] = -1;
-        int k = 0;
-        for (int b = 32; b < 127 && k < 100; ++b) idx[b] = k++;
-        // acentuados del español en UTF-8 latin-1 range
-        for (int b : {10, 9}) idx[b] = k++;
-        while (k < n) { // relleno: nunca se usan
-            idx[128 + (k % 100)] = k; k++;
-        }
-    }
-    int map(unsigned char b) const {
-        int v = idx[b];
-        return v < 0 ? 0 : v;
-    }
+    int map(unsigned char b) const { return (int)b; }
 };
 
 struct Softmax {

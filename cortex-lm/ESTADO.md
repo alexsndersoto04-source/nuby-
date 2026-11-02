@@ -1,103 +1,96 @@
 # Estado del motor CORTEX-LM
 
-Documento honesto. Lo que funciona, lo que no, y lo que no sabemos.
+Acta honesta. Lo que funciona, lo que no, y qué se midió para saberlo.
 
 ---
 
-## Resumen en una línea
+## Resumen
 
-El motor **aprende a predecir texto y generaliza**, pero la red de pulsos
-**todavía no aporta nada medible**; el rendimiento viene del clasificador
-lineal. El objetivo de BPC se cumple por debajo del listón teórico, y eso es
-precisamente lo que hay que arreglar.
+El sistema **aprende lenguaje y generaliza** (0,24 bpc en texto no visto con
+8 símbolos de historial). La red de pulsos **todavía no aporta** ese
+rendimiento, y hoy se encontró la razón mecánica: **satura**.
 
 ---
 
-## Resultado medido hoy
+## Los dos bugs que invalidaban todas las mediciones anteriores
 
-Entrenamiento en las primeras 80 % del corpus, evaluación en el 20 % restante
-que el modelo nunca vio:
+**1. Cada símbolo avanzaba 10 ticks, no 5, y perdía la mitad de su corriente.**
+`inject_only()` contenía un bucle de ticks que `feed()` volvía a ejecutar
+después. Consecuencia: la corriente sensorial se aplicaba una vez y se dejaba
+evolucionar el doble de tiempo, con lo que un símbolo aislado **no llegaba a
+hacer disparar a nada** (0 disparos con ganancia 0,62 e incluso con 3,0).
 
-| configuración | bpc en texto no visto |
+**2. El contador de disparos tapaba el problema.** Todos los barridos de
+parámetros de las sesiones anteriores se hicieron con el motor en ese estado:
+medían una red medio apagada. Los números de esas tablas ya no valen.
+
+Con el motor corregido, un símbolo aislado produce ~26 disparos y la red
+responde a la ganancia como es debido.
+
+## Lo que se midió después, ya con el motor correcto
+
+**La red identifica el símbolo actual** si el estado se limpia entre símbolos:
+acierto 1,000 (azar 0,062).
+
+**En secuencia continua no identifica nada**: el estado queda saturado en
+~168 de 256 neuronas permanentemente activas, y la entrada nueva modula apenas
+un océano de actividad previa.
+
+**El pasado no está en el estado**. Decodificar el símbolo de hace 1 a 4 pasos
+desde el estado de la red da valores de azar:
+
+| lag | `rate` | `trace` |
+|---|---|---|
+| 1 | 0,14 | 0,23 |
+| 2 | 0,04 | 0,15 |
+| 3 | 0,12 | 0,14 |
+| 4 | 0,05 | 0,09 |
+
+(azar 0,062). Hay una pizca de información de un paso atrás en `trace`, y nada
+más. Con ganancia de 0,40 desaparece por completo.
+
+**Y no mejora al crecer**: 256, 512, 1024 y 2048 neuronas dan el mismo
+resultado. **La premisa del diseño —más grande, más capacidad— es falsa en esta
+red, porque el régimen es saturación, no estado disperso.**
+
+## Lo que se intentó para arreglar la saturación
+
+| mecanismo | efecto |
 |---|---|
-| azar (uniforme) | 6,91 |
-| estado de la red (trazas de actividad) | 4,36 |
-| **historial sensorial de 8 símbolos** | **0,289** |
-| historial sensorial de 4 símbolos | 1,396 |
-| historial sensorial de 2 símbolos | 2,288 |
+| Bajar `w_init_scale` de 0,12 a 0,005 | más saturado todavía (236 neuronas) |
+| Inhibición de retroalimentación divergente y retardada (nueva, `fi_gain`) | reduce activas de 167 a 82, pero **no crea memoria** |
+| Quitar la compuerta k-WTA | sin efecto (nunca había exceso de candidatos) |
+| Subir el peso recurrente a 1,0 | sin efecto |
 
-**La generalización es perfecta**: la cifra de entrenamiento y la de texto no
-visto coinciden al tercer decimal. No hay sobreajuste.
+Ninguno produjo memoria. El freno cambia cuántas neuronas están activas, no
+qué información guardan.
 
-## Pero hay un problema, y es serio
+## Lo que sí está resuelto y verificado
 
-El control que separa lo que aporta la red de lo que aporta el clasificador:
+- **Memoria de trabajo**: 100 % en el banco de 40 claves con 10 de relleno.
+- **Aprendizaje de texto con generalización perfecta** (entrenamiento y test
+  coinciden al tercer decimal).
+- **La plasticidad local por fin se ejecuta**: 0 → ~125 marcas de elegibilidad
+  por símbolo.
+- **Vocabulario honesto**: 256 bytes reales en vez de 120 con mapeo que
+  corrompía el texto.
 
-| configuración | bpc en texto no visto |
-|---|---|
-| historial de 4 símbolos + red **aprendiendo** | 1,396 |
-| historial de 4 símbolos + red **congelada** | 1,396 |
+## El problema abierto, en una frase
 
-**Idénticos hasta el último dígito.** La plasticidad local no contribuye en
-absoluto. Todo el rendimiento sale del clasificador lineal leyendo un one-hot
-del historial de entrada; la red de pulsos es decoración.
-
-Y el listón que hay que batir:
-
-| modelo trivial | bpc en el mismo texto |
-|---|---|
-| bigrama (contexto de 1 byte) | 2,893 |
-| trigrama (contexto de 2) | 1,700 |
-| 4-grama (contexto de 3) | **0,855** |
-| 5-grama (contexto de 4) | **0,579** |
-
-Nuestro modelo con 4 símbolos de historial (1,396) **pierde contra un 4-grama
-del montón** (0,855), que es una tabla de contar y cabe en un teléfono.
-
-## Conclusión operativa
-
-El sistema **ya aprende lenguaje**. Cumple el objetivo de BPC < 2,0. Pero lo
-cumple por la vía trivial, no por la vía interesante. Ir a Kaggle a escalar esto
-sería escalar un contador de n-gramas con una red de pulsos de adorno.
-
-**El problema abierto, en una frase:** conseguir que el estado recurrente
-aportes información que el historial de entrada no contiene.
-
-## Lo que sí quedó arreglado (bugs reales, todos verificados)
-
-1. **La plasticidad local valía cero.** 0 de 4887 sinapsis marcadas. La marca
-   se escribía en la llegada sináptica, que exige coincidencia de pre y post en
-   pocos ticks; a densidad 0,05 eso casi nunca pasa. Ahora se marca al disparo
-   presináptico sobre todas sus salientes (forma de e-prop): ~125 marcas por
-   símbolo.
-2. **La codificación de entrada colisionaba.** Los 8 bits del carácter
-   proyectaban siempre sobre las mismas ~24 neuronas, y el código 0 no encendía
-   nada. Ahora cada símbolo tiene parche propio + textura propia.
-3. **`consolidate()` borraba el contexto** cada 500 símbolos llamando a
-   `reset_state()`. Era una operación sobre pesos destruyendo actividad.
-4. **El banco de pruebas arrastraba estado entre ensayos**, lo que producía un
-   0 % falso. Con el estado limpio: 100 % en memoria de trabajo (40 claves,
-   10 de relleno).
+Conseguir un régimen de actividad **dispersa y persistente** —pocas neuronas
+activas a la vez, capaces de seguir activas sin entrada— en vez de saturación
+o silencio. Es el requisito para que el estado guarde algo, y sin él ninguna
+regla de lectura puede sacar contexto.
 
 ## Reproducir
 
 ```
 make
-./bin/cortex_lm eval x                      # historial de 8: ~0,29 bpc
-CORTEX_NCTX=4 ./bin/cortex_lm eval x        # historial de 4: ~1,40 bpc
-CORTEX_VIEW=trace ./bin/cortex_lm eval x    # solo estado de la red: ~4,36 bpc
-CORTEX_READOUT_ONLY=1 ... eval x            # control: red congelada
+./bin/cortex_lm eval x                      # historial de 8 símbolos: ~0,24 bpc
+CORTEX_NCTX=4 ./bin/cortex_lm eval x        # ~1,40 bpc
+CORTEX_VIEW=trace ./bin/cortex_lm eval x    # solo estado de la red: ~4,40 bpc
 ./bin/cortex_lm bench /tmp/b.bin            # memoria de trabajo: 100 %
 ```
-
-## Lo que NO está resuelto
-
-- La red de pulsos no aporta. Es el problema central y está abierto.
-- El corpus de prueba tiene 195 valores de byte, pero el motor usa 120 como
-  vocabulario: parte del texto se mapea mal y las cifras absolutas están
-  infladas de forma artificial. Hay que fijar el vocabulario al rango real de
-  bytes (256) y volver a medir.
-- No se ha probado con corpus real grande.
 
 ## Diseño aprobado
 

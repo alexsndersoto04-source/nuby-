@@ -31,7 +31,7 @@ struct Params {
     // --- forma de la red ---
     int n_layers      = 2;      // capas recurrentes LIF
     int layer_size    = 4096;   // neuronas por capa
-    int n_chars       = 120;    // vocabulario
+    int n_chars       = 256;    // vocabulario = bytes (identidad)
     float density     = 0.06f;  // fraccion de conexiones dentro de la capa
     int d_max         = 32;     // retardo maximo (ticks)
 
@@ -39,7 +39,7 @@ struct Params {
     float dt          = 1.0f;
     float tau_m       = 20.0f;  // constante de membrana
     float v_th        = 0.60f;
-    float input_gain  = 0.62f;   // corriente por sinapsis sensorial
+    float input_gain  = 0.25f;   // corriente por sinapsis sensorial
     float v_reset     = 0.0f;
     int   refractory  = 2;
     int   ticks_per_char = 5;
@@ -61,6 +61,15 @@ struct Params {
     int   inh_delay   = 3;
     int   inh_fanout  = 5;
     float inh_weight  = 0.020f;
+    // Inhibicion de retroalimentacion: cada disparo resta fi_gain a fi_fanout
+    // neuronas elegidas al azar de la misma capa, con retardo fi_delay.
+    // A diferencia del k-WTA (que impone un numero fijo de disparos) o de la
+    // inhibicion global (que frena a todos por igual), esto se adapta: cuanto
+    // mas activa esta la poblacion, mas freno recibe. Es el mecanismo que
+    // sostiene actividad dispersa en vez de saturacion.
+    float fi_gain     = 0.0f;
+    int   fi_fanout   = 4;
+    int   fi_delay    = 1;
 
     // --- plasticidad ---
     float tau_e       = 50.0f;  // vida de la traza de elegibilidad
@@ -160,7 +169,7 @@ struct Layer {
     std::vector<i32>     touch_snap;     // copia para iterar mientras se toca
 };
 
-// Entrada sensorial: n_chars x 8 bits.
+// Entrada sensorial: n_chars valores (bytes).
 static constexpr int BITS_PER_CHAR = 8;
 
 // ---------------------------------------------------------------------------
@@ -180,6 +189,8 @@ public:
     // --- simulacion ---
     // Procesa un caracter: inyecta el patron y avanza ticks_per_char.
     void feed(int ch);
+    void inject_only(int ch);
+    void end_symbol();
     // Avanza un tick sin inyectar. Devuelve la suma de disparos.
     int step();
 
@@ -226,6 +237,7 @@ private:
     // Cola de retardos: un bucket circular por tick. Es miembro, no global,
     // para que dos motores puedan convivir en el mismo proceso (tests, ensembles).
     struct Ev { i32 post; i32 syn; };
+    static constexpr i32 kFiSyn = -1;   // evento de freno, no es una sinapsis
     struct DelayQueue {
         std::vector<std::vector<Ev>> buckets;
         int span = 0;

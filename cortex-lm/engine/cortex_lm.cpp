@@ -206,6 +206,19 @@ void Engine::feed(int ch) {
     begin_symbol();
     // ranura 0 del historial = simbolo que se acaba de presentar
     ctx_hist_[ch] = 1.0f;
+    inject_only(ch);
+
+    for (int s = 0; s < p_.ticks_per_char; ++s) step();
+    end_symbol();
+
+    symbols_++;
+    symbols_since_consol_++;
+}
+
+// Presenta el estimulo sensorial SIN avanzar ticks: deja la red preparada para
+// que el llamador ejecute step() y observe como la identidad se desvanece.
+void Engine::inject_only(int ch) {
+    if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("char fuera de vocabulario");
 
     // corriente sensorial: los bits a 1 del codigo del caracter empujan un
     // conjunto fijo de neuronas de la capa 0.
@@ -238,24 +251,6 @@ void Engine::feed(int ch) {
         }
     }
 
-    for (int s = 0; s < p_.ticks_per_char; ++s) {
-        step();
-    }
-
-
-    // desplazar el banco de slots y guardar el perfil de este simbolo
-    for (auto& L : layers_) {
-        const size_t n = (size_t)L.n;
-        if (p_.n_slots > 1) {
-            std::memmove(&L.slots[n], &L.slots[0], sizeof(float) * n * (p_.n_slots - 1));
-        }
-        for (size_t j = 0; j < n; ++j) L.slots[j] = L.rate[j];
-    }
-
-    // activacion media del simbolo -> features del readout
-    symbols_++;
-    symbols_since_consol_++;
-    (void)total;
 }
 
 int Engine::step() {
@@ -274,6 +269,12 @@ int Engine::step() {
 
         // --- 1. llegadas (solo las de este tick) ---
         for (const Ev& e : q.drain()) {
+            if (e.syn == kFiSyn) {
+                L.v[e.post] -= p_.fi_gain;
+                if (L.v[e.post] < p_.v_reset) L.v[e.post] = p_.v_reset;
+                if (!L.in_active[e.post]) { L.in_active[e.post] = 1; L.active.push_back(e.post); }
+                continue;
+            }
             const float cur = L.g.weight[e.syn] + L.fast[e.syn];
             if (L.g.sign[e.syn]) {
                 L.v[e.post] -= cur;
@@ -348,6 +349,19 @@ int Engine::step() {
             const i32 hi = L.g.offsets[j + 1];
             for (i32 s = lo; s < hi; ++s) {
                 q.push(t_ + L.g.delay[s], Ev{L.g.post[s], s});
+            }
+
+            // freno divergente a la propia capa
+            if (p_.fi_gain > 0.0f) {
+                for (int f = 0; f < p_.fi_fanout; ++f) {
+                    int tgt = (int)(rng_() % (uint32_t)L.n);
+                    float* ev = nullptr;
+                    (void)ev;
+                    if (tgt == j) continue;
+                    // llega con retardo, como cualquier sinapsis: el freno se
+                    // encola en vez de aplicarse de inmediato
+                    q.push(t_ + p_.fi_delay, Ev{tgt, kFiSyn});
+                }
             }
 
             // --- plasticidad de tres factores ---
@@ -468,6 +482,16 @@ void Engine::emit_features(std::vector<float>& out) const {
             out.insert(out.end(), a.begin(), a.end());
             return;
         }
+    }
+}
+
+// Cierre de simbolo: el perfil de actividad pasa al banco de slots.
+void Engine::end_symbol() {
+    for (auto& L : layers_) {
+        const size_t n = (size_t)L.n;
+        if (p_.n_slots > 1)
+            std::memmove(&L.slots[n], &L.slots[0], sizeof(float) * n * (p_.n_slots - 1));
+        for (size_t j = 0; j < n; ++j) L.slots[j] = L.rate[j];
     }
 }
 
