@@ -1,394 +1,489 @@
-// cortex_lm_main.cpp — utilidades de linea de comandos
+// cortex_lm_main.cpp — CLI del motor CORTEX-LM.
 //
-//   cortex_lm smoke <archivo>         prueba de vida: red pequena, latido
-//   cortex_lm bench <archivo>         prueba de memoria de trabajo
-//   cortex_lm train <archivo> <datos> <pasos> [--small]
-//   cortex_lm eval  <archivo> <datos>
+// Comandos:
+//   smoke <archivo>                     latido: la red no esta muerta ni epiléptica
+//   audit                               las comprobaciones estructurales del motor
+//   eval <archivo>                       entrena 80 %, evalua en el 20 % no visto
+//   train <archivo> <datos> <pasos>      entrenamiento con traza de BPC
+//   bench <archivo>                      memoria de trabajo: clave + relleno
 //
-// Todo lo que hace falta para entrenar en Kaggle sin dependencias de Python.
+// Variables de entorno:
+//   CORTEX_VIEW = ctx | rate | theta    que features usa el readout
+//   CORTEX_NCTX = 1..8                  tamano del historial sensorial
+//   CORTEX_N, CORTEX_K                  tamano de capa y ganadores por tick
 
 #include "cortex_lm.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
-#include <cmath>
-#include <chrono>
-#include <algorithm>
-#include <string>
-#include <cstdlib>
+#include <random>
 
 using namespace cortex;
 
-// Devuelve una ruta de escritura valida para el estado.
-// En Android no existe /tmp; en Termux el temporal es $PREFIX/tmp.
-static std::string state_path(const char* requested) {
-    auto writable = [](const std::string& p) {
-        std::ofstream t(p + ".probe", std::ios::binary);
-        if (!t) return false;
-        t.close();
-        std::remove((p + ".probe").c_str());
-        return true;
-    };
-    if (requested && requested[0]) {
-        std::string p(requested);
-        auto slash = p.find_last_of('/');
-        std::string dir = (slash == std::string::npos) ? "." : p.substr(0, slash);
-        if (dir.empty()) dir = "/";
-        if (writable(dir)) return p;
-        std::fprintf(stderr, "aviso: %s no es escribible, usando temporal\n", dir.c_str());
-    }
-    for (const char* e : {"TMPDIR", "PREFIX"}) {
-        const char* v = std::getenv(e);
-        if (!v) continue;
-        std::string dir = std::string(v) + (std::string(e) == "PREFIX" ? "/tmp" : "");
-        if (writable(dir)) return dir + "/cortex_state.bin";
-    }
-    return "cortex_state.bin";
+// ---------------------------------------------------------------------------
+
+static std::vector<unsigned char> read_corpus(const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error(std::string("no se puede abrir ") + path);
+    return std::vector<unsigned char>((std::istreambuf_iterator<char>(in)),
+                                     std::istreambuf_iterator<char>());
 }
 
-static std::vector<unsigned char> read_corpus(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) { std::fprintf(stderr, "no se pudo abrir %s\n", path.c_str()); std::exit(1); }
-    return std::vector<unsigned char>((std::istreambuf_iterator<char>(f)),
-                                       std::istreambuf_iterator<char>());
+static void softmax(std::vector<float>& z) {
+    float mx = *std::max_element(z.begin(), z.end());
+    float s = 0.0f;
+    for (auto& x : z) { x = std::exp(x - mx); s += x; }
+    for (auto& x : z) x /= s;
 }
 
-// Mapa byte -> indice. Vocabulario fijo de 120: los bytes imprimibles y los
-// acentuados frecuentes van a sus propios indices; el resto se agrupa.
-// Vocabulario = los 256 valores de byte, identidad pura.
-//
-// La version anterior mapeaba a 120 simbolos con un relleno que dejaba 142
-// valores de byte apuntando al indice 0. Como el corpus esta en UTF-8, cada
-// acentuado son dos bytes y medio texto caia en el mismo simbolo. Las cifras
-// que se midieron con ese mapa estaban contaminadas.
-struct Vocab {
-    int map(unsigned char b) const { return (int)b; }
-};
+enum class View { Ctx, Rate, Theta, Last };
 
-struct Softmax {
-    static void apply(std::vector<float>& z) {
-        float mx = *std::max_element(z.begin(), z.end());
-        float sum = 0;
-        for (auto& x : z) { x = std::exp(x - mx); sum += x; }
-        for (auto& x : z) x /= sum;
-    }
-};
-
-[[maybe_unused]] static double bits_per_char(Engine& eng,
-                            const std::vector<unsigned char>& data,
-                            const Vocab& v, size_t start, size_t count) {
-    std::vector<float> logits(eng.params().n_chars);
-    double bits = 0;
-    int n = 0;
-    for (size_t i = start; i + 1 < start + count && i + 1 < data.size(); ++i) {
-        eng.feed(v.map(data[i]));
-        eng.readout(logits.data());
-        Softmax::apply(logits);
-        float p = logits[v.map(data[i + 1])];
-        if (p < 1e-9f) p = 1e-9f;
-        bits += -std::log2(p);
-        n++;
-    }
-    return n ? bits / n : 0.0;
+static View view_from_env() {
+    const char* v = std::getenv("CORTEX_VIEW");
+    if (!v) return View::Ctx;
+    if (std::strcmp(v, "rate") == 0) return View::Rate;
+    if (std::strcmp(v, "theta") == 0 || std::strcmp(v, "fatiga") == 0) return View::Theta;
+    if (std::strcmp(v, "last") == 0) return View::Last;
+    return View::Ctx;
 }
 
-static void cmd_train(const std::string& path, const std::string& data_path,
-                      int steps, bool small) {
+static void features(const Engine& e, View v, std::vector<float>& out) {
+    switch (v) {
+        case View::Rate:  e.rate_features(out);  break;
+        case View::Theta: e.theta_features(out); break;
+        case View::Last:  e.last_features(out);  break;
+        default:          e.ctx_features(out);   break;
+    }
+}
+
+// Lectura: normaliza, actualiza estadisticas y devuelve logits.
+static void infer(Engine& e, View v, std::vector<float>& f, std::vector<float>& logits) {
+    features(e, v, f);
+    e.update_norm(f);
+    std::vector<float> fn;
+    e.normalize(f, fn);
+    e.readout(fn, logits.data());
+}
+
+static Params params_from_env() {
     Params p;
-    if (small) { p.layer_size = 256; p.n_layers = 1; p.density = 0.05f; }
-    Engine eng(p);
-    eng.build_random(p.seed);
-    // CORTEX_VIEW=slot (defecto) | trace  -> comparar las dos lecturas
-    const char* vw = std::getenv("CORTEX_VIEW");
-    if (!vw || std::strcmp(vw, "slot") == 0) eng.set_view(Engine::View::Slot);
-    else if (std::strcmp(vw, "trace") == 0) eng.set_view(Engine::View::Trace);
-    else if (std::strcmp(vw, "ctx") == 0)   eng.set_view(Engine::View::Ctx);
-    else if (std::strcmp(vw, "both") == 0)  eng.set_view(Engine::View::Both);
-    else eng.set_view(Engine::View::Slot);
+    p.layer_size = 1024;
+    p.n_layers = 1;
+    if (const char* s = std::getenv("CORTEX_N")) p.layer_size = std::atoi(s);
+    if (const char* s = std::getenv("CORTEX_NCTX")) {
+        int k = std::atoi(s);
+        if (k > 0 && k <= 8) p.n_ctx = k;
+    }
+    return p;
+}
 
-    auto data = read_corpus(data_path);
-    Vocab v;
-    std::printf("motor: %d neuronas, %zu sinapsis, %zu bytes de corpus\n",
-                eng.n_neurons(), eng.n_synapses(), data.size());
+static void apply_env_overrides(Params& p) {
+    p.layer_size = 1024;
+    p.n_layers = 1;
+    if (const char* s = std::getenv("CORTEX_N")) p.layer_size = std::atoi(s);
+    if (const char* s = std::getenv("CORTEX_K")) p.active_frac = std::atof(s);
+}
 
-    std::vector<float> logits(p.n_chars), err(p.n_chars);
-    size_t pos = 0;
+// ---------------------------------------------------------------------------
+// smoke: latido
+// ---------------------------------------------------------------------------
+static int cmd_smoke(const std::string&) {
+    Params p = params_from_env();
+    Engine e(p);
+    e.build_random(p.seed);
+    std::printf("red: %d neuronas, %zu sinapsis, %d ticks/simbolo\n",
+                e.n_neurons(), e.n_synapses(), p.ticks_per_char);
+
+    e.reset_state();
+    for (int i = 0; i < 400; ++i) e.feed(i % 60 + 32);
+
+    // actividad por bloques: un regimen sano es estable
+    std::printf("\nactividad por bloques de 50 simbolos:\n");
+    double first = -1, last = 0;
+    for (int b = 0; b < 8; ++b) {
+        long s0 = e.spikes();
+        for (int c = 0; c < 50; ++c) e.feed((b * 50 + c) % 60 + 32);
+        double per = (e.spikes() - s0) / 50.0;
+        if (b == 0) first = per;
+        last = per;
+        std::printf("  bloque %d: %6.1f disparos/simbolo\n", b, per);
+    }
+    int used = 0;
+    for (int j = 0; j < p.layer_size; ++j) if (e.layer(0).spike_count[j] > 0) used++;
+    std::printf("\nneuronas usadas: %d/%d\n", used, p.layer_size);
+
+    const double ratio = (first > 0.5) ? last / first : (last > 0.5 ? 99.0 : 1.0);
+    if (last < 1.0) {
+        std::printf("veredicto: MUERTA (%.1f disparos/simbolo)\n", last);
+        return 1;
+    }
+    if (ratio > 4.0) {
+        std::printf("veredicto: INESTABLE (crece de %.1f a %.1f, x%.1f)\n",
+                    first, last, ratio);
+        return 1;
+    }
+    std::printf("veredicto: VIVA Y ESTABLE (%.1f disparos/simbolo)\n", last);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// audit: comprobaciones estructurales
+// ---------------------------------------------------------------------------
+static int cmd_audit(const std::string&) {
+    Params p = params_from_env();
+    Engine e(p);
+    e.build_random(p.seed);
+    int fails = 0;
+
+    std::printf("=== AUDITORIA ESTRUCTURAL ===\n\n");
+    std::printf("red: %d neuronas, %zu sinapsis, densidad %.2f, d_max %d\n",
+                e.n_neurons(), e.n_synapses(), p.density, p.d_max);
+
+    // 1. corriente recurrente frente al umbral
+    {
+        const auto& L = e.layer(0);
+        double wsum = 0; size_t n = 0;
+        for (float w : L.g.weight) { wsum += w; n++; }
+        const double wmean = wsum / n;
+        const double fan_in = p.density * p.layer_size;
+        const double active_n = p.active_frac * p.layer_size;
+        const double contrib = (fan_in / p.layer_size) * active_n;
+        const double current = contrib * wmean;
+        std::printf("\n[1] corriente recurrente por tick: %.3f\n", current);
+        std::printf("    umbral: %.2f | corriente esperada / umbral: %.2f\n",
+                    p.v_th, current / p.v_th);
+        if (current / p.v_th > 1.5) {
+            std::printf("    FALLA: la red se autoexcita sin entrada\n");
+            fails++;
+        } else {
+            std::printf("    ok: la entrada hace falta para disparar\n");
+        }
+    }
+
+    // 2. la entrada sola hace disparar
+    {
+        long total = 0;
+        for (int c = 0; c < 32; ++c) {
+            e.reset_state();
+            e.inject_only(c);
+            for (int s = 0; s < p.ticks_per_char; ++s) total += e.step();
+        }
+        const double per = total / 32.0;
+        std::printf("\n[2] un simbolo aislado produce %.1f disparos\n", per);
+        if (per < 1.0) { std::printf("    FALLA: la entrada no gobierna la red\n"); fails++; }
+        else std::printf("    ok: la entrada gobierna la red\n");
+    }
+
+    // 3. regimen estable en secuencia
+    {
+        e.reset_state();
+        for (int c = 0; c < 300; ++c) e.feed(c % 60 + 32);   // calentamiento
+        double b[4];
+        for (int i = 0; i < 4; ++i) {
+            long s0 = e.spikes();
+            for (int c = 0; c < 100; ++c) e.feed((i * 100 + c) % 60 + 32);
+            b[i] = (e.spikes() - s0) / 100.0;
+        }
+        std::printf("\n[3] actividad por bloques tras calentar: %.1f %.1f %.1f %.1f\n",
+                    b[0], b[1], b[2], b[3]);
+        const double drift = b[3] / std::max(0.1, b[0]);
+        std::printf("    deriva: x%.2f\n", drift);
+        if (drift > 2.0 || b[3] < 0.5) { std::printf("    FALLA: no hay punto fijo\n"); fails++; }
+        else std::printf("    ok: regimen estable\n");
+    }
+
+    // 4. ¿la respuesta depende del simbolo mas que del historial?
+    {
+        const auto& L = e.layer(0);
+        e.reset_state();
+        for (int c = 0; c < 300; ++c) e.feed(c % 60 + 32);
+        auto snap = [&](std::vector<float>& out) {
+            out.assign(L.theta.begin(), L.theta.end());   // fatiga = la memoria
+            float nrm = 0;
+            for (float x : out) nrm += x * x;
+            nrm = std::sqrt(nrm) + 1e-6f;
+            for (float& x : out) x /= nrm;
+        };
+        auto diff = [](const std::vector<float>& a, const std::vector<float>& b) {
+            double d = 0;
+            for (size_t i = 0; i < a.size(); ++i) d += std::fabs(a[i] - b[i]);
+            return d / a.size();
+        };
+        // variar el simbolo con el mismo historial, midiendo la fatiga que
+        // el simbolo deja inmediatamente despues
+        std::vector<std::vector<float>> by_sym(8);
+        for (int c = 0; c < 8; ++c) {
+            e.reset_state();
+            e.inject_mem(c);
+            for (int k = 0; k < p.ticks_per_char; ++k) e.step();
+            e.end_symbol();
+            snap(by_sym[c]);
+        }
+        e.reset_state();
+        double dmax = 0;
+        for (int i = 0; i < 8; ++i)
+            for (int j = i + 1; j < 8; ++j)
+                dmax = std::max(dmax, diff(by_sym[i], by_sym[j]));
+        std::printf("\n[4] separacion del perfil de fatiga entre simbolos: %.4f\n", dmax);
+        if (dmax < 0.01) { std::printf("    FALLA: la red no distingue simbolos\n"); fails++; }
+        else std::printf("    ok: los simbolos producen estados distintos\n");
+    }
+
+    // 5. memoria de trabajo: clave -> relleno -> decodificar la clave
+    {
+        const int NKEYS = 40, FILL = 8, TRIALS = 800;
+        std::vector<std::vector<float>> X;
+        std::vector<int> Y;
+        std::vector<float> ff;
+        std::mt19937 rng(11);
+        std::uniform_int_distribution<int> ud(0, NKEYS - 1);
+        for (int t = 0; t < TRIALS; ++t) {
+            e.reset_state();
+            const int key = ud(rng), fil = ud(rng);
+            e.inject_mem(key);
+            for (int k = 0; k < p.ticks_per_char; ++k) e.step();
+            e.end_symbol();
+            for (int k = 0; k < FILL; ++k) e.feed(200 + fil);
+            e.theta_features(ff);
+            X.push_back(ff);
+            Y.push_back(key);
+        }
+        // decodificador ridge offline, particion 70/30
+        const int D = (int)X[0].size(), NTR = TRIALS * 7 / 10;
+        std::vector<double> mu(D, 0), sd(D, 0);
+        for (int t = 0; t < NTR; ++t) for (int j = 0; j < D; ++j) mu[j] += X[t][j];
+        for (int j = 0; j < D; ++j) mu[j] /= NTR;
+        for (int t = 0; t < NTR; ++t) for (int j = 0; j < D; ++j) { double dd = X[t][j] - mu[j]; sd[j] += dd * dd; }
+        for (int j = 0; j < D; ++j) sd[j] = std::sqrt(sd[j] / NTR) + 1e-6;
+        std::vector<double> M((size_t)D * D, 0.0), B((size_t)D * NKEYS, 0.0);
+        for (int t = 0; t < NTR; ++t) for (int j = 0; j < D; ++j) {
+            double x = (X[t][j] - mu[j]) / sd[j];
+            for (int k = 0; k < D; ++k) M[(size_t)j * D + k] += x * ((X[t][k] - mu[k]) / sd[k]);
+            B[(size_t)j * NKEYS + Y[t]] += x;
+        }
+        double tr = 0; for (int j = 0; j < D; ++j) tr += M[(size_t)j * D + j];
+        for (int j = 0; j < D; ++j) M[(size_t)j * D + j] += 1e-3 * tr / D + 1e-6;
+        std::vector<double> W((size_t)D * NKEYS, 0.0);
+        for (int it = 0; it < 15; ++it) for (int j = 0; j < D; ++j) {
+            double dg = M[(size_t)j * D + j]; if (dg <= 0) continue;
+            for (int c = 0; c < NKEYS; ++c) {
+                double s = B[(size_t)j * NKEYS + c];
+                for (int k = 0; k < D; ++k) if (k != j) s -= M[(size_t)j * D + k] * W[(size_t)k * NKEYS + c];
+                W[(size_t)j * NKEYS + c] = s / dg;
+            }
+        }
+        int hit = 0;
+        for (int t = NTR; t < TRIALS; ++t) {
+            int best = 0; double bv = -1e30;
+            for (int c = 0; c < NKEYS; ++c) {
+                double v = 0;
+                for (int j = 0; j < D; ++j) v += ((X[t][j] - mu[j]) / sd[j]) * W[(size_t)j * NKEYS + c];
+                if (v > bv) { bv = v; best = c; }
+            }
+            if (best == Y[t]) hit++;
+        }
+        const double acc = 100.0 * hit / (TRIALS - NTR);
+        std::printf("\n[5] memoria de trabajo (%d claves, %d de relleno): %.1f %%"
+                    " (azar %.1f %%)\n", NKEYS, FILL, acc, 100.0 / NKEYS);
+        if (acc < 50.0) { std::printf("    FALLA: no retiene la clave\n"); fails++; }
+        else std::printf("    ok: retiene la clave a traves del relleno\n");
+    }
+
+    std::printf("\n=== RESULTADO: %s ===\n", fails ? "FALLOS" : "TODO OK");
+    return fails ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// eval: entrenamiento en un tramo, evaluacion en otro
+// ---------------------------------------------------------------------------
+static int cmd_eval(const std::string& path) {
+    Params p;
+    apply_env_overrides(p);
+    Engine e(p);
+    e.build_random(p.seed);
+    const View view = view_from_env();
+
+    auto data = read_corpus(path.c_str());
+    if (data.size() < 1000) throw std::runtime_error("corpus demasiado pequeno");
+    const size_t split = data.size() * 8 / 10;
+    const int steps = 200;
+    const int EVAL_N = 4000;
+
+    std::vector<float> logits(p.n_chars), err(p.n_chars), f;
     auto t0 = std::chrono::steady_clock::now();
-    double loss_acc = 0;
 
+    size_t pos = 0;
     for (int s = 0; s < steps; ++s) {
-        if (pos + p.seq_len + 1 >= data.size()) pos = 0;
-        // estado limpio al empezar cada secuencia: arrastrar actividad entre
-        // secuencias contamina el objetivo y el readout no puede aprender
-        eng.reset_state();
-        // un simbolo: alimentar, leer, aprender.
-        // El estado NO se limpia dentro de la secuencia: ahi esta el contexto.
-        // Solo se reinicia entre secuencias, y aun eso hay que revisarlo: el
-        // texto es continuo, cortarlo cada 128 simbolos rompe la continuidad.
+        if (pos + p.seq_len + 1 >= split) pos = 0;
         for (int k = 0; k < p.seq_len; ++k) {
-            eng.feed(v.map(data[pos + k]));
-            eng.readout(logits.data());
-            int target = v.map(data[pos + k + 1]);
-            Softmax::apply(logits);
-            for (auto& x : err) x = 0.0f;
-            err[target] = -1.0f;
-            for (int c = 0; c < p.n_chars; ++c) err[c] += logits[c];
-            loss_acc += -std::log2(std::max(1e-9f, logits[target]));
-            eng.learn(err.data());
-            if (eng.symbols_done() % 500 == 0) eng.consolidate();
+            e.feed(data[pos + k]);
+            infer(e, view, f, logits);
+            const int target = data[pos + k + 1];
+            softmax(logits);
+            for (int c = 0; c < p.n_chars; ++c) err[c] = logits[c];
+            err[target] -= 1.0f;
+            e.learn(err.data(), f);
         }
         pos += p.seq_len;
-
-        if ((s + 1) % 10 == 0) {
+        if ((s + 1) % 50 == 0) {
             auto now = std::chrono::steady_clock::now();
             double sec = std::chrono::duration<double>(now - t0).count();
-            auto st = eng.stats();
-            std::printf("paso %5d | bpc %.3f | w %.3f | usadas %5d | %.1f s (%.2f paso/s)\n",
-                        s + 1, loss_acc / (p.seq_len * 10.0), st.mean_w,
-                        st.used_neurons, sec, (s + 1) / sec);
-            loss_acc = 0;
+            std::printf("  paso %3d  %.0f s\n", s + 1, sec);
             std::fflush(stdout);
         }
     }
-    std::string sp = state_path(path.c_str());
-    eng.save(sp);
-    std::printf("guardado: %s\n", sp.c_str());
-}
 
-
-static int cmd_eval(const char* path) {
-    Params p;
-    p.layer_size = 256; p.n_layers = 1; p.density = 0.05f;
-    if (const char* nc = std::getenv("CORTEX_NCTX")) {
-        int k = std::atoi(nc);
-        if (k > 0 && k <= 8) p.n_ctx = k;
-    }
-    Engine eng(p);
-    eng.build_random(p.seed);
-    const char* vw = std::getenv("CORTEX_VIEW");
-    if (!vw || std::strcmp(vw, "slot") == 0) eng.set_view(Engine::View::Slot);
-    else if (std::strcmp(vw, "trace") == 0) eng.set_view(Engine::View::Trace);
-    else if (std::strcmp(vw, "ctx") == 0)   eng.set_view(Engine::View::Ctx);
-    else if (std::strcmp(vw, "both") == 0)  eng.set_view(Engine::View::Both);
-
-    auto data = read_corpus("data/spanish_small.txt");
-    const size_t split = data.size() * 8 / 10;
-    std::vector<float> logits(p.n_chars), err(p.n_chars);
-    Vocab v;
-
-    auto evaluate = [&](size_t from, size_t to, const char* label) {
-        if (to - from > 4000) to = from + 4000;
-        eng.reset_state();
-        double bits = 0; int n = 0;
-        for (size_t i = from; i + 1 < to; ++i) {
-            eng.feed(v.map(data[i]));
-            eng.readout(logits.data());
-            Softmax::apply(logits);
-            float q = logits[v.map(data[i + 1])];
+    auto evaluate = [&](size_t from, const char* label) {
+        e.reset_state();
+        for (int c = 0; c < 200; ++c) e.feed(32);      // calentar regimen
+        double bits = 0;
+        int n = 0;
+        for (size_t i = from; i + 1 < data.size() && n < EVAL_N; ++i, ++n) {
+            e.feed(data[i]);
+            infer(e, view, f, logits);
+            softmax(logits);
+            float q = logits[data[i + 1]];
             if (q < 1e-9f) q = 1e-9f;
-            bits += -std::log2(q); n++;
+            bits += -std::log2(q);
         }
         std::printf("%s: %.3f bpc (%d simbolos)\n", label, bits / n, n);
         return bits / n;
     };
 
-    std::printf("inicio: %zu simbolos, split %zu\n", data.size(), split); std::fflush(stdout);
-    auto t_start = std::chrono::steady_clock::now();
-    // entrenamiento
-    size_t pos = 0;
-    for (int s = 0; s < 200; ++s) {
-        if (pos + p.seq_len + 1 >= split) { pos = 0; eng.reset_state(); }
-        for (int k = 0; k < p.seq_len; ++k) {
-            eng.feed(v.map(data[pos + k]));
-            eng.readout(logits.data());
-            int target = v.map(data[pos + k + 1]);
-            Softmax::apply(logits);
-            for (auto& x : err) x = 0.0f;
-            err[target] = -1.0f;
-            for (int c = 0; c < p.n_chars; ++c) err[c] += logits[c];
-            eng.learn(err.data());
-        }
-        pos += p.seq_len;
-        {
-            auto now = std::chrono::steady_clock::now();
-            double sec = std::chrono::duration<double>(now - t_start).count();
-            std::printf("  paso %d  %.1f s  (%.2f ms/simbolo)\n", s + 1, sec,
-                        sec * 1000.0 / ((s + 1) * p.seq_len));
-            std::fflush(stdout);
-        }
-    }
-    std::printf("\n--- resultados ---\n");
-    evaluate(0, split, "ENTRENO (lo que vio)");
-    evaluate(split, data.size(), "NO VIO  (generalizacion)");
-    (void)path;
+    std::printf("\n--- resultados (vista %s) ---\n",
+                view == View::Ctx ? "historial" : (view == View::Rate ? "tasa" : (view == View::Theta ? "fatiga" : "ultimo simbolo")));
+    evaluate(0, "ENTRENO  ");
+    evaluate(split, "NO VIO   ");
     return 0;
 }
 
-static void cmd_smoke(const std::string& path) {
+// ---------------------------------------------------------------------------
+// train
+// ---------------------------------------------------------------------------
+static int cmd_train(const char* data_path, int steps) {
     Params p;
-    p.layer_size = 256;
-    p.n_layers = 1;
-    p.density = 0.05f;
-    p.k_wta = 8;
-    Engine eng(p);
-    eng.build_random(p.seed);
-    eng.set_view(Engine::View::Slot);   // ventana temporal explicita
-    std::printf("red: %d neuronas, %zu sinapsis\n", eng.n_neurons(), eng.n_synapses());
+    apply_env_overrides(p);
+    Engine e(p);
+    e.build_random(p.seed);
+    const View view = view_from_env();
+    auto data = read_corpus(data_path);
 
-    // latido: se inyectan caracteres y se mira que la red no este muerta ni epiléptica
-    for (int i = 0; i < 300; ++i) eng.feed(i % 60 + 32);
-    auto st = eng.stats();
-    std::printf("ticks %ld | disparos %ld | disparos/tick %.1f | usadas %d/%d | w %.3f\n",
-                st.ticks, st.spikes, (double)st.spikes / st.ticks,
-                st.used_neurons, eng.n_neurons(), st.mean_w);
+    std::vector<float> logits(p.n_chars), err(p.n_chars), f;
+    size_t pos = 0;
+    double loss = 0;
+    int n = 0;
+    auto t0 = std::chrono::steady_clock::now();
 
-    // prueba de competicion: cuantas neuronas distintas se usan
-    double frac = (double)st.used_neurons / eng.n_neurons();
-    const char* verdict = "MUERTA";
-    if (frac > 0.10 && (double)st.spikes / st.ticks < 200) verdict = "VIVA";
-    else if (frac <= 0.10) verdict = "MONOPOLIO";
-    std::printf("veredicto: %s (%.1f%% de neuronas usadas)\n", verdict, frac * 100);
-
-    std::string sp = state_path(path.c_str());
-    eng.save(sp);
-    Engine e2(p);
-    e2.load(sp);
-    std::printf("persistencia: %d neuronas, %zu sinapsis recargadas de %s\n",
-                e2.n_neurons(), e2.n_synapses(), sp.c_str());
-}
-
-
-// ---------------------------------------------------------------------------
-// Bench: la prueba que decide si la regla de aprendizaje local sirve.
-//
-// Tarea de memoria de trabajo. Se presenta un simbolo A, luego K simbolos de
-// relleno, y despues hay que recordar A. La red solo puede acertar si mantiene
-// informacion a traves del relleno: es exactamente lo que el corpus exige y
-// exactamente lo que no estaba pasando.
-//
-// Se entrena SOLO el readout, con la recurrencia congelada (READOUT_ONLY) y con
-// la regla local activa. Si el readout acierta y la regla local no estropea,
-// la memoria existe. Si el readout no pasa del azar, el estado no se conserva.
-// ---------------------------------------------------------------------------
-
-static double bench_recall(Engine& eng, int key, int filler_len, int trials,
-                           bool train, int* correct_out) {
-    Params p = eng.params();
-    std::vector<float> logits(p.n_chars), err(p.n_chars);
-    int correct = 0;
-    for (int t = 0; t < trials; ++t) {
-        // Cada ensayo empieza desde el reposo. Sin esto, la actividad del
-        // ensayo anterior se mezcla con la del actual y ninguna medicion
-        // significa nada (asi fue como el bench dio 0% con features buenas).
-        eng.reset_state();
-        eng.begin_symbol();
-        eng.feed(key);                       // clave
-        for (int f = 0; f < filler_len; ++f)
-            eng.feed(32 + ((t * 7 + f * 3) % 40));   // relleno variable
-        eng.readout(logits.data());
-
-        // argmax
-        int best = 0;
-        for (int k = 1; k < p.n_chars; ++k) if (logits[k] > logits[best]) best = k;
-        if (best == key) correct++;
-
-        if (train) {
-            float mx = *std::max_element(logits.begin(), logits.end());
-            std::vector<float> prob(p.n_chars);
-            float s = 0;
-            for (int k = 0; k < p.n_chars; ++k) { prob[k] = std::exp(logits[k] - mx); s += prob[k]; }
-            for (int k = 0; k < p.n_chars; ++k) err[k] = prob[k] / s;
-            err[key] -= 1.0f;
-            eng.learn(err.data());
+    for (int s = 0; s < steps; ++s) {
+        if (pos + p.seq_len + 1 >= data.size()) pos = 0;
+        for (int k = 0; k < p.seq_len; ++k) {
+            e.feed(data[pos + k]);
+            infer(e, view, f, logits);
+            const int target = data[pos + k + 1];
+            softmax(logits);
+            loss += -std::log2(std::max(1e-9f, logits[target]));
+            n++;
+            for (int c = 0; c < p.n_chars; ++c) err[c] = logits[c];
+            err[target] -= 1.0f;
+            e.learn(err.data(), f);
+        }
+        pos += p.seq_len;
+        if ((s + 1) % 10 == 0) {
+            auto now = std::chrono::steady_clock::now();
+            double sec = std::chrono::duration<double>(now - t0).count();
+            std::printf("paso %5d | bpc %.3f | %.1f s (%.1f paso/s)\n",
+                        s + 1, loss / n, sec, (s + 1) / sec);
+            loss = 0;
+            n = 0;
         }
     }
-    if (correct_out) *correct_out = correct;
-    return (double)correct / trials;
+    return 0;
 }
 
-static void cmd_bench(const std::string& path) {
-    Params p;
-    p.layer_size = 256;
-    p.n_layers = 1;
-    p.density = 0.05f;
-    p.w_init_scale = 0.105f;   // ventana de reverberacion medida
-    p.input_gain = 0.62f;
+// ---------------------------------------------------------------------------
+// bench: memoria de trabajo
+// ---------------------------------------------------------------------------
+static int cmd_bench(const std::string&) {
+    Params p = params_from_env();
+    Engine e(p);
+    e.build_random(p.seed);
+    const View view = view_from_env();
 
-    Engine eng(p);
-    eng.build_random(p.seed);
-    eng.set_view(Engine::View::Slot);   // ventana temporal explicita
+    const int NKEYS = 40, FILLER = 10, TRIALS = 80;
+    std::vector<float> logits(p.n_chars), err(p.n_chars), f;
 
-    // Version dura: 40 claves DISTINTAS, relleno mas largo, y prueba en claves
-    // que no se usaron en el entrenamiento. Si el readout solo lee "que simbolo
-    // aparecio", aprueba la version facil sin tener memoria. Esta no la pasa.
-    const int filler = 10;
-    const int TRIALS = 40;
-    const int EPOCHS = 60;
-    const int KEYS = 40;
-
-    std::printf("tarea: memorizar una clave entre %d, %d de relleno, recordarla\n",
-                KEYS, filler);
-    std::printf("azar: %.1f %%\n\n", 100.0 / p.n_chars);
-
-    double acc = 0;
-    for (int e = 0; e < EPOCHS; ++e) {
-        int c = 0, tot = 0;
-        for (int kk = 0; kk < KEYS; ++kk) {
-            int ck = 0;
-            bench_recall(eng, kk, filler, 2, true, &ck);
-            c += ck; tot += 2;
+    auto run_epoch = [&](bool train) {
+        int correct = 0;
+        for (int t = 0; t < TRIALS; ++t) {
+            e.reset_state();
+            const int key = t % NKEYS;
+            e.feed(key);
+            for (int i = 0; i < FILLER; ++i) e.feed(64 + ((t * 7 + i * 3) % 40));
+            infer(e, view, f, logits);
+            int best = 0;
+            for (int k = 1; k < p.n_chars; ++k) if (logits[k] > logits[best]) best = k;
+            if (best == key) correct++;
+            if (train) {
+                softmax(logits);
+                for (int c = 0; c < p.n_chars; ++c) err[c] = logits[c];
+                err[key] -= 1.0f;
+                e.learn(err.data(), f);
+            }
         }
-        acc = (double)c / tot;
-        if (e % 10 == 0 || e == EPOCHS - 1)
-            std::printf("epoca %2d  acierto %5.1f %%  (%d/%d)\n", e + 1, acc * 100, c, tot);
+        return 100.0 * correct / TRIALS;
+    };
+
+    std::printf("memoria de trabajo: %d claves, %d de relleno, azar %.1f %%\n",
+                NKEYS, FILLER, 100.0 / NKEYS);
+    for (int ep = 1; ep <= 60; ++ep) {
+        double acc = run_epoch(true);
+        if (ep == 1 || ep % 10 == 0)
+            std::printf("  epoca %2d  acierto %5.1f %%\n", ep, acc);
         std::fflush(stdout);
     }
-
-    // sin relleno, la misma tarea: mide si el readout funciona en absoluto
-    int c0 = 0, t0 = 0;
-    for (int kk = 0; kk < KEYS; ++kk) { int ck = 0; bench_recall(eng, kk, 0, 2, false, &ck); c0 += ck; t0 += 2; }
-    double acc0 = (double)c0 / t0;
-    std::printf("\nsin relleno:   %5.1f %%\n", acc0 * 100);
-    std::printf("con relleno:   %5.1f %%  (%d claves distintas)\n", acc * 100, KEYS);
-
     std::printf("\n--- VEREDICTO ---\n");
-    if (acc < 0.5) {
-        std::printf("RECUERDA EL PRESENTE, NO EL PASADO.\n");
-        std::printf("El estado no cruza el relleno: no hay memoria de trabajo.\n");
-    } else {
-        std::printf("TIENE MEMORIA DE TRABAJO.\n");
-        std::printf("La informacion de la clave sobrevive al relleno y se recupera.\n");
-        std::printf("Es la condicion para que el modelo pueda aprender contexto.\n");
-        if (acc0 < 0.5)
-            std::printf("(sin relleno mide un slot distinto: no es comparable)\n");
-    }
-    eng.save(state_path(path.c_str()));
+    double acc = run_epoch(false);
+    if (acc > 50.0) std::printf("RECUERDA (%.1f %%)\n", acc);
+    else std::printf("NO RECUERDA (%.1f %%)\n", acc);
+    return acc > 50.0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::printf("uso:\n  cortex_lm eval\n  cortex_lm smoke <archivo>\n"
-                    "  cortex_lm train <archivo> <datos> <pasos> [--small]\n");
+    if (argc < 2) {
+        std::printf("uso:\n"
+                    "  cortex_lm audit\n"
+                    "  cortex_lm smoke <archivo>\n"
+                    "  cortex_lm eval <datos>\n"
+                    "  cortex_lm train <datos> <pasos>\n"
+                    "  cortex_lm bench <archivo>\n"
+                    "\nvariables: CORTEX_VIEW=ctx|rate|theta|last  CORTEX_N=<neuronas>\n"
+                    "           CORTEX_NCTX=1..8  CORTEX_K=<fraccion activa>\n");
         return 2;
     }
-    std::string cmd = argv[1], path = argv[2];
+    std::string cmd = argv[1];
     try {
-        if (cmd == "eval")  { return cmd_eval(path.c_str()); }
-        if (cmd == "smoke") { cmd_smoke(path); return 0; }
-        if (cmd == "bench") { cmd_bench(path); return 0; }
+        if (cmd == "audit") return cmd_audit("");
+        if (cmd == "smoke") return cmd_smoke(argc > 2 ? argv[2] : "");
+        if (cmd == "eval")  return cmd_eval(argc > 2 ? argv[2] : "");
+        if (cmd == "bench") return cmd_bench("");
         if (cmd == "train") {
-            if (argc < 5) { std::printf("faltan argumentos\n"); return 2; }
-            bool small = (argc > 5 && std::strcmp(argv[5], "--small") == 0);
-            cmd_train(path, argv[3], std::atoi(argv[4]), small);
-            return 0;
+            if (argc < 4) { std::printf("faltan argumentos\n"); return 2; }
+            return cmd_train(argv[2], std::atoi(argv[3]));
         }
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+        std::printf("comando desconocido: %s\n", cmd.c_str());
+        return 2;
+    } catch (const std::exception& ex) {
+        std::fprintf(stderr, "error: %s\n", ex.what());
         return 1;
     }
-    std::printf("comando desconocido: %s\n", cmd.c_str());
-    return 2;
 }

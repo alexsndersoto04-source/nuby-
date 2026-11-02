@@ -1,103 +1,178 @@
 # Estado del motor CORTEX-LM
 
-Acta honesta. Lo que funciona, lo que no, y qué se midió para saberlo.
+Acta de auditoría. Lo que se midió, lo que se encontró y lo que sigue abierto.
 
 ---
 
-## Resumen
+## Qué se hizo
 
-El sistema **aprende lenguaje y generaliza** (0,24 bpc en texto no visto con
-8 símbolos de historial). La red de pulsos **todavía no aporta** ese
-rendimiento, y hoy se encontró la razón mecánica: **satura**.
+Auditoría a fondo del motor, y ante la evidencia de que la dinámica no
+controlaba la entrada, **reescritura completa del núcleo** (`cortex_lm.hpp` y
+`cortex_lm.cpp`). El motor anterior se conserva en el historial de git.
+
+Se añadió el comando `audit`, que verifica cinco propiedades estructurales y
+falla ruidosamente si alguna deja de cumplirse. Es la red de seguridad que
+faltaba: los errores de esta sesión habrían salido en segundos.
 
 ---
 
-## Los dos bugs que invalidaban todas las mediciones anteriores
+## Los hallazgos de la auditoría
 
-**1. Cada símbolo avanzaba 10 ticks, no 5, y perdía la mitad de su corriente.**
-`inject_only()` contenía un bucle de ticks que `feed()` volvía a ejecutar
-después. Consecuencia: la corriente sensorial se aplicaba una vez y se dejaba
-evolucionar el doble de tiempo, con lo que un símbolo aislado **no llegaba a
-hacer disparar a nada** (0 disparos con ganancia 0,62 e incluso con 3,0).
+### 1. La red era autónoma: la entrada no la gobernaba
 
-**2. El contador de disparos tapaba el problema.** Todos los barridos de
-parámetros de las sesiones anteriores se hicieron con el motor en ese estado:
-medían una red medio apagada. Los números de esas tablas ya no valen.
+Instrumentando el motor anterior:
 
-Con el motor corregido, un símbolo aislado produce ~26 disparos y la red
-responde a la ganancia como es debido.
-
-## Lo que se midió después, ya con el motor correcto
-
-**La red identifica el símbolo actual** si el estado se limpia entre símbolos:
-acierto 1,000 (azar 0,062).
-
-**En secuencia continua no identifica nada**: el estado queda saturado en
-~168 de 256 neuronas permanentemente activas, y la entrada nueva modula apenas
-un océano de actividad previa.
-
-**El pasado no está en el estado**. Decodificar el símbolo de hace 1 a 4 pasos
-desde el estado de la red da valores de azar:
-
-| lag | `rate` | `trace` |
-|---|---|---|
-| 1 | 0,14 | 0,23 |
-| 2 | 0,04 | 0,15 |
-| 3 | 0,12 | 0,14 |
-| 4 | 0,05 | 0,09 |
-
-(azar 0,062). Hay una pizca de información de un paso atrás en `trace`, y nada
-más. Con ganancia de 0,40 desaparece por completo.
-
-**Y no mejora al crecer**: 256, 512, 1024 y 2048 neuronas dan el mismo
-resultado. **La premisa del diseño —más grande, más capacidad— es falsa en esta
-red, porque el régimen es saturación, no estado disperso.**
-
-## Lo que se intentó para arreglar la saturación
-
-| mecanismo | efecto |
+| sonda | resultado |
 |---|---|
-| Bajar `w_init_scale` de 0,12 a 0,005 | más saturado todavía (236 neuronas) |
-| Inhibición de retroalimentación divergente y retardada (nueva, `fi_gain`) | reduce activas de 167 a 82, pero **no crea memoria** |
-| Quitar la compuerta k-WTA | sin efecto (nunca había exceso de candidatos) |
-| Subir el peso recurrente a 1,0 | sin efecto |
+| disparos de un símbolo aislado | **0** |
+| disparos por símbolo en secuencia | 0,7 al principio → **162** al final |
+| neuronas activas del total | **168 de 256**, permanentemente |
+| variar el historial vs variar el símbolo | **0,081 vs 0,089** (la entrada apenas manda) |
 
-Ninguno produjo memoria. El freno cambia cuántas neuronas están activas, no
-qué información guardan.
+La actividad crecía sin punto fijo y la respuesta dependía del historial tanto
+como del símbolo. La red era un oscilador al que se le susurraba.
 
-## Lo que sí está resuelto y verificado
+### 2. Causa: pesos sin escala y una compuerta que imponía el régimen
 
-- **Memoria de trabajo**: 100 % en el banco de 40 claves con 10 de relleno.
-- **Aprendizaje de texto con generalización perfecta** (entrenamiento y test
-  coinciden al tercer decimal).
-- **La plasticidad local por fin se ejecuta**: 0 → ~125 marcas de elegibilidad
-  por símbolo.
-- **Vocabulario honesto**: 256 bytes reales en vez de 120 con mapeo que
-  corrompía el texto.
+- Los pesos entrantes de una neurona sumaban **0,80 con un umbral de 0,60**.
+- La fuga de membrana era 1,7 % por tick: nunca frenaba nada.
+- La única limitación era un k-WTA, un número fijo de ganadores por tick.
 
-## El problema abierto, en una frase
+Y un hallazgo operativo: **la red tarda ~200 símbolos en alcanzar su régimen**.
+Todas las mediciones anteriores usaban los primeros 400 símbolos, es decir,
+medían el arranque.
 
-Conseguir un régimen de actividad **dispersa y persistente** —pocas neuronas
-activas a la vez, capaces de seguir activas sin entrada— en vez de saturación
-o silencio. Es el requisito para que el estado guarde algo, y sin él ninguna
-regla de lectura puede sacar contexto.
+### 3. Bugs de memoria
+
+- **Desbordamiento del readout**: el array se dimensionaba con la vista de
+  historial y se leía con la vista de la red (más ancha). Producía NaN desde el
+  segundo símbolo. Detectado con `-fsanitize=address`.
+- **Filas solapadas** en el readout por usar tamaños distintos al leer y al
+  escribir.
+- **La fatiga solo decaía en las neuronas de la lista activa**: al vaciarse
+  quedaba congelada en su valor alto y la red no podía recuperarse nunca.
+- **El sesgo homeostático se aplicaba después de la integración**, con lo que
+  solo se sumaba una vez y permanecía para siempre.
+- **La homeostasis apagaba la entrada**: con objetivo de tasa fuerte castigaba
+  a las neuronas sensoriales hasta dejar 2 dimensiones vivas de 1025.
+
+### 4. El readout divergía
+
+Adam con paso unitario sobre 1024 dimensiones y sin recorte: los logits
+llegaron a **±455** en 100 pasos, el softmax se saturó y el BPC se disparó a 27.
+Corregido con acotado por elemento, sesgo acotado y suelo de desviación.
+
+---
+
+## La dinámica nueva
+
+```
+v(t) = v_reset + (v(t-1) - v_reset)·α + I_sens + I_rec − I_inh + sesgo
+si v ≥ v_th + θ :  dispara,  θ += theta_step
+θ *= theta_decay   en cada tick
+```
+
+Tres decisiones, cada una corrigiendo un fallo medido:
+
+**Pesos derivados, no elegidos.** Se fijan para que la corriente recurrente
+total, con la fracción activa típica, valga `w_scale · v_th`. Antes se elegían a
+mano y sumaban más que el umbral.
+
+**La entrada manda.** `input_gain > v_th`: un símbolo solo hace disparar a su
+población. Verificado en `audit` (test 2).
+
+**Freno proporcional a la actividad**, no un número fijo de ganadores. Cada
+disparo resta a una muestra al azar de la capa. Cuanto más activa, más freno:
+eso da un punto fijo.
+
+**Memoria = fatiga.** La neurona que dispara sube su umbral y tarda en
+recuperarse. El patrón de fatiga codifica lo que acaba de ocurrir. Es local, no
+necesita gradientes, y es el mecanismo de memoria de trabajo de la corteza.
+
+---
+
+## Resultados medidos
+
+### Auditoría estructural: todo OK
+
+```
+[1] corriente recurrente 0.35 x umbral   ok
+[2] símbolo aislado: 89 disparos         ok
+[3] régimen estable (deriva x0.75)       ok
+[4] fatiga distingue símbolos            ok
+[5] memoria de trabajo 82.5 %            ok
+```
+
+### Memoria de trabajo
+
+Tarea: 40 claves, 8 símbolos de relleno, recordar la clave. Azar 2,5 %.
+
+| memoria | acierto |
+|---|---|
+| **motor nuevo, banco de 40 claves** | **82,5 %** |
+| motor nuevo, protocolo de reposo | 93,5 % |
+| `bench` integrado (100 % en 60 épocas) | 100 % |
+
+Es memoria de trabajo real, sostenida por fatiga local.
+
+### Texto (entrena 80 %, evalúa 20 % no visto)
+
+| vista | bpc |
+|---|---|
+| **historial de 4 símbolos** | **0,409** |
+| historial, motor anterior (referencia) | 1,396 |
+| tasa de disparo de la red | 4,370 |
+| fatiga de la red | 5,301 |
+| bigrama trivial (contexto de 1 byte) | 2,893 |
+
+La curva de la vista de tasa baja despacio y monótona, como un unigrama: la
+fatiga no aporta contexto de texto.
+
+---
+
+## Lo que sigue abierto, sin adornos
+
+**La red no mejora la predicción de texto.** Tiene memoria de trabajo —eso está
+demostrado y medido— pero esa memoria no se traduce en contexto útil para
+predecir. Con texto real, el perfil completo de fatiga (1024 dimensiones) rinde
+peor que un bigrama.
+
+Intentado y descartado en esta sesión:
+
+- Canal de memoria separado y más fuerte para marcar la clave: funciona para la
+  tarea de memoria, pero usarlo para todo el texto satura la red.
+- Barridos de fatiga (paso 0,4–0,6, decaimiento 0,92–0,97), ganancia de memoria
+  y homeostasis: no cambian el resultado en texto.
+- Subir el tamaño: comprobado antes de la reescritura, no escala.
+
+**El siguiente paso honesto** es medir si la fatiga contiene información sobre
+el símbolo anterior en texto real, con el protocolo de reposo y un decodificador
+offline — el mismo que dio 93,5 % en la tarea sintética. Si da azar también
+aquí, la conclusión es que la fatiga no alcanza para texto y hay que cambiar de
+mecanismo de memoria, no de parámetros.
+
+---
 
 ## Reproducir
 
 ```
 make
-./bin/cortex_lm eval x                      # historial de 8 símbolos: ~0,24 bpc
-CORTEX_NCTX=4 ./bin/cortex_lm eval x        # ~1,40 bpc
-CORTEX_VIEW=trace ./bin/cortex_lm eval x    # solo estado de la red: ~4,40 bpc
-./bin/cortex_lm bench /tmp/b.bin            # memoria de trabajo: 100 %
+./bin/cortex_lm audit                          # las 5 comprobaciones
+./bin/cortex_lm smoke x                        # latido y estabilidad
+CORTEX_VIEW=ctx CORTEX_NCTX=4 ./bin/cortex_lm eval data/spanish_small.txt
+CORTEX_VIEW=rate  ./bin/cortex_lm eval data/spanish_small.txt
+CORTEX_VIEW=theta ./bin/cortex_lm eval data/spanish_small.txt
+./bin/cortex_lm bench                          # memoria de trabajo
 ```
 
-## Diseño aprobado
+Variables: `CORTEX_VIEW=ctx|rate|theta`, `CORTEX_N=<neuronas>`,
+`CORTEX_NCTX=1..8`.
 
-`DISENO-CORTEX-LM.md`: 2 capas LIF × 4096 neuronas, 6 % dispersión, retardos
-1..32, ~2,5 M sinapsis, ~30 MB. Objetivo de fase 2: BPC < 2,0.
+---
 
 ## Infraestructura
 
 Kaggle (P100 16 GB, `kaggle kernels push` desde Termux) para el cómputo pesado.
 El Redmi 9C es terminal de control, no máquina de entrenamiento.
+
+`make portable` compila sin `-march=native` para Kaggle y Termux.

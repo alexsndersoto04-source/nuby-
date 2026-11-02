@@ -1,38 +1,183 @@
-// cortex_lm.cpp — implementacion del motor
+// cortex_lm.cpp — implementacion del nucleo CORTEX-LM.
 //
-// Orden de un tick:
-//   1. entregar llegadas (con retardo) y actualizar elegibilidad en el evento
-//   2. inyectar corriente sensorial si toca
-//   3. integrar y decidir disparo (umbral + presupuesto)
-//   4. competicion k-WTA: solo sobreviven los k mayores
-//   5. propagar con retardo, actualizar trazas y umbral adaptativo
-//   6. decaer
+// Dinamica (una neurona LIF con fatiga, sesgo y freno proporcional):
+//
+//   v(t) = v_reset + (v(t-1) - v_reset) * alpha_m + I_in(t) + I_rec(t) - I_inh(t) + bias
+//   si v >= v_th + theta:  dispara, v = v_reset, theta += theta_step
+//   theta *= theta_decay  en cada tick
+//
+// Lo que cambia respecto a la version auditada, y por que:
+//
+//  1. LOS PESOS SE DERIVAN, NO SE ELIGEN. Se fijan para que la corriente
+//     recurrente total, cuando esta activa la fraccion `active_frac` de la capa,
+//     valga `w_scale * v_th`. Antes sumaban 0.80 por neurona con un umbral de
+//     0.60, o sea que la red se autoexcitaba sin ayuda.
+//
+//  2. LA ENTRADA MANDA. `input_gain > v_th`: un simbolo solo, sin recurrencia,
+//     hace disparar a su poblacion. Se verifica en el arranque.
+//
+//  3. EL FRENO ES PROPORCIONAL A LA ACTIVIDAD, no un numero fijo de ganadores.
+//     Cada disparo resta `inh_gain` a `inh_fanout` neuronas al azar, con
+//     retardo. Cuanto mas activa la capa, mas freno: eso da un punto fijo.
+//
+//  4. LA MEMORIA ES LA FATIGA. La neurona que dispara tarda en recuperarse, y
+//     el patron de fatiga codifica que acaba de ocurrir. Es el mecanismo de
+//     memoria de trabajo de la corteza, y es local: no necesita gradientes.
 
 #include "cortex_lm.hpp"
 
 #include <algorithm>
 #include <cstring>
-#include <fstream>
+#include <cstdio>
 #include <stdexcept>
-#include <numeric>
-#include <cstdlib>
 
 namespace cortex {
 
 namespace {
-constexpr uint32_t MAGIC = 0x43585431;  // "CXT1"
-constexpr uint32_t VERSION = 1;
-
-}  // namespace
+constexpr i32 kInhSyn = -1;   // evento de freno, no corresponde a una sinapsis
+}
 
 Engine::Engine(const Params& p) : p_(p) {
     if (p_.n_layers < 1) throw std::invalid_argument("n_layers >= 1");
     if (p_.layer_size < 8) throw std::invalid_argument("layer_size >= 8");
-    if (p_.k_wta < 1 || p_.k_wta > p_.layer_size)
-        throw std::invalid_argument("k_wta fuera de rango");
-    if (p_.d_max < 1 || p_.d_max > 200)
-        throw std::invalid_argument("d_max fuera de rango");
+    if (p_.d_max < 1) throw std::invalid_argument("d_max >= 1");
+    if (p_.ticks_per_char < 1) throw std::invalid_argument("ticks_per_char >= 1");
     ctx_hist_.assign((size_t)p_.n_ctx * p_.n_chars, 0.0f);
+}
+
+void Engine::build_sensory_map() {
+    // Mapa fijo: cada simbolo enciende un parche contiguo desplazado mas un
+    // conjunto pseudoaleatorio propio. Determinista por semilla.
+    const int N = p_.layer_size;
+    const int patch = p_.patch_size();
+    const int tex = std::max(4, patch / 2);
+    const int per = patch + tex;
+    sensory_.assign((size_t)p_.n_chars * per, 0);
+    sensory_w_.assign((size_t)p_.n_chars * per, 0.0f);
+
+    for (int ch = 0; ch < p_.n_chars; ++ch) {
+        int* dst = &sensory_[(size_t)ch * per];
+        float* dw = &sensory_w_[(size_t)ch * per];
+        const int start = (int)((uint64_t)(u32)ch * 7919u % (u32)N);
+        for (int i = 0; i < patch; ++i) dst[i] = (start + i) % N;
+        std::mt19937 enc((u32)(p_.seed * 2654435761u + (u32)ch * 40503u + 7u));
+        for (int k = 0; k < tex; ++k) dst[patch + k] = (int)(enc() % (u32)N);
+
+        // Corriente GRADUADA por conexion. Sin esto la poblacion entera recibe
+        // exactamente lo mismo, responde en bloque (todo o nada) y la fatiga la
+        // apaga completa. Con gradiente, la fraccion que dispara codifica la
+        // fuerza del estimulo y, con la fatiga, su antiguedad.
+        std::uniform_real_distribution<float> uu(1.0f - p_.input_spread * 0.5f,
+                                                 1.0f + p_.input_spread * 0.5f);
+        for (int i = 0; i < per; ++i) dw[i] = p_.input_gain * uu(enc);
+    }
+
+    // Canal de memoria: proyeccion independiente, mas ancha y mas fuerte.
+    const int mp = p_.mem_patch > 0 ? p_.mem_patch : patch * 2;
+    memmap_.assign((size_t)p_.n_chars * mp, 0);
+    memmap_w_.assign((size_t)p_.n_chars * mp, 0.0f);
+    for (int ch = 0; ch < p_.n_chars; ++ch) {
+        int* dst = &memmap_[(size_t)ch * mp];
+        float* dw = &memmap_w_[(size_t)ch * mp];
+        std::mt19937 enc((u32)(p_.seed * 1103515245u + (u32)ch * 12345u + 991u));
+        std::uniform_real_distribution<float> uu(1.0f - p_.input_spread * 0.5f,
+                                                 1.0f + p_.input_spread * 0.5f);
+        for (int i = 0; i < mp; ++i) {
+            dst[i] = (int)(enc() % (u32)N);
+            dw[i] = p_.mem_gain * uu(enc);
+        }
+    }
+}
+
+void Engine::build_random(unsigned seed) {
+    rng_.seed(seed);
+    build_sensory_map();
+
+    const int N = p_.layer_size;
+    const int L = p_.n_layers;
+    layers_.clear();
+    layers_.resize(L);
+    queues_.clear();
+    queues_.resize(L);
+
+    n_neurons_ = N * L;
+    feedback_.assign(n_neurons_, 0.0f);
+
+    // B: retroalimentacion fija, no se entrena. Conecta cada neurona con una
+    // muestra de la salida y permite difundir la senal de error sin gradientes.
+    const int per = std::max(2, p_.n_chars / 16);
+    std::uniform_int_distribution<int> chd(0, p_.n_chars - 1);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    B_.assign((size_t)n_neurons_ * p_.n_chars, 0.0f);
+    for (int j = 0; j < n_neurons_; ++j)
+        for (int k = 0; k < per; ++k)
+            B_[(size_t)j * p_.n_chars + chd(rng_)] = gauss(rng_);
+
+    std::uniform_int_distribution<int> nd(0, N - 1);
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+
+    for (int li = 0; li < L; ++li) {
+        Layer& Lr = layers_[li];
+        Lr.n = N;
+        Lr.offset = li * N;
+        Lr.v.assign(N, p_.v_reset);
+        Lr.theta.assign(N, 0.0f);
+        Lr.bias.assign(N, 0.0f);
+        Lr.rate.assign(N, 0.0f);
+        Lr.rate_last.assign(N, 0.0f);
+        Lr.refr.assign(N, 0);
+        Lr.spike_count.assign(N, 0);
+        Lr.active.assign(N, 0);
+        Lr.active_list.clear();
+
+        // --- pesos derivados del grado ---
+        // Corriente que aporta UN disparo a UN destino, si disparan
+        // active_frac * N neuronas, debe sumar w_scale * v_th.
+        const int out_deg = std::max(1, (int)(p_.density * N));
+        const double fan_in_frac = (double)out_deg / N;            // prob. de conexion
+        const double active_n = std::max(1.0, (double)p_.active_frac * N);
+        const double contrib = fan_in_frac * active_n;             // llegadas esperadas
+        const double wnum = (double)p_.w_scale * (double)p_.v_th;
+        const float w = (float)(wnum / std::max(1.0, contrib));
+
+        Lr.g.offsets.assign(N + 1, 0);
+        Lr.g.post.clear();
+        Lr.g.weight.clear();
+        Lr.g.delay.clear();
+        Lr.g.post.reserve((size_t)N * out_deg);
+        Lr.g.weight.reserve((size_t)N * out_deg);
+        Lr.g.delay.reserve((size_t)N * out_deg);
+
+        std::uniform_int_distribution<int> dd(1, std::max(1, p_.d_max));
+        for (int pre = 0; pre < N; ++pre) {
+            Lr.g.offsets[pre] = (i32)Lr.g.post.size();
+            for (int k = 0; k < out_deg; ++k) {
+                int post = nd(rng_);
+                if (post == pre) continue;
+                Lr.g.post.push_back(post);
+                Lr.g.weight.push_back(w * (0.6f + 0.8f * uni(rng_)));
+                Lr.g.delay.push_back((uint8_t)dd(rng_));
+            }
+        }
+        Lr.g.offsets[N] = (i32)Lr.g.post.size();
+        Lr.g.n_syn = Lr.g.post.size();
+        Lr.elig.assign(Lr.g.n_syn, 0.0f);
+
+        queues_[li].init(std::max(p_.d_max, p_.inh_delay));
+    }
+
+    const int F = p_.n_features_max();
+    R_.assign((size_t)p_.n_chars * F, 0.0f);
+    R_m_.assign(R_.size(), 0.0f);
+    R_v_.assign(R_.size(), 0.0f);
+    std::normal_distribution<float> rn(0.0f, 0.01f);
+    for (auto& x : R_) x = rn(rng_);
+
+    logits_.assign(p_.n_chars, 0.0f);
+    mu_.assign(F, 0.0f);
+    sd_.assign(F, 1.0f);
+    logits_b_.assign(p_.n_chars, 0.0f);
+    reset_state();
 }
 
 size_t Engine::n_synapses() const {
@@ -41,717 +186,316 @@ size_t Engine::n_synapses() const {
     return s;
 }
 
-// ---------------------------------------------------------------------------
-// Construccion
-// ---------------------------------------------------------------------------
-
-void Engine::build_random(unsigned seed) {
-    rng_.seed(seed);
-    const int N = p_.layer_size;
-    const int L = p_.n_layers;
-
-    layers_.clear();
-    layers_.resize(L);
-
-    const int total = N * L;
-    sensory_.assign(p_.n_chars * BITS_PER_CHAR, 0.0f);
-    feedback_.assign(total, 0.0f);
-
-    // B: retroalimentacion fija. -+1 con densidad 10 %, NO se entrena.
-    const int per_neur = std::max(4, p_.n_chars / 10);
-    B_.assign((size_t)total * p_.n_chars, 0.0f);
-    std::uniform_int_distribution<int> chdist(0, p_.n_chars - 1);
-    std::normal_distribution<float> gauss(0.0f, 1.0f);
-    for (int j = 0; j < total; ++j) {
-        for (int k = 0; k < per_neur; ++k) {
-            int c = chdist(rng_);
-            B_[(size_t)j * p_.n_chars + c] = gauss(rng_);
-        }
-    }
-
-    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
-    std::lognormal_distribution<float> ldn(0.0f, 0.6f);
-
-    for (int li = 0; li < L; ++li) {
-        Layer& Lr = layers_[li];
-        Lr.n = N;
-        Lr.offset = li * N;
-        Lr.v.assign(N, p_.v_reset);
-        Lr.theta.assign(N, 0.0f);
-        Lr.vtrace.assign(N, 0.0f);
-        Lr.rate.assign(N, 0.0f);
-        Lr.trace.assign((size_t)N * p_.n_traces, 0.0f);
-        Lr.slots.assign((size_t)N * p_.n_slots, 0.0f);
-        Lr.last_spike.assign(N, -1000000);
-        Lr.refr.assign(N, 0);
-        Lr.spent.assign(N, 0);
-        Lr.win_start.assign(N, 0);
-        Lr.spike_count.assign(N, 0);
-
-        // CSR: out-degree = density * N, con retardos log-normales acotados
-        const int out_deg = std::max(1, (int)(p_.density * N));
-        Lr.g.offsets.assign(N + 1, 0);
-        Lr.g.post.clear();
-        Lr.g.weight.clear();
-        Lr.g.delay.clear();
-        Lr.g.sign.clear();
-        Lr.is_inh.assign(N, 0);
-        Lr.g.post.reserve((size_t)N * out_deg);
-        Lr.g.weight.reserve((size_t)N * out_deg);
-        Lr.g.delay.reserve((size_t)N * out_deg);
-
-        // marcar interneuronas: las ultimas `inh_frac` de la capa
-        const int n_inh = std::max(2, (int)(p_.inh_frac * N));
-        for (int j = N - n_inh; j < N; ++j) Lr.is_inh[j] = 1;
-
-        std::uniform_int_distribution<int> nd(0, N - 1);
-        for (int pre = 0; pre < N; ++pre) {
-            Lr.g.offsets[pre] = (i32)Lr.g.post.size();
-            if (Lr.is_inh[pre]) {
-                // interneurona: proyeccion divergente a toda la capa, retardo
-                // mayor que la excitacion (llega despues, y por eso puede frenar)
-                const int fan = out_deg * p_.inh_fanout;
-                for (int k = 0; k < fan; ++k) {
-                    int post = nd(rng_);
-                    Lr.g.post.push_back(post);
-                    Lr.g.weight.push_back(p_.inh_weight * (0.6f + 0.8f * uni(rng_)));
-                    Lr.g.delay.push_back((uint8_t)p_.inh_delay);
-                    Lr.g.sign.push_back(1);
-                }
-            } else {
-                for (int k = 0; k < out_deg; ++k) {
-                    int post = nd(rng_);
-                    if (post == pre) continue;
-                    Lr.g.post.push_back(post);
-                    Lr.g.weight.push_back(p_.w_init_scale * (0.5f + 0.5f * uni(rng_)));
-                    int d = (int)(ldn(rng_) * p_.d_max * 0.35f);
-                    if (d < 1) d = 1;
-                    if (d > p_.d_max) d = p_.d_max;
-                    Lr.g.delay.push_back((uint8_t)d);
-                    Lr.g.sign.push_back(0);
-                }
-            }
-        }
-        Lr.g.offsets[N] = (i32)Lr.g.post.size();
-        Lr.g.n_syn = Lr.g.post.size();
-
-        Lr.elig.assign(Lr.g.n_syn, 0.0f);
-        Lr.fast.assign(Lr.g.n_syn, 0.0f);
-        Lr.active.clear();
-        Lr.active_next.clear();
-        Lr.touch.clear();
-        Lr.in_active.assign(N, 0);
-        Lr.in_touch.assign(Lr.g.n_syn, 0);
-    }
-
-    // Readout: n_chars x n_features
-    const int F = std::max(std::max(p_.n_features(), p_.n_slots_features()),
-                           p_.n_ctx_features() + p_.n_slots_features());
-    R_.assign((size_t)p_.n_chars * F, 0.0f);
-    feat_dim_ = F;
-    R_m_.assign(R_.size(), 0.0f);
-    R_v_.assign(R_.size(), 0.0f);
-    std::normal_distribution<float> rn(0.0f, 0.02f);
-    for (auto& x : R_) x = rn(rng_);
-
-    logits_.assign(p_.n_chars, 0.0f);
-    act_now_.assign(total, 0.0f);
-    reset_state();
-}
-
 void Engine::reset_state() {
     for (auto& L : layers_) {
         std::fill(L.v.begin(), L.v.end(), p_.v_reset);
         std::fill(L.theta.begin(), L.theta.end(), 0.0f);
-        std::fill(L.vtrace.begin(), L.vtrace.end(), 0.0f);
         std::fill(L.rate.begin(), L.rate.end(), 0.0f);
-        std::fill(L.trace.begin(), L.trace.end(), 0.0f);
-        std::fill(L.slots.begin(), L.slots.end(), 0.0f);
+        std::fill(L.rate_last.begin(), L.rate_last.end(), 0.0f);
         std::fill(L.refr.begin(), L.refr.end(), 0);
-        std::fill(L.spent.begin(), L.spent.end(), 0);
-        std::fill(L.win_start.begin(), L.win_start.end(), 0);
+        std::fill(L.active.begin(), L.active.end(), 0);
         std::fill(L.elig.begin(), L.elig.end(), 0.0f);
-        L.active.clear();
-        L.active_next.clear();
-        L.touch.clear();
-        std::fill(L.in_active.begin(), L.in_active.end(), 0);
-        std::fill(L.in_touch.begin(), L.in_touch.end(), 0);
+        L.active_list.clear();
     }
-    std::fill(act_now_.begin(), act_now_.end(), 0.0f);
     for (auto& q : queues_) {
         for (auto& b : q.buckets) b.clear();
         q.head = 0;
     }
+    std::fill(ctx_hist_.begin(), ctx_hist_.end(), 0.0f);
     t_ = 0;
-    symbols_since_consol_ = 0;
 }
 
-// ---------------------------------------------------------------------------
-// Simulacion
-// ---------------------------------------------------------------------------
-
-void Engine::begin_symbol() {
-    for (auto& L : layers_) std::fill(L.rate.begin(), L.rate.end(), 0.0f);
-    // desplazar el historial sensorial y reservar el hueco del simbolo nuevo
-    if (p_.n_ctx > 1) {
-        std::memmove(&ctx_hist_[p_.n_chars], &ctx_hist_[0],
-                     sizeof(float) * (size_t)p_.n_chars * (p_.n_ctx - 1));
-    }
-    std::fill(ctx_hist_.begin(), ctx_hist_.begin() + p_.n_chars, 0.0f);
-    ctx_hist_[p_.n_chars] = 0.0f;
-}
-
-void Engine::feed(int ch) {
-    if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("char fuera de vocabulario");
-    begin_symbol();
-    // ranura 0 del historial = simbolo que se acaba de presentar
-    ctx_hist_[ch] = 1.0f;
-    inject_only(ch);
-
-    for (int s = 0; s < p_.ticks_per_char; ++s) step();
-    end_symbol();
-
-    symbols_++;
-    symbols_since_consol_++;
-}
-
-// Presenta el estimulo sensorial SIN avanzar ticks: deja la red preparada para
-// que el llamador ejecute step() y observe como la identidad se desvanece.
 void Engine::inject_only(int ch) {
-    if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("char fuera de vocabulario");
-
-    // corriente sensorial: los bits a 1 del codigo del caracter empujan un
-    // conjunto fijo de neuronas de la capa 0.
+    if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("simbolo fuera de rango");
     Layer& L0 = layers_[0];
-    const int total = n_neurons();
-    std::uniform_int_distribution<int> nd(0, L0.n - 1);
-
-    // Codificacion determinista y DISPERSA:
-    //   1. un parche contiguo desplazado por el simbolo (posicion = identidad)
-    //   2. un conjunto pseudoaleatorio dependiente del simbolo (textura)
-    // La version anterior proyectaba los 8 bits siempre sobre las mismas ~24
-    // neuronas; los patrones colisionaban y un simbolo con codigo 0 no
-    // encendia nada. Aqui cada simbolo tiene su propio conjunto y todos
-    // encienden aproximadamente lo mismo.
-    {
-        const int n_exc = L0.n - (int)(p_.inh_frac * L0.n);
-        const int patch = std::max(4, n_exc / 20);
-        const int start = (int)((uint64_t)ch * 7919u % (uint32_t)n_exc);
-        for (int i = 0; i < patch; ++i) {
-            int j = (start + i) % n_exc;
-            L0.v[j] += p_.input_gain;
-            if (!L0.in_active[j]) { L0.in_active[j] = 1; L0.active.push_back(j); }
-        }
-        std::mt19937 enc((uint32_t)(p_.seed * 7919u + (uint32_t)ch * 104729u + 17u));
-        const int tex = std::max(6, n_exc / 12);
-        for (int k = 0; k < tex; ++k) {
-            int j = (int)(enc() % (uint32_t)n_exc);
-            L0.v[j] += p_.input_gain * 0.8f;
-            if (!L0.in_active[j]) { L0.in_active[j] = 1; L0.active.push_back(j); }
-        }
+    const int patch = p_.patch_size();
+    const int tex = std::max(4, patch / 2);
+    const int per = patch + tex;
+    const int* dst = &sensory_[(size_t)ch * per];
+    const float* dw = &sensory_w_[(size_t)ch * per];
+    for (int i = 0; i < per; ++i) {
+        int j = dst[i];
+        L0.v[j] += dw[i];
+        if (!L0.active[j]) { L0.active[j] = 1; L0.active_list.push_back(j); }
     }
+}
 
+void Engine::inject_mem(int ch) {
+    if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("simbolo fuera de rango");
+    Layer& L0 = layers_[0];
+    const int mp = p_.mem_patch > 0 ? p_.mem_patch : p_.patch_size() * 2;
+    const int* dst = &memmap_[(size_t)ch * mp];
+    const float* dw = &memmap_w_[(size_t)ch * mp];
+    for (int i = 0; i < mp; ++i) L0.v[dst[i]] += dw[i];
 }
 
 int Engine::step() {
-    if ((int)queues_.size() != p_.n_layers) {
-        queues_.resize(p_.n_layers);
-        for (auto& q : queues_) q.init(p_.d_max);
-    }
+    const float am = p_.alpha_m();
+    int fired = 0;
 
-    const float alpha_m = p_.alpha_m();
-    const float alpha_e = p_.alpha_e();
-    int fired_total = 0;
-
-    for (int li = 0; li < p_.n_layers; ++li) {
+    for (size_t li = 0; li < layers_.size(); ++li) {
         Layer& L = layers_[li];
-        auto& q = queues_[li];
+        DelayQueue& q = queues_[li];
 
-        // --- 1. llegadas (solo las de este tick) ---
-        for (const Ev& e : q.drain()) {
-            if (e.syn == kFiSyn) {
-                L.v[e.post] -= p_.fi_gain;
+        // 1. llegadas de este tick
+        for (const auto& e : q.drain((int)t_)) {
+            if (e.syn == kInhSyn) {
+                L.v[e.post] -= p_.inh_gain;
                 if (L.v[e.post] < p_.v_reset) L.v[e.post] = p_.v_reset;
-                if (!L.in_active[e.post]) { L.in_active[e.post] = 1; L.active.push_back(e.post); }
+                if (!L.active[e.post]) { L.active[e.post] = 1; L.active_list.push_back(e.post); }
                 continue;
             }
-            const float cur = L.g.weight[e.syn] + L.fast[e.syn];
-            if (L.g.sign[e.syn]) {
-                L.v[e.post] -= cur;
-            } else {
-                L.v[e.post] += cur;
-            }
-            if (!L.in_active[e.post]) {
-                L.in_active[e.post] = 1;
-                L.active.push_back(e.post);
-            }
-
+            L.v[e.post] += L.g.weight[e.syn];
+            if (!L.active[e.post]) { L.active[e.post] = 1; L.active_list.push_back(e.post); }
         }
 
-        // --- 2/3. integracion: SOLO las neuronas activas ---
-        auto& cand = cand_;
-        cand.clear();
-        L.active_next.clear();
+        // 2. integracion + decision sobre TODAS las neuronas.
+        //    Recorrer solo la lista "activa" era un error fatal: la fatiga
+        //    (theta) solo decaia en las neuronas de esa lista, asi que al
+        //    vaciarse quedaba congelada en su valor alto y la red no podia
+        //    recuperarse nunca (0 disparos para siempre). Con N del orden de
+        //    miles, recorrer la capa entera por tick es barato y correcto.
+        cand_.clear();
+        for (int j = 0; j < L.n; ++j) {
+            // la fatiga se relaja en cada tick, dispare o no
+            L.theta[j] *= p_.theta_decay;
+            if (L.theta[j] < 1e-4f) L.theta[j] = 0.0f;
 
-        for (i32 j : L.active) {
             if (L.refr[j] > 0) {
                 L.refr[j]--;
                 L.v[j] = p_.v_reset;
-                L.in_active[j] = 0;
                 continue;
             }
-            if (t_ - L.win_start[j] >= p_.budget_win) {
-                L.win_start[j] = t_;
-                L.spent[j] = 0;
+            // corriente de sesgo: homeostasis lenta sobre la excitabilidad
+            L.v[j] += L.bias[j];
+            if (L.v[j] >= p_.v_th + L.theta[j]) {
+                cand_.push_back({L.v[j], j});
+                continue;
             }
-            const float thr_j = p_.v_th + L.theta[j]
-                                - (L.is_inh[j] ? p_.inh_bias : 0.0f);
-            if (L.v[j] >= thr_j && L.spent[j] < p_.budget) {
-                cand.emplace_back(L.v[j], j);
-                continue;   // no decae: va a disparar
-            }
-            L.v[j] = p_.v_reset + (L.v[j] - p_.v_reset) * alpha_m;
-            if (L.v[j] < 1e-4f) {
-                L.v[j] = p_.v_reset;
-                L.in_active[j] = 0;
-            } else {
-                L.active_next.push_back(j);
-            }
+            L.v[j] = (L.v[j] - p_.v_reset) * am + p_.v_reset;
+            if (L.v[j] < 1e-4f) L.v[j] = p_.v_reset;
         }
 
-        // --- 4. competicion k-WTA ---
-        if ((int)cand.size() > p_.k_wta) {
-            std::nth_element(cand.begin(), cand.begin() + p_.k_wta, cand.end(),
-                             [](const auto& a, const auto& b) { return a.first > b.first; });
-            cand.resize(p_.k_wta);
-        }
-
-        // --- 5. disparo y propagacion ---
-        for (const auto& pr : cand) {
-            int j = pr.second;
+        // 3. disparo
+        for (const auto& pr : cand_) {
+            i32 j = pr.second;
             L.v[j] = p_.v_reset;
             L.refr[j] = p_.refractory;
-            L.last_spike[j] = t_;
-            L.spent[j]++;
-            L.spike_count[j]++;
             L.rate[j] += 1.0f;
-            L.vtrace[j] = 1.0f;
-            {
-                float* tr = &L.trace[(size_t)j * p_.n_traces];
-                for (int k = 0; k < p_.n_traces; ++k) tr[k] = 1.0f;  // marca de identidad
-            }
-            L.theta[j] += p_.theta_step;
-            act_now_[L.offset + j] = 1.0f;
-            L.active_next.push_back(j);
-            L.in_active[j] = 1;
+            L.spike_count[j]++;
+            L.theta[j] = std::min(p_.theta_max, L.theta[j] + p_.theta_step);
+            L.active[j] = 0;
+            fired++;
 
-            const i32 lo = L.g.offsets[j];
-            const i32 hi = L.g.offsets[j + 1];
-            for (i32 s = lo; s < hi; ++s) {
-                q.push(t_ + L.g.delay[s], Ev{L.g.post[s], s});
+            // propagacion excitatoria
+            for (i32 s = L.g.offsets[j]; s < L.g.offsets[j + 1]; ++s) {
+                q.push((int)t_ + L.g.delay[s], DelayQueue::Ev{L.g.post[s], s});
             }
-
-            // freno divergente a la propia capa
-            if (p_.fi_gain > 0.0f) {
-                for (int f = 0; f < p_.fi_fanout; ++f) {
-                    int tgt = (int)(rng_() % (uint32_t)L.n);
-                    float* ev = nullptr;
-                    (void)ev;
+            // freno divergente y retardado: la actividad se autolimita
+            if (p_.inh_gain > 0.0f) {
+                for (int f = 0; f < p_.inh_fanout; ++f) {
+                    i32 tgt = (i32)(rng_() % (u32)L.n);
                     if (tgt == j) continue;
-                    // llega con retardo, como cualquier sinapsis: el freno se
-                    // encola en vez de aplicarse de inmediato
-                    q.push(t_ + p_.fi_delay, Ev{tgt, kFiSyn});
+                    q.push((int)t_ + p_.inh_delay, DelayQueue::Ev{tgt, kInhSyn});
                 }
             }
-
-            // --- plasticidad de tres factores ---
-            // Al disparar la presinaptica, TODAS sus sinapsis salientes quedan
-            // marcadas (traza de elegibilidad). El peso solo cambiara si la
-            // senal de aprendizaje de la postsinaptica lo confirma. Es la misma
-            // forma que usa e-prop y la unica que produce marcas suficientes:
-            // marcar en la LLEGADA dependia de coincidencias casi inexistentes
-            // y dejaba ~1 sinapsis marcada por simbolo.
-            for (i32 s = lo; s < hi; ++s) {
-                if (L.g.sign[s]) continue;
-                float mark = 1.0f + L.vtrace[L.g.post[s]];
-                float x = L.elig[s] + mark;
-                if (x > p_.elig_clip) x = p_.elig_clip;
-                else if (x < -p_.elig_clip) x = -p_.elig_clip;
-                L.elig[s] = x;
-                if (!L.in_touch[s]) { L.in_touch[s] = 1; L.touch.push_back(s); }
-            }
         }
-        fired_total += (int)cand.size();
-
-        // --- 6. decaimiento de trazas: SOLO las neuronas activas ---
-        static const float tau_t[8] = {0.60f, 0.88f, 0.96f, 0.985f,
-                                       0.993f, 0.997f, 0.9985f, 0.999f};
-        for (i32 j : L.active_next) {
-            L.vtrace[j] *= 0.90f;
-            L.theta[j] *= 0.9995f;
-            if (L.vtrace[j] < 1e-4f) L.vtrace[j] = 0.0f;
-            float* tr = &L.trace[(size_t)j * p_.n_traces];
-            for (int k = 0; k < p_.n_traces; ++k) {
-                tr[k] *= tau_t[k];
-                if (tr[k] < 1e-4f) tr[k] = 0.0f;
-            }
-        }
-
-        L.active.swap(L.active_next);
-    }
-
-    // decaimiento de elegibilidad: SOLO las sinapsis con traza viva
-    for (auto& L : layers_) {
-        if (L.touch.empty()) continue;
-        size_t keep = 0;
-        for (size_t k = 0; k < L.touch.size(); ++k) {
-            i32 s = L.touch[k];
-            float x = L.elig[s] * alpha_e;
-            if (std::fabs(x) < 1e-5f) {
-                L.elig[s] = 0.0f;
-                L.in_touch[s] = 0;
-            } else {
-                L.elig[s] = x;
-                L.touch[keep++] = s;
-            }
-        }
-        L.touch.resize(keep);
     }
 
     t_++;
-    spikes_ += fired_total;
-    return fired_total;
+    spikes_ += fired;
+    return fired;
 }
 
-// ---------------------------------------------------------------------------
-// Lectura
-// ---------------------------------------------------------------------------
-
-void Engine::feature_vector(std::vector<float>& out) const {
-    // Bloques normalizados INDEPENDIENTEMENTE: tasa | traza0 | traza1 | ...
-    //
-    // La normalizacion global era el error: al meter 4 bloques de traza y uno
-    // de tasa en un mismo vector y normalizar el conjunto, el bloque de tasa
-    // quedaba con un 20 % de la norma y la identidad del simbolo actual se
-    // volvia invisible para el readout. Normalizando por bloque, cada canal
-    // conserva su propia escala y todos son legibles.
-    const int N = p_.layer_size;
-    const int K = p_.n_traces;
-    const int F = p_.n_features();
-    out.assign(F, 0.0f);
-    const float inv = 1.0f / std::max(1, p_.ticks_per_char);
-    int idx = 0;
-    auto emit_norm = [&](const float* src, int n, float scale) {
-        float nrm = 0.0f;
-        for (int i = 0; i < n; ++i) nrm += src[i] * src[i];
-        nrm = std::sqrt(nrm);
-        const float g = (nrm > 1e-6f) ? (scale / nrm) : 0.0f;
-        for (int i = 0; i < n && idx < F - 1; ++i) out[idx++] = src[i] * g;
-        if (idx > F - 1) idx = F - 1;
-    };
-    for (int li = 0; li < p_.n_layers; ++li) {
-        const Layer& L = layers_[li];
-        emit_norm(L.rate.data(), N, inv);
-        for (int k = 0; k < K; ++k) {
-            // extraer la traza k de todas las neuronas a un buffer contiguo
-            std::vector<float> col(N);
-            for (int j = 0; j < N; ++j) col[j] = L.trace[(size_t)j * K + k];
-            emit_norm(col.data(), N, inv);
+void Engine::end_symbol() {
+    // homeostasis: la actividad media por neurona debe acercarse a target_rate.
+    // Se mide en disparos por simbolo (ticks_per_char ticks).
+    const float want = p_.target_rate * p_.ticks_per_char;
+    for (auto& L : layers_) {
+        L.rate_last = L.rate;                 // perfil del simbolo que se cierra
+        for (int j = 0; j < L.n; ++j) {
+            const float diff = want - L.rate[j];
+            L.bias[j] += p_.homeo_lr * diff;
+            L.bias[j] = std::max(-p_.bias_max, std::min(p_.bias_max, L.bias[j]));
+            L.rate[j] = 0.0f;
         }
     }
-    out[F - 1] = 1.0f;
+    // desplazar historial sensorial
+    if (p_.n_ctx > 1)
+        std::memmove(&ctx_hist_[p_.n_chars], &ctx_hist_[0],
+                     sizeof(float) * (size_t)p_.n_chars * (p_.n_ctx - 1));
+    std::fill(ctx_hist_.begin(), ctx_hist_.begin() + p_.n_chars, 0.0f);
+    symbols_++;
 }
 
-// Historial sensorial en one-hot, el simbolo actual en la ranura 0.
+void Engine::feed(int ch) {
+    if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("simbolo fuera de rango");
+    ctx_hist_[ch] = 1.0f;
+    inject_only(ch);
+    for (int s = 0; s < p_.ticks_per_char; ++s) step();
+    end_symbol();
+}
+
 void Engine::ctx_features(std::vector<float>& out) const {
     const int F = p_.n_ctx_features();
     out.assign(F, 0.0f);
-    for (int i = 0; i < F - 1; ++i) out[i] = ctx_hist_[i];
+    for (int i = 0; i < F - 1 && i < (int)ctx_hist_.size(); ++i) out[i] = ctx_hist_[i];
     out[F - 1] = 1.0f;
 }
 
-void Engine::emit_features(std::vector<float>& out) const {
-    switch (view_) {
-        case View::Trace: feature_vector(out); return;
-        case View::Slot:  slot_features(out);  return;
-        case View::Ctx:   ctx_features(out);   return;
-        case View::Both: {
-            std::vector<float> a;
-            ctx_features(a);
-            slot_features(out);
-            out.insert(out.end(), a.begin(), a.end());
-            return;
-        }
-    }
-}
-
-// Cierre de simbolo: el perfil de actividad pasa al banco de slots.
-void Engine::end_symbol() {
-    for (auto& L : layers_) {
-        const size_t n = (size_t)L.n;
-        if (p_.n_slots > 1)
-            std::memmove(&L.slots[n], &L.slots[0], sizeof(float) * n * (p_.n_slots - 1));
-        for (size_t j = 0; j < n; ++j) L.slots[j] = L.rate[j];
-    }
-}
-
-void Engine::set_view(View v) { view_ = v; }
-
-void Engine::features(std::vector<float>& out) const { feature_vector(out); }
-
-// Banco de trabajo para el readout: no descarta simbolos antiguos.
-// Las trazas decaen con constantes de tiempo en TICKS, y un simbolo ocupa solo
-// 5 ticks; con tau corta, la clave desaparece en el relleno. Este banco guarda
-// el perfil de actividad de los ultimos `n_slots` simbolos, uno por slot, de
-// modo que la recuperacion tiene ventana temporal explicita en vez de depender
-// de una constante de decaimiento.
-void Engine::slot_features(std::vector<float>& out) const {
-    const int N = p_.layer_size;
-    const int S = p_.n_slots;
-    const int F = p_.n_slots_features();
+void Engine::rate_features(std::vector<float>& out) const {
+    const int F = p_.n_layers * p_.layer_size;
     out.assign(F, 0.0f);
-    const float inv = 1.0f / std::max(1, p_.ticks_per_char);
     int idx = 0;
-    for (int li = 0; li < p_.n_layers; ++li) {
-        const Layer& L = layers_[li];
-        for (int s = 0; s < S; ++s) {
-            const float* slot = &L.slots[(size_t)s * L.n];
-            float nrm = 0.0f;
-            for (int j = 0; j < L.n; ++j) nrm += slot[j] * slot[j];
-            nrm = std::sqrt(nrm);
-            const float g = (nrm > 1e-6f) ? (inv / nrm) : 0.0f;
-            for (int j = 0; j < L.n && idx < F - 1; ++j) out[idx++] = slot[j] * g;
-        }
+    for (const auto& L : layers_) {
+        float nrm = 0.0f;
+        for (int j = 0; j < L.n; ++j) nrm += L.rate[j] * L.rate[j];
+        nrm = std::sqrt(nrm);
+        const float g = nrm > 1e-6f ? 1.0f / nrm : 0.0f;
+        for (int j = 0; j < L.n; ++j) out[idx++] = L.rate[j] * g;
     }
-    out[F - 1] = 1.0f;
 }
 
-void Engine::readout(float* logits) const {
-    std::vector<float> f;
-    emit_features(f);
+void Engine::last_features(std::vector<float>& out) const {
+    const int F = p_.n_layers * p_.layer_size;
+    out.assign(F, 0.0f);
+    int idx = 0;
+    for (const auto& L : layers_) {
+        float nrm = 0.0f;
+        for (int j = 0; j < L.n; ++j) nrm += L.rate_last[j] * L.rate_last[j];
+        nrm = std::sqrt(nrm);
+        const float g = nrm > 1e-6f ? 1.0f / nrm : 0.0f;
+        for (int j = 0; j < L.n; ++j) out[idx++] = L.rate_last[j] * g;
+    }
+}
+
+void Engine::theta_features(std::vector<float>& out) const {
+    const int F = p_.n_layers * p_.layer_size;
+    out.assign(F, 0.0f);
+    int idx = 0;
+    for (const auto& L : layers_) {
+        float nrm = 0.0f;
+        for (int j = 0; j < L.n; ++j) nrm += L.theta[j] * L.theta[j];
+        nrm = std::sqrt(nrm);
+        const float g = nrm > 1e-6f ? 1.0f / nrm : 0.0f;
+        for (int j = 0; j < L.n; ++j) out[idx++] = L.theta[j] * g;
+    }
+}
+
+// Normalizacion por dimension: quita la media y escala a varianza unitaria.
+// Sin esto el readout no puede ver dimensiones pequenas: al normalizar el
+// vector completo, 1022 dimensiones a cero y 2 a 0.7 dejan a esas dos con
+// practicamente todo el peso, y las muertas igual contribuyen al sesgo.
+void Engine::normalize(const std::vector<float>& in, std::vector<float>& out) const {
+    const int F = (int)in.size();
+    out.assign(F, 0.0f);
+    if (mu_.size() != (size_t)F) return;
+    for (int i = 0; i < F; ++i) {
+        const float sd = sd_[i];
+        out[i] = sd > 1e-6f ? (in[i] - mu_[i]) / sd : 0.0f;
+    }
+}
+
+void Engine::update_norm(const std::vector<float>& f) {
     const int F = (int)f.size();
+    if (mu_.size() != (size_t)F) { mu_.assign(F, 0.0f); sd_.assign(F, 1.0f); return; }
+    const float a = 0.001f;
+    for (int i = 0; i < F; ++i) {
+        const float d = f[i] - mu_[i];
+        mu_[i] += a * d;
+        sd_[i] = std::sqrt((1 - a) * (sd_[i] * sd_[i] + a * d * d));
+        // El suelo NO puede ser diminuto: las features one-hot estan casi
+        // siempre a cero, su desviacion se hunde y z=(x-mu)/sd se dispara a
+        // 1000, con lo que el readout solo ve saturacion. Con suelo 1.0 la
+        // dimension activa vale ~1 y la inactiva ~0: escala util.
+        if (sd_[i] < 1.0f) sd_[i] = 1.0f;
+    }
+}
+
+void Engine::readout(const std::vector<float>& f, float* logits) const {
+    const int F = (int)f.size();
+    const int stride = p_.n_features_max();   // las filas se guardan con ancho fijo
     for (int k = 0; k < p_.n_chars; ++k) {
         float acc = 0.0f;
-        const float* row = &R_[(size_t)k * F];
+        const float* row = &R_[(size_t)k * stride];
         for (int i = 0; i < F; ++i) acc += row[i] * f[i];
-        logits[k] = acc;
+        logits[k] = acc + (logits_b_.empty() ? 0.0f : logits_b_[k]);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Aprendizaje
-// ---------------------------------------------------------------------------
-
-void Engine::learn(const float* error) {
-    const int total = n_neurons();
-
-    // 1. difundir el error a cada neurona por la matriz fija B
-    for (int j = 0; j < total; ++j) {
+void Engine::learn(const float* error, const std::vector<float>& f) {
+    // 1. difundir el error por la matriz fija B (feedback alignment)
+    for (int j = 0; j < n_neurons_; ++j) {
         float acc = 0.0f;
         const float* row = &B_[(size_t)j * p_.n_chars];
         for (int k = 0; k < p_.n_chars; ++k) acc += row[k] * error[k];
         feedback_[j] = acc;
     }
 
-    // 2. regla de tres factores: dw = -eta * señal(post) * elegibilidad
-    //    CORTEX_READOUT_ONLY=1 congela la recurrencia: sirve para separar el
-    //    error del readout del error de la regla local. Es un instrumento de
-    //    diagnostico, no una opcion de produccion.
-    static const bool readout_only = std::getenv("CORTEX_READOUT_ONLY") != nullptr;
+    // 2. regla de tres factores sobre la recurrencia
     for (auto& L : layers_) {
-        if (readout_only) break;
         for (size_t s = 0; s < L.g.n_syn; ++s) {
             float e = L.elig[s];
             if (e == 0.0f) continue;
             int post = L.g.post[s];
-            float sig = feedback_[L.offset + post];
-            if (L.g.sign[s]) continue;   // el freno no se aprende: sostiene la red
-            float dw = -p_.eta * sig * e;
+            float dw = -p_.eta * feedback_[L.offset + post] * e;
             float w = L.g.weight[s] + dw;
-            if (w < 0.0f) w = 0.0f;
-            else if (w > p_.w_max) w = p_.w_max;
-            L.g.weight[s] = w;
+            L.g.weight[s] = std::max(p_.w_min, std::min(p_.w_max, w));
         }
+        // la elegibilidad se relaja por simbolo
+        for (auto& e : L.elig) { e *= p_.elig_decay; if (std::fabs(e) < 1e-6f) e = 0.0f; }
     }
 
-    // 3. readout con Adam (es un clasificador lineal, aqui si vale)
-    std::vector<float> f;
-    emit_features(f);
-    const int F = (int)f.size();
-    const float lr = 8e-3f, b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
-    const float gclip = 1.0f;   // recorte del gradiente: sin esto diverge
-    static thread_local long step = 0;
-    step++;
+    // 3. readout con Adam (sobre las features normalizadas)
+    std::vector<float> fn;
+    normalize(f, fn);
+    const int F = (int)fn.size();
+    const int stride = p_.n_features_max();
+    // El sesgo tambien se acota. Sin esto diverge: Adam da pasos de tamano
+    // unidad y sobre 1024 dimensiones el sesgo se va a +-455 en 100 pasos, con
+    // lo que el softmax queda saturado y el BPC se dispara.
     for (int k = 0; k < p_.n_chars; ++k) {
-        float g = error[k];
-        if (g == 0.0f) continue;
+        logits_b_[k] -= p_.readout_lr * error[k];
+        if (logits_b_[k] > 8.0f) logits_b_[k] = 8.0f;
+        else if (logits_b_[k] < -8.0f) logits_b_[k] = -8.0f;
+    }
+    static long step = 0;
+    step++;
+    const float b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
+    for (int k = 0; k < p_.n_chars; ++k) {
+        const float g0 = error[k];
+        if (g0 == 0.0f) continue;
         for (int i = 0; i < F; ++i) {
-            size_t idx = (size_t)k * F + i;
-            float grad = g * f[i];
-            if (grad > gclip) grad = gclip;
-            else if (grad < -gclip) grad = -gclip;
+            size_t idx = (size_t)k * stride + i;
+            float grad = g0 * fn[i];
+            if (grad > p_.gclip) grad = p_.gclip;
+            else if (grad < -p_.gclip) grad = -p_.gclip;
             R_m_[idx] = b1 * R_m_[idx] + (1 - b1) * grad;
             R_v_[idx] = b2 * R_v_[idx] + (1 - b2) * grad * grad;
             float mh = R_m_[idx] / (1 - std::pow(b1, (float)step));
             float vh = R_v_[idx] / (1 - std::pow(b2, (float)step));
-            float nw = R_[idx] - lr * mh / (std::sqrt(vh) + eps);
-            if (nw > 8.0f) nw = 8.0f;          // pesos acotados: robustez
+            float nw = R_[idx] - p_.readout_lr * mh / (std::sqrt(vh) + eps);
+            if (nw > 8.0f) nw = 8.0f;          // pesos acotados por elemento
             else if (nw < -8.0f) nw = -8.0f;
             R_[idx] = nw;
         }
     }
-}
 
-void Engine::consolidate() {
-    // Homeostasis con conciencia del grado.
-    //
-    // El error ingenuo es normalizar la suma de pesos entrantes a una constante
-    // global. Una neurona que recibe de 200 sinapsis queda con 5e-3 por sinapsis
-    // y deja de disparar; la red se apaga sola. Lo correcto (y lo que hace una
-    // neurona real) es defender la corriente que necesita para llegar al umbral,
-    // que depende de CUANTAS entradas tiene: objetivo = norm * sqrt(indegree).
-    //
-    // Se usa una forma cerrada y exacta: cada peso se escala por
-    // (objetivo / suma_actual) elevado a 1/indegree, de modo que la suma de los
-    // pesos escalados es exactamente el objetivo. Sin bucles ni iteraciones.
-    for (auto& L : layers_) {
-        std::vector<float> in_sum(L.n, 0.0f);
-        std::vector<i32> in_cnt(L.n, 0);
-        for (size_t s = 0; s < L.g.n_syn; ++s) {
-            if (L.g.sign[s]) continue;
-            in_sum[L.g.post[s]] += L.g.weight[s];
-            in_cnt[L.g.post[s]]++;
-        }
-        std::vector<float> factor(L.n, 1.0f);
-        for (int j = 0; j < L.n; ++j) {
-            if (in_cnt[j] == 0 || in_sum[j] < 1e-8f) continue;
-            float target = p_.weight_norm * std::sqrt((float)in_cnt[j]);
-            float r = target / in_sum[j];
-            // r^(1/cnt): el producto de los cnt pesos escalados = objetivo
-            float f = std::exp(std::log(r) / (float)in_cnt[j]);
-            if (f < 0.5f) f = 0.5f;
-            else if (f > 2.0f) f = 2.0f;
-            factor[j] = f;
-        }
-        for (size_t s = 0; s < L.g.n_syn; ++s) {
-            if (L.g.sign[s]) continue;
-            float w = L.g.weight[s] * factor[L.g.post[s]];
-            if (w > p_.w_max) w = p_.w_max;
-            L.g.weight[s] = w;
-            L.fast[s] *= (1.0f - p_.consol_gain);
+    // Proyeccion sobre una esfera por fila. Adam no converge a lr fijo cuando
+    // las features derivan: los pesos crecen sin limite y el softmax se satura
+    // (se midieron +-455 con 12800 simbolos). Renormalizar la fila conserva la
+    // direccion del clasificador y acota su magnitud.
+    if (p_.readout_norm > 0.0f)
+    for (int k = 0; k < p_.n_chars; ++k) {
+        float* row = &R_[(size_t)k * stride];
+        float nrm = 0.0f;
+        for (int i = 0; i < F; ++i) nrm += row[i] * row[i];
+        nrm = std::sqrt(nrm);
+        if (nrm > p_.readout_norm) {
+            const float g = p_.readout_norm / nrm;
+            for (int i = 0; i < F; ++i) row[i] *= g;
         }
     }
-    symbols_since_consol_ = 0;
-    // NO se reinicia el estado aqui: consolidate() es una operacion sobre los
-    // pesos, no sobre la actividad. Reiniciarlo interrumpia el contexto a
-    // mitad de secuencia. La version anterior lo hacia y por eso el
-    // entrenamiento quedaba clavado en el nivel de azar.
-}
-
-// ---------------------------------------------------------------------------
-// Persistencia (binario con cabecera versionada)
-// ---------------------------------------------------------------------------
-
-void Engine::save(const std::string& path) const {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) throw std::runtime_error("no se pudo abrir para escribir: " + path);
-    f.write((const char*)&MAGIC, 4);
-    f.write((const char*)&VERSION, 4);
-    f.write((const char*)&p_, sizeof(Params));
-    int nl = p_.n_layers;
-    f.write((const char*)&nl, 4);
-    for (const auto& L : layers_) {
-        size_t ns = L.g.n_syn;
-        f.write((const char*)&ns, 8);
-        f.write((const char*)L.g.offsets.data(), sizeof(i32) * L.g.offsets.size());
-        f.write((const char*)L.g.post.data(), sizeof(i32) * ns);
-        f.write((const char*)L.g.weight.data(), sizeof(float) * ns);
-        f.write((const char*)L.g.delay.data(), ns);
-        f.write((const char*)L.g.sign.data(), ns);
-        f.write((const char*)L.is_inh.data(), L.n);
-        f.write((const char*)L.spike_count.data(), sizeof(i32) * L.n);
-    }
-    size_t rf = R_.size();
-    f.write((const char*)&rf, 8);
-    f.write((const char*)R_.data(), sizeof(float) * rf);
-    size_t bf = B_.size();
-    f.write((const char*)&bf, 8);
-    f.write((const char*)B_.data(), sizeof(float) * bf);
-}
-
-void Engine::load(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) throw std::runtime_error("no se pudo abrir: " + path);
-    uint32_t mg = 0, ver = 0;
-    f.read((char*)&mg, 4);
-    f.read((char*)&ver, 4);
-    if (mg != MAGIC) throw std::runtime_error("no es un archivo CORTEX");
-    if (ver != VERSION) throw std::runtime_error("version incompatible");
-    Params loaded;
-    f.read((char*)&loaded, sizeof(Params));
-    p_ = loaded;
-    int nl = 0;
-    f.read((char*)&nl, 4);
-    build_random(p_.seed);
-    layers_.resize(nl);
-    for (int li = 0; li < nl; ++li) {
-        Layer& L = layers_[li];
-        L.n = p_.layer_size;
-        L.offset = li * p_.layer_size;
-        size_t ns = 0;
-        f.read((char*)&ns, 8);
-        L.g.offsets.resize(L.n + 1);
-        f.read((char*)L.g.offsets.data(), sizeof(i32) * L.g.offsets.size());
-        L.g.post.resize(ns);
-        L.g.weight.resize(ns);
-        L.g.delay.resize(ns);
-        L.g.sign.resize(ns);
-        L.is_inh.resize(L.n);
-        L.g.n_syn = ns;
-        f.read((char*)L.g.post.data(), sizeof(i32) * ns);
-        f.read((char*)L.g.weight.data(), sizeof(float) * ns);
-        f.read((char*)L.g.delay.data(), ns);
-        f.read((char*)L.g.sign.data(), ns);
-        f.read((char*)L.is_inh.data(), L.n);
-        L.spike_count.resize(L.n);
-        f.read((char*)L.spike_count.data(), sizeof(i32) * L.n);
-        L.elig.assign(ns, 0.0f);
-        L.fast.assign(ns, 0.0f);
-    }
-    size_t rf = 0;
-    f.read((char*)&rf, 8);
-    R_.resize(rf);
-    R_m_.assign(rf, 0.0f);
-    R_v_.assign(rf, 0.0f);
-    f.read((char*)R_.data(), sizeof(float) * rf);
-    size_t bf = 0;
-    f.read((char*)&bf, 8);
-    B_.resize(bf);
-    f.read((char*)B_.data(), sizeof(float) * bf);
-    feedback_.assign(n_neurons(), 0.0f);
-    logits_.assign(p_.n_chars, 0.0f);
-    act_now_.assign(n_neurons(), 0.0f);
-    sensory_.assign(p_.n_chars * BITS_PER_CHAR, 0.0f);
-    reset_state();
-}
-
-// ---------------------------------------------------------------------------
-
-Engine::Stats Engine::stats() const {
-    Stats s;
-    s.ticks = t_;
-    s.spikes = spikes_;
-    s.symbols = symbols_;
-    double wsum = 0;
-    size_t wcount = 0;
-    int used = 0;
-    for (const auto& L : layers_) {
-        for (float w : L.g.weight) { wsum += w; wcount++; }
-        for (int c : L.spike_count) if (c > 0) used++;
-    }
-    s.mean_w = wcount ? (float)(wsum / wcount) : 0.0f;
-    s.used_neurons = used;
-    return s;
 }
 
 }  // namespace cortex

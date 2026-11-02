@@ -1,16 +1,27 @@
-// cortex_lm.hpp — nucleo del motor CORTEX-LM
+// cortex_lm.hpp — nucleo del motor CORTEX-LM, reescrito tras la auditoria.
+//
+// POR QUE ESTE ARCHIVO ES NUEVO
+//
+// La version anterior tenia una dinamica que no controlaba la entrada:
+//  - los pesos de una neurona sumaban 0.80, o sea 1.3x el umbral por tick con
+//    tan solo 10 sinapsis entrantes;
+//  - la fuga de membrana era 1.7 % por tick (tau_m=20) y la neurona dispara y
+//    queda en refractario, de modo que la fuga nunca frenaba nada;
+//  - la unica limitacion era un k-WTA que imponia un numero FIJO de ganadores
+//    por tick.
+// Resultado medido: la actividad crecia sin punto fijo (0,7 -> 162 disparos por
+// simbolo) y la respuesta dependia del historial tanto como del simbolo. La red
+// era autonoma: la entrada no la gobernaba.
+//
+// La dinamica correcta es la contraria: los pesos deben ser DEBILES frente al
+// umbral, de modo que haga falta la entrada sensorial para disparar, y debe
+// haber inhibicion que crezca con la actividad para que el regimen se
+// autolimite. Eso es una red de pulsos, no un oscilador.
 //
 // Reglas de este archivo:
-//
-//  1. NADA de constantes magicas en el codigo. Todo parametro vive en Params.
-//  2. NADA de contenedores por neurona. Todo en arrays planos (SoA) para que el
-//     escalado sea lineal en memoria y la cache se comporte.
-//  3. Toda la topologia es parametrizable: el mismo motor hace una red de 4096
-//     neuronas o de un millon. Cambiar de escala es cambiar Params.
-//  4. El formato binario lleva version y cabecera con todos los parametros.
-//
-// Si algun dia hay que cambiar la regla de aprendizaje, se cambia LearningRule.
-// Si hay que cambiar la neurona, se cambia Dynamics. El resto no se toca.
+//  1. Ninguna constante magica: todo parametro vive en Params.
+//  2. Todo en arrays planos (SoA) para que el escalado sea lineal.
+//  3. La topologia es parametrizable: cambiar de escala es cambiar Params.
 
 #pragma once
 
@@ -24,268 +35,222 @@
 namespace cortex {
 
 // ---------------------------------------------------------------------------
-// Parametros. Unica fuente de verdad de la arquitectura.
+// Parametros. Unica fuente de verdad.
 // ---------------------------------------------------------------------------
 
 struct Params {
-    // --- forma de la red ---
-    int n_layers      = 2;      // capas recurrentes LIF
-    int layer_size    = 4096;   // neuronas por capa
-    int n_chars       = 256;    // vocabulario = bytes (identidad)
-    float density     = 0.06f;  // fraccion de conexiones dentro de la capa
-    int d_max         = 32;     // retardo maximo (ticks)
+    // --- forma ---
+    int   n_layers       = 1;      // capas recurrentes
+    int   layer_size     = 1024;   // neuronas por capa
+    int   n_chars        = 256;    // vocabulario = bytes
+    float density        = 0.05f;  // conexiones por neurona (grado de salida)
+    int   d_max          = 8;      // retardo maximo en ticks
 
-    // --- dinamica ---
-    float dt          = 1.0f;
-    float tau_m       = 20.0f;  // constante de membrana
-    float v_th        = 0.60f;
-    float input_gain  = 0.25f;   // corriente por sinapsis sensorial
-    float v_reset     = 0.0f;
-    int   refractory  = 2;
-    int   ticks_per_char = 5;
-    int   n_traces    = 4;      // memorias por neurona, actualizadas al DISPARAR
-    int   n_slots     = 8;      // memorias de la RED (ventana de actividad)
-    int   n_ctx       = 8;      // historial de SIMBOLOS de entrada (identidad)
+    // --- dinamica de membrana ---
+    float dt             = 1.0f;
+    float tau_m          = 10.0f;  // constante de membrana, en ticks
+    float v_th           = 1.0f;   // umbral
+    float v_reset        = 0.0f;
+    int   refractory     = 1;      // ticks de refractario
+    int   ticks_per_char = 4;      // ticks por simbolo
 
-    // --- competicion ---
-    int   k_wta       = 41;     // ganadores por tick (1 % de 4096)
-    float k_wta_frac  = 0.03f;  // k = max(8, frac * layer_size)
+    // --- entrada sensorial ---
+    // Cada simbolo enciende un subconjunto fijo de neuronas de la capa 0 con
+    // corriente `input_gain`. El valor se fija contra v_th: un simbolo solo,
+    // sin recurrencia, debe poder hacer disparar a su poblacion. Es la
+    // condicion que faltaba y la razon de que la entrada no mandara.
+    // Cada neurona sensorial recibe su propia corriente: base * (1 - spread/2 ..
+    // 1 + spread/2). Con pesos GRADUADOS la respuesta es gradual, y como el
+    // umbral sube con la fatiga, la fraccion de la poblacion que dispara
+    // codifica cuan reciente fue la estimulacion. Sin gradiente, la poblacion
+    // responde en bloque (todo o nada) y la fatiga la apaga entera.
+    float input_gain     = 1.35f;  // corriente base por sinapsis sensorial
+    float input_spread   = 0.45f;  // dispersion relativa de esa corriente
+    int   input_patch    = 0;      // 0 = derivar del tamano de capa
+    // Canal de memoria: proyeccion independiente, mas ancha y mas fuerte, para
+    // los simbolos que hay que recordar. Su huella de fatiga es mas profunda
+    // que la del relleno, y por eso sobrevive mas tiempo.
+    float mem_gain       = 3.2f;
+    int   mem_patch      = 0;      // 0 = doble del parche sensorial
 
-    // --- inhibicion recurrente: el freno que hace posible la memoria ---
-    // Interneuronas mas excitables, con proyeccion divergente y retardo mayor
-    // que la excitacion. Esa asimetria -- excitacion local y rapida, inhibicion
-    // ancha y lenta -- permite que un patron se imponga ANTES de que llegue el
-    // freno. Sin ella, la red solo tiene dos estados: muerta o saturada.
-    float inh_frac    = 0.15f;
-    float inh_bias    = 0.25f;
-    int   inh_delay   = 3;
-    int   inh_fanout  = 5;
-    float inh_weight  = 0.020f;
-    // Inhibicion de retroalimentacion: cada disparo resta fi_gain a fi_fanout
-    // neuronas elegidas al azar de la misma capa, con retardo fi_delay.
-    // A diferencia del k-WTA (que impone un numero fijo de disparos) o de la
-    // inhibicion global (que frena a todos por igual), esto se adapta: cuanto
-    // mas activa esta la poblacion, mas freno recibe. Es el mecanismo que
-    // sostiene actividad dispersa en vez de saturacion.
-    float fi_gain     = 0.0f;
-    int   fi_fanout   = 4;
-    int   fi_delay    = 1;
+    // --- recurrencia ---
+    // El peso se fija PARA QUE el total esperado sea w_scale * v_th cuando
+    // dispara la fraccion activa tipica. No se ajusta a mano: se deriva del
+    // grado de entrada, que es lo que hacia falta y no existia.
+    float w_scale        = 0.0f;   // 0 = sin recurrencia (linea base sensorial)
+    float active_frac    = 0.02f;  // fraccion de la capa activa por tick
 
-    // --- plasticidad ---
-    float tau_e       = 50.0f;  // vida de la traza de elegibilidad
-    float eta         = 3e-4f;  // tasa de aprendizaje
-    float elig_clip   = 3.0f;
-    int   consol_every = 500;   // simbolos entre ciclos de reposo
-    float consol_gain = 0.35f;
-    float prune_below = 0.05f;
-    float weight_norm = 1.0f;   // suma objetivo de pesos excitatorios entrantes
-    float w_init_scale = 0.105f; // escala inicial de pesos
+    // --- inhibicion ---
+    // Divergente, retardada, y sobre todo PROPORCIONAL a la actividad: cada
+    // disparo frena a una muestra aleatoria de la capa. Sin esto el regimen
+    // no tiene punto fijo y la actividad crece hasta saturar.
+    int   inh_fanout     = 6;
+    float inh_gain       = 0.30f;  // corriente inhibitoria por disparo
+    int   inh_delay      = 2;
 
-    // --- limites (robustez) ---
-    float w_max       = 4.0f;
-    int   budget      = 600;    // disparos maximos por ventana (anti-epilepsia)
-    int   budget_win  = 400;
-    float theta_step  = 0.02f;  // adaptacion de umbral por disparo
+    // --- adaptacion de umbral (fatiga) ---
+    // Mecanismo cortical clasico de memoria de trabajo: la neurona que dispara
+    // sube su umbral y tarda en recuperarse. El patron de fatiga codifica que
+    // acaba de ocurrir.
+    float theta_step     = 0.28f;  // cuanto sube el umbral por disparo
+    float theta_decay    = 0.80f;  // cuanto se relaja por tick
+    float theta_max      = 1.10f;  // la fatiga debe poder apagar la entrada
+
+    // --- plasticidad (elegibilidad + senal difundida) ---
+    float eta            = 3e-5f;
+    float elig_decay     = 0.90f;  // por tick
+    float elig_clip      = 4.0f;
+    float w_min          = 0.0f;
+    float w_max          = 3.0f;
+
+    // --- homeostasis lenta ---
+    // Mantiene la actividad media dentro de una banda, actuando sobre el sesgo
+    // de cada neurona. Es lo que impide que el regimen derive con el tiempo.
+    // La homeostasis corrige DERIVA LENTA, no impone una tasa objetivo. Con un
+    // objetivo global fuerte castigaba a las neuronas que reciben la entrada
+    // (disparan mas que la media) hasta apagarlas: dejaba 2 dimensiones vivas
+    // de 1025. Ahora actua despacio y con un margen estrecho.
+    float target_rate    = 0.02f;
+    float homeo_lr       = 1e-4f;
+    float bias_max       = 0.25f;
+
+    // --- readout ---
+    int   n_ctx          = 8;      // simbolos de historial en las features
+    float readout_lr     = 8e-3f;
+    float readout_norm   = 0.0f;   // 0 = desactivado; recorte por fila opcional
+    float gclip          = 1.0f;
 
     // --- entrenamiento ---
-    int   batch       = 8;
-    int   seq_len     = 128;
-    uint32_t seed     = 1234;
+    int   seq_len        = 128;
+    uint32_t seed        = 1234;
 
-    // Derivados (no se guardan como fuente de verdad).
-    int state_per_layer() const { return layer_size; }
+    // Derivados.
     float alpha_m() const { return std::exp(-dt / tau_m); }
-    float alpha_e() const { return std::exp(-dt / tau_e); }
-    // features del readout: por capa, tasa actual + contexto decaido, + sesgo
-    // features: por capa, 1 bloque de tasa + n_traces bloques de traza, + sesgo
-    int n_features() const {
-        return n_layers * layer_size * (1 + n_traces) + 1;
+    int   patch_size() const { return input_patch > 0 ? input_patch : std::max(4, (int)(layer_size * 0.06f)); }
+    int   n_ctx_features() const { return n_ctx * n_chars + 1; }
+    // Dimension del readout: el MAXIMO de todas las vistas, porque la vista se
+    // elige en tiempo de ejecucion y el array se reserva una sola vez.
+    int   n_features_max() const {
+        const int ctx = n_ctx_features();
+        const int net = n_layers * layer_size;
+        return std::max(ctx, net);
     }
-    int n_slots_features() const {
-        return n_layers * layer_size * n_slots + 1;
-    }
-    // Historial sensorial: n_ctx x n_chars en one-hot. Es la identidad de los
-    // ultimos simbolos de entrada, sin pasar por la dinamica de la red. Existe
-    // porque la dinamica sola no conserva identidad con suficiente fidelidad:
-    // medido, el estado recurrente DEGRADABA la lectura en vez de enriquecerla.
-    int n_ctx_features() const { return n_ctx * n_chars + 1; }
 };
-
-// ---------------------------------------------------------------------------
-// Estructuras planas. std::vector<T> para portabilidad; con pmr se puede
-// cambiar el asignador sin tocar nada mas (arena, mmap, pinned, GPU host).
-// ---------------------------------------------------------------------------
 
 using i32 = int32_t;
 using u32 = uint32_t;
 
-// Grafo en CSR por neurona presinaptica.
-// offsets[pre] .. offsets[pre+1] -> columnas post, pesos, retardos.
+// Grafo CSR por neurona presinaptica: offsets[pre]..offsets[pre+1].
 struct Graph {
-    std::vector<i32>   offsets;   // (n+1)
-    std::vector<i32>   post;
-    std::vector<float> weight;
-    std::vector<uint8_t> delay;   // 1..d_max
-    std::vector<uint8_t> sign;    // 1 = inhibitoria (resta), 0 = excitatoria (suma)
+    std::vector<i32>     offsets;
+    std::vector<i32>     post;
+    std::vector<float>   weight;
+    std::vector<uint8_t> delay;
     size_t n_syn = 0;
 };
 
-// Estado dinamico de una capa.
+// Estado de una capa.
 struct Layer {
     int n = 0;
-    int offset = 0;               // indice global de su primera neurona
+    int offset = 0;
 
-    std::vector<float> v;         // potencial de membrana
-    std::vector<float> theta;     // umbral adaptativo extra
-    std::vector<float> vtrace;    // traza de disparo (para elegibilidad)
-    std::vector<float> rate;      // disparos acumulados en el simbolo actual
-    // Banco de trazas de disparo con varias constantes de tiempo. Se actualiza
-    // al DISPARAR, no con la tasa: el promedio de tasa borra la identidad del
-    // simbolo (dos entradas distintas con la misma cantidad de disparos son
-    // indistinguibles). El disparo lleva identidad; el conteo, no.
-    std::vector<float> trace;     // N * K, layout [j*K + k]
-    // Slots de simbolo: el perfil de actividad de cada uno de los ultimos
-    // n_slots simbolos. Se desplaza al empezar cada simbolo nuevo.
-    std::vector<float> slots;     // n_slots * N
-    std::vector<float> elig;      // traza de elegibilidad (por sinapsis de SALIDA)
-    std::vector<float> fast;      // pesos rapidos (por sinapsis de salida)
-    std::vector<i32>   last_spike;
-    std::vector<i32>   refr;
-    std::vector<i32>   spent;     // presupuesto gastado en la ventana
-    std::vector<i32>   win_start;
-    std::vector<i32>   spike_count;
-    std::vector<uint8_t> is_inh;  // 1 = interneurona
+    std::vector<float> v;        // potencial de membrana
+    std::vector<float> theta;    // fatiga (adaptacion de umbral)
+    std::vector<float> bias;     // sesgo homeostatico
+    std::vector<float> elig;     // elegibilidad por sinapsis de salida
+    std::vector<float> rate;      // disparos en el simbolo actual
+    std::vector<float> rate_last; // perfil del ultimo simbolo cerrado
+    std::vector<int>   refr;
+    std::vector<int>   spike_count;
+    std::vector<uint8_t> active; // 1 si esta en la lista de trabajo
+    std::vector<i32>   active_list;
 
-    // CSR de la capa (indices locales)
     Graph g;
-
-    // Listas de activos: solo se procesa lo que puede cambiar. Sin esto el
-    // coste por tick es O(todas las sinapsis) y el motor no escala.
-    std::vector<i32>     active;        // neuronas con v != v_reset
-    std::vector<uint8_t> in_active;
-    std::vector<i32>     active_next;
-    std::vector<i32>     touch;          // sinapsis con elegibilidad viva
-    std::vector<uint8_t> in_touch;
-    std::vector<i32>     touch_snap;     // copia para iterar mientras se toca
 };
 
-// Entrada sensorial: n_chars valores (bytes).
-static constexpr int BITS_PER_CHAR = 8;
-
-// ---------------------------------------------------------------------------
-// Motor
-// ---------------------------------------------------------------------------
+// Cola de eventos con retardo (un bucket por retardo).
+struct DelayQueue {
+    struct Ev { i32 post; i32 syn; };
+    std::vector<std::vector<Ev>> buckets;
+    int head = 0;
+    int span = 0;
+    void init(int max_delay) {
+        span = max_delay + 2;
+        buckets.assign(span, {});
+        head = 0;
+    }
+    void push(int when, Ev e) { buckets[((when % span) + span) % span].push_back(e); }
+    std::vector<Ev>& drain(int t) {
+        head = ((t % span) + span) % span;
+        return buckets[head];
+    }
+};
 
 class Engine {
 public:
-    enum class View { Trace, Slot, Ctx, Both };
     explicit Engine(const Params& p);
 
-    // --- construccion ---
     void build_random(unsigned seed);
-    void load(const std::string& path);
-    void save(const std::string& path) const;
-
-    // --- simulacion ---
-    // Procesa un caracter: inyecta el patron y avanza ticks_per_char.
-    void feed(int ch);
-    void inject_only(int ch);
-    void end_symbol();
-    // Avanza un tick sin inyectar. Devuelve la suma de disparos.
-    int step();
-
-    // --- lectura ---
-    // Logits del readout para el caracter siguiente, promediados sobre el
-    // ultimo caracter procesado. Tamano n_chars.
-    void set_view(View v);
-    void emit_features(std::vector<float>& out) const;
-    void ctx_features(std::vector<float>& out) const;
-    void readout(float* logits) const;
-    void features(std::vector<float>& out) const;  // diagnostico
-    void slot_features(std::vector<float>& out) const;
-
-    // --- aprendizaje ---
-    // error[k] = softmax(logits)[k] - target[k]. Se difunde por B (fija).
-    void learn(const float* error);
-    void consolidate();
-    void begin_symbol();   // limpia acumuladores de tasa
     void reset_state();
 
-    // --- diagnostico ---
-    struct Stats {
-        long ticks = 0;
-        long spikes = 0;
-        long symbols = 0;
-        float mean_w = 0;
-        float mean_v = 0;
-        int used_neurons = 0;
-    };
-    Stats stats() const;
-    long symbols_done() const { return symbols_; }
+    // Presenta un simbolo completo: inyecta, avanza ticks_per_char, cierra.
+    void feed(int ch);
+    // Solo la inyeccion sensorial (para diagnostico tick a tick).
+    void inject_only(int ch);
+    // Inyeccion por el canal de MEMORIA: proyeccion distinta y mas fuerte que la
+    // sensorial. Sirve para marcar los simbolos que hay que recordar, de modo
+    // que su huella de fatiga sea mas profunda que la del relleno.
+    void inject_mem(int ch);
+    // Avanza un tick. Devuelve los disparos de ese tick.
+    int step();
+    void end_symbol();
 
-    const Params& params() const { return p_; }
-    int n_neurons() const { return p_.n_layers * p_.layer_size; }
+    // Features de texto: historial sensorial en one-hot.
+    void ctx_features(std::vector<float>& out) const;
+    // Features de la red: tasa del simbolo actual. Para diagnostico.
+    void rate_features(std::vector<float>& out) const;
+    void last_features(std::vector<float>& out) const;
+    // Features de memoria: fatiga (theta), que codifica lo que acaba de pasar.
+    void theta_features(std::vector<float>& out) const;
+
+    void readout(const std::vector<float>& f, float* logits) const;
+    void normalize(const std::vector<float>& in, std::vector<float>& out) const;
+    void update_norm(const std::vector<float>& f);
+    void learn(const float* error, const std::vector<float>& f);
+
+    long   ticks() const { return t_; }
+    long   spikes() const { return spikes_; }
+    int    n_neurons() const { return n_neurons_; }
     size_t n_synapses() const;
-
-    // Acceso para pruebas y para el binding.
     const Layer& layer(int i) const { return layers_[i]; }
-    Layer& layer(int i) { return layers_[i]; }
-    const std::vector<float>& sensory() const { return sensory_; }
-    const std::vector<float>& feedback() const { return feedback_; }
+    Layer& layer_mut(int i) { return layers_[i]; }
+    const Params& params() const { return p_; }
 
 private:
-    // Cola de retardos: un bucket circular por tick. Es miembro, no global,
-    // para que dos motores puedan convivir en el mismo proceso (tests, ensembles).
-    struct Ev { i32 post; i32 syn; };
-    static constexpr i32 kFiSyn = -1;   // evento de freno, no es una sinapsis
-    struct DelayQueue {
-        std::vector<std::vector<Ev>> buckets;
-        int span = 0;
-        int head = 0;
-        void init(int d_max) {
-            span = 1;
-            while (span <= d_max + 2) span <<= 1;
-            buckets.assign(span, {});
-            head = 0;
-        }
-        void push(int at, Ev e) { buckets[at & (span - 1)].push_back(e); }
-        std::vector<Ev>& drain() {
-            auto& b = buckets[head & (span - 1)];
-            head++;
-            return b;
-        }
-    };
-
     Params p_;
-    std::vector<DelayQueue> queues_;
-    std::vector<std::pair<float, int>> cand_;
-    int k_eff_ = 41;
-    View view_ = View::Trace;
-    int feat_dim_ = 0;
+    int n_neurons_ = 0;
     std::vector<Layer> layers_;
-    std::vector<float> sensory_;    // n_chars * BITS_PER_CHAR
-    std::vector<float> feedback_;   // n_neurons (señal de aprendizaje por neurona)
-    std::vector<float> B_;          // n_neurons x n_chars, FIJA (no se entrena)
-    std::vector<float> logits_;     // n_chars
-    std::vector<float> act_now_;    // neuronas que dispararon este tick
-    std::vector<float> elig_acc_;   // acumulador de suma_t señal*elig por sinapsis
-
-    // readout (aprendido)
-    std::vector<float> R_;          // n_chars x dimension de la vista
-    std::vector<float> ctx_hist_;   // n_ctx * n_chars, one-hot
-    std::vector<float> R_m_;        // momento (Adam)
-    std::vector<float> R_v_;
-
-    std::mt19937 rng_;
-
-    int t_ = 0;
+    std::vector<DelayQueue> queues_;
+    std::vector<float> B_;        // retroalimentacion fija (n_neurons x n_chars)
+    std::vector<float> feedback_;
+    std::vector<int>   sensory_;    // mapa fijo simbolo -> neuronas de la capa 0
+    std::vector<float> sensory_w_;  // corriente graduada de cada conexion sensorial
+    std::vector<int>   memmap_;     // mapa fijo simbolo -> neuronas del canal de memoria
+    std::vector<float> memmap_w_;
+    std::vector<float> ctx_hist_; // n_ctx * n_chars
+    std::vector<float> R_;        // readout n_chars x F
+    std::vector<float> mu_, sd_;   // normalizacion por dimension de las features
+    std::vector<float> logits_b_;  // sesgo del readout
+    std::vector<float> R_m_, R_v_;
+    std::vector<float> logits_;
+    long t_ = 0;
     long spikes_ = 0;
     long symbols_ = 0;
-    int symbols_since_consol_ = 0;
+    long last_consol_ = 0;
+    std::mt19937 rng_;
+    std::vector<std::pair<float, i32>> cand_;
 
-    void propagate(int layer_idx, std::vector<float>& arrivals);
-    void k_wta(Layer& L, std::vector<int>& winners);
-    void feature_vector(std::vector<float>& out) const;
+    void build_sensory_map();
 };
 
 }  // namespace cortex
