@@ -112,8 +112,11 @@ static void cmd_train(const std::string& path, const std::string& data_path,
     eng.build_random(p.seed);
     // CORTEX_VIEW=slot (defecto) | trace  -> comparar las dos lecturas
     const char* vw = std::getenv("CORTEX_VIEW");
-    eng.set_view((vw && std::strcmp(vw, "trace") == 0) ? Engine::View::Trace
-                                                      : Engine::View::Slot);
+    if (!vw || std::strcmp(vw, "slot") == 0) eng.set_view(Engine::View::Slot);
+    else if (std::strcmp(vw, "trace") == 0) eng.set_view(Engine::View::Trace);
+    else if (std::strcmp(vw, "ctx") == 0)   eng.set_view(Engine::View::Ctx);
+    else if (std::strcmp(vw, "both") == 0)  eng.set_view(Engine::View::Both);
+    else eng.set_view(Engine::View::Slot);
 
     auto data = read_corpus(data_path);
     Vocab v;
@@ -162,6 +165,75 @@ static void cmd_train(const std::string& path, const std::string& data_path,
     std::string sp = state_path(path.c_str());
     eng.save(sp);
     std::printf("guardado: %s\n", sp.c_str());
+}
+
+
+static int cmd_eval(const char* path) {
+    Params p;
+    p.layer_size = 256; p.n_layers = 1; p.density = 0.05f;
+    if (const char* nc = std::getenv("CORTEX_NCTX")) {
+        int k = std::atoi(nc);
+        if (k > 0 && k <= 8) p.n_ctx = k;
+    }
+    Engine eng(p);
+    eng.build_random(p.seed);
+    const char* vw = std::getenv("CORTEX_VIEW");
+    if (!vw || std::strcmp(vw, "slot") == 0) eng.set_view(Engine::View::Slot);
+    else if (std::strcmp(vw, "trace") == 0) eng.set_view(Engine::View::Trace);
+    else if (std::strcmp(vw, "ctx") == 0)   eng.set_view(Engine::View::Ctx);
+    else if (std::strcmp(vw, "both") == 0)  eng.set_view(Engine::View::Both);
+
+    auto data = read_corpus("data/spanish_small.txt");
+    const size_t split = data.size() * 8 / 10;
+    std::vector<float> logits(p.n_chars), err(p.n_chars);
+    Vocab v;
+
+    auto evaluate = [&](size_t from, size_t to, const char* label) {
+        if (to - from > 4000) to = from + 4000;
+        eng.reset_state();
+        double bits = 0; int n = 0;
+        for (size_t i = from; i + 1 < to; ++i) {
+            eng.feed(v.map(data[i]));
+            eng.readout(logits.data());
+            Softmax::apply(logits);
+            float q = logits[v.map(data[i + 1])];
+            if (q < 1e-9f) q = 1e-9f;
+            bits += -std::log2(q); n++;
+        }
+        std::printf("%s: %.3f bpc (%d simbolos)\n", label, bits / n, n);
+        return bits / n;
+    };
+
+    std::printf("inicio: %zu simbolos, split %zu\n", data.size(), split); std::fflush(stdout);
+    auto t_start = std::chrono::steady_clock::now();
+    // entrenamiento
+    size_t pos = 0;
+    for (int s = 0; s < 200; ++s) {
+        if (pos + p.seq_len + 1 >= split) { pos = 0; eng.reset_state(); }
+        for (int k = 0; k < p.seq_len; ++k) {
+            eng.feed(v.map(data[pos + k]));
+            eng.readout(logits.data());
+            int target = v.map(data[pos + k + 1]);
+            Softmax::apply(logits);
+            for (auto& x : err) x = 0.0f;
+            err[target] = -1.0f;
+            for (int c = 0; c < p.n_chars; ++c) err[c] += logits[c];
+            eng.learn(err.data());
+        }
+        pos += p.seq_len;
+        {
+            auto now = std::chrono::steady_clock::now();
+            double sec = std::chrono::duration<double>(now - t_start).count();
+            std::printf("  paso %d  %.1f s  (%.2f ms/simbolo)\n", s + 1, sec,
+                        sec * 1000.0 / ((s + 1) * p.seq_len));
+            std::fflush(stdout);
+        }
+    }
+    std::printf("\n--- resultados ---\n");
+    evaluate(0, split, "ENTRENO (lo que vio)");
+    evaluate(split, data.size(), "NO VIO  (generalizacion)");
+    (void)path;
+    return 0;
 }
 
 static void cmd_smoke(const std::string& path) {
@@ -307,12 +379,13 @@ static void cmd_bench(const std::string& path) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::printf("uso:\n  cortex_lm smoke <archivo>\n"
+        std::printf("uso:\n  cortex_lm eval\n  cortex_lm smoke <archivo>\n"
                     "  cortex_lm train <archivo> <datos> <pasos> [--small]\n");
         return 2;
     }
     std::string cmd = argv[1], path = argv[2];
     try {
+        if (cmd == "eval")  { return cmd_eval(path.c_str()); }
         if (cmd == "smoke") { cmd_smoke(path); return 0; }
         if (cmd == "bench") { cmd_bench(path); return 0; }
         if (cmd == "train") {

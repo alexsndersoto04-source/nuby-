@@ -32,6 +32,7 @@ Engine::Engine(const Params& p) : p_(p) {
         throw std::invalid_argument("k_wta fuera de rango");
     if (p_.d_max < 1 || p_.d_max > 200)
         throw std::invalid_argument("d_max fuera de rango");
+    ctx_hist_.assign((size_t)p_.n_ctx * p_.n_chars, 0.0f);
 }
 
 size_t Engine::n_synapses() const {
@@ -144,7 +145,8 @@ void Engine::build_random(unsigned seed) {
     }
 
     // Readout: n_chars x n_features
-    const int F = std::max(p_.n_features(), p_.n_slots_features());
+    const int F = std::max(std::max(p_.n_features(), p_.n_slots_features()),
+                           p_.n_ctx_features() + p_.n_slots_features());
     R_.assign((size_t)p_.n_chars * F, 0.0f);
     feat_dim_ = F;
     R_m_.assign(R_.size(), 0.0f);
@@ -190,11 +192,20 @@ void Engine::reset_state() {
 
 void Engine::begin_symbol() {
     for (auto& L : layers_) std::fill(L.rate.begin(), L.rate.end(), 0.0f);
+    // desplazar el historial sensorial y reservar el hueco del simbolo nuevo
+    if (p_.n_ctx > 1) {
+        std::memmove(&ctx_hist_[p_.n_chars], &ctx_hist_[0],
+                     sizeof(float) * (size_t)p_.n_chars * (p_.n_ctx - 1));
+    }
+    std::fill(ctx_hist_.begin(), ctx_hist_.begin() + p_.n_chars, 0.0f);
+    ctx_hist_[p_.n_chars] = 0.0f;
 }
 
 void Engine::feed(int ch) {
     if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("char fuera de vocabulario");
     begin_symbol();
+    // ranura 0 del historial = simbolo que se acaba de presentar
+    ctx_hist_[ch] = 1.0f;
 
     // corriente sensorial: los bits a 1 del codigo del caracter empujan un
     // conjunto fijo de neuronas de la capa 0.
@@ -437,6 +448,29 @@ void Engine::feature_vector(std::vector<float>& out) const {
     out[F - 1] = 1.0f;
 }
 
+// Historial sensorial en one-hot, el simbolo actual en la ranura 0.
+void Engine::ctx_features(std::vector<float>& out) const {
+    const int F = p_.n_ctx_features();
+    out.assign(F, 0.0f);
+    for (int i = 0; i < F - 1; ++i) out[i] = ctx_hist_[i];
+    out[F - 1] = 1.0f;
+}
+
+void Engine::emit_features(std::vector<float>& out) const {
+    switch (view_) {
+        case View::Trace: feature_vector(out); return;
+        case View::Slot:  slot_features(out);  return;
+        case View::Ctx:   ctx_features(out);   return;
+        case View::Both: {
+            std::vector<float> a;
+            ctx_features(a);
+            slot_features(out);
+            out.insert(out.end(), a.begin(), a.end());
+            return;
+        }
+    }
+}
+
 void Engine::set_view(View v) { view_ = v; }
 
 void Engine::features(std::vector<float>& out) const { feature_vector(out); }
@@ -470,8 +504,7 @@ void Engine::slot_features(std::vector<float>& out) const {
 
 void Engine::readout(float* logits) const {
     std::vector<float> f;
-    if (view_ == View::Slot) slot_features(f);
-    else feature_vector(f);
+    emit_features(f);
     const int F = (int)f.size();
     for (int k = 0; k < p_.n_chars; ++k) {
         float acc = 0.0f;
@@ -519,8 +552,7 @@ void Engine::learn(const float* error) {
 
     // 3. readout con Adam (es un clasificador lineal, aqui si vale)
     std::vector<float> f;
-    if (view_ == View::Slot) slot_features(f);
-    else feature_vector(f);
+    emit_features(f);
     const int F = (int)f.size();
     const float lr = 8e-3f, b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
     const float gclip = 1.0f;   // recorte del gradiente: sin esto diverge

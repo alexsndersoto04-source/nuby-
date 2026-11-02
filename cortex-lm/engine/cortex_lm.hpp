@@ -44,7 +44,8 @@ struct Params {
     int   refractory  = 2;
     int   ticks_per_char = 5;
     int   n_traces    = 4;      // memorias por neurona, actualizadas al DISPARAR
-    int   n_slots     = 8;      // memorias de simbolo (ventana temporal explicita)
+    int   n_slots     = 8;      // memorias de la RED (ventana de actividad)
+    int   n_ctx       = 8;      // historial de SIMBOLOS de entrada (identidad)
 
     // --- competicion ---
     int   k_wta       = 41;     // ganadores por tick (1 % de 4096)
@@ -94,6 +95,11 @@ struct Params {
     int n_slots_features() const {
         return n_layers * layer_size * n_slots + 1;
     }
+    // Historial sensorial: n_ctx x n_chars en one-hot. Es la identidad de los
+    // ultimos simbolos de entrada, sin pasar por la dinamica de la red. Existe
+    // porque la dinamica sola no conserva identidad con suficiente fidelidad:
+    // medido, el estado recurrente DEGRADABA la lectura en vez de enriquecerla.
+    int n_ctx_features() const { return n_ctx * n_chars + 1; }
 };
 
 // ---------------------------------------------------------------------------
@@ -163,7 +169,7 @@ static constexpr int BITS_PER_CHAR = 8;
 
 class Engine {
 public:
-    enum class View { Trace, Slot };
+    enum class View { Trace, Slot, Ctx, Both };
     explicit Engine(const Params& p);
 
     // --- construccion ---
@@ -181,6 +187,8 @@ public:
     // Logits del readout para el caracter siguiente, promediados sobre el
     // ultimo caracter procesado. Tamano n_chars.
     void set_view(View v);
+    void emit_features(std::vector<float>& out) const;
+    void ctx_features(std::vector<float>& out) const;
     void readout(float* logits) const;
     void features(std::vector<float>& out) const;  // diagnostico
     void slot_features(std::vector<float>& out) const;
@@ -251,7 +259,8 @@ private:
     std::vector<float> elig_acc_;   // acumulador de suma_t señal*elig por sinapsis
 
     // readout (aprendido)
-    std::vector<float> R_;          // n_chars x max(n_features, n_slots_features)
+    std::vector<float> R_;          // n_chars x dimension de la vista
+    std::vector<float> ctx_hist_;   // n_ctx * n_chars, one-hot
     std::vector<float> R_m_;        // momento (Adam)
     std::vector<float> R_v_;
 
