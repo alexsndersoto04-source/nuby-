@@ -44,6 +44,7 @@ struct Params {
     int   refractory  = 2;
     int   ticks_per_char = 5;
     int   n_traces    = 4;      // memorias por neurona, actualizadas al DISPARAR
+    int   n_slots     = 8;      // memorias de simbolo (ventana temporal explicita)
 
     // --- competicion ---
     int   k_wta       = 41;     // ganadores por tick (1 % de 4096)
@@ -90,6 +91,9 @@ struct Params {
     int n_features() const {
         return n_layers * layer_size * (1 + n_traces) + 1;
     }
+    int n_slots_features() const {
+        return n_layers * layer_size * n_slots + 1;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +129,9 @@ struct Layer {
     // simbolo (dos entradas distintas con la misma cantidad de disparos son
     // indistinguibles). El disparo lleva identidad; el conteo, no.
     std::vector<float> trace;     // N * K, layout [j*K + k]
+    // Slots de simbolo: el perfil de actividad de cada uno de los ultimos
+    // n_slots simbolos. Se desplaza al empezar cada simbolo nuevo.
+    std::vector<float> slots;     // n_slots * N
     std::vector<float> elig;      // traza de elegibilidad (por sinapsis de SALIDA)
     std::vector<float> fast;      // pesos rapidos (por sinapsis de salida)
     std::vector<i32>   last_spike;
@@ -156,6 +163,7 @@ static constexpr int BITS_PER_CHAR = 8;
 
 class Engine {
 public:
+    enum class View { Trace, Slot };
     explicit Engine(const Params& p);
 
     // --- construccion ---
@@ -172,8 +180,10 @@ public:
     // --- lectura ---
     // Logits del readout para el caracter siguiente, promediados sobre el
     // ultimo caracter procesado. Tamano n_chars.
+    void set_view(View v);
     void readout(float* logits) const;
     void features(std::vector<float>& out) const;  // diagnostico
+    void slot_features(std::vector<float>& out) const;
 
     // --- aprendizaje ---
     // error[k] = softmax(logits)[k] - target[k]. Se difunde por B (fija).
@@ -229,6 +239,9 @@ private:
     Params p_;
     std::vector<DelayQueue> queues_;
     std::vector<std::pair<float, int>> cand_;
+    int k_eff_ = 41;
+    View view_ = View::Trace;
+    int feat_dim_ = 0;
     std::vector<Layer> layers_;
     std::vector<float> sensory_;    // n_chars * BITS_PER_CHAR
     std::vector<float> feedback_;   // n_neurons (señal de aprendizaje por neurona)
@@ -238,7 +251,7 @@ private:
     std::vector<float> elig_acc_;   // acumulador de suma_t señal*elig por sinapsis
 
     // readout (aprendido)
-    std::vector<float> R_;          // n_chars x n_features
+    std::vector<float> R_;          // n_chars x max(n_features, n_slots_features)
     std::vector<float> R_m_;        // momento (Adam)
     std::vector<float> R_v_;
 

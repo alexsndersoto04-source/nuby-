@@ -108,7 +108,36 @@ Queda un tercer problema, medido y no resuelto: la separabilidad entre símbolos
 distintos es solo **+0,09** (coseno 0,907 entre claves distintas contra 0,87 del
 mismo símbolo repetido). Las representaciones se parecen demasiado entre sí.
 
-### El test de memoria, y su resultado real
+### RESUELTO: memoria de trabajo confirmada
+
+**100 % de acierto.** 40 claves distintas, 10 símbolos de relleno variable,
+recuperación de la clave. Azar: 0,8 %.
+
+```
+epoca  1  acierto   0.0 %
+epoca 11  acierto 100.0 %
+epoca 60  acierto 100.0 %
+```
+
+Para llegar aquí hicieron falta tres cosas, y las tres eran bugs de verdad:
+
+**1. Banco de slots temporales.** Las trazas decaían con constantes de tiempo
+medidas en *ticks*, y un símbolo ocupa 5. Con la clave a 50 ticks de distancia,
+desaparecía. Ahora hay 8 slots explícitos: cada uno guarda el perfil de
+actividad de un símbolo anterior, y el banco se desplaza. La ventana de memoria
+es explícita en vez de depender de un decaimiento exponencial.
+
+Verificado: misma clave con distinto relleno → coseno 0,57; clave distinta →
+0,19. La identidad sobrevive al relleno.
+
+**2. El bench arrastraba estado entre ensayos.** La actividad del ensayo anterior
+contaminaba el actual. Se resetea el estado al empezar cada ensayo. Sin esto, el
+bench daba 0 % incluso teniendo features perfectamente utilizables. Fue el
+motivo real del "no recuerda ni el último símbolo": éramos nosotros midiendo mal.
+
+**3. El entrenamiento tampoco reseteaba entre secuencias.** Corregido también.
+
+### El test de memoria, y su resultado real (histórico)
 
 Se añadió `cortex_lm bench`: memorizar una clave, N símbolos de relleno, recordarla.
 

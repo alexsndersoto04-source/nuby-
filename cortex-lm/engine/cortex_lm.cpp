@@ -80,6 +80,7 @@ void Engine::build_random(unsigned seed) {
         Lr.vtrace.assign(N, 0.0f);
         Lr.rate.assign(N, 0.0f);
         Lr.trace.assign((size_t)N * p_.n_traces, 0.0f);
+        Lr.slots.assign((size_t)N * p_.n_slots, 0.0f);
         Lr.last_spike.assign(N, -1000000);
         Lr.refr.assign(N, 0);
         Lr.spent.assign(N, 0);
@@ -143,8 +144,9 @@ void Engine::build_random(unsigned seed) {
     }
 
     // Readout: n_chars x n_features
-    const int F = p_.n_features();
+    const int F = std::max(p_.n_features(), p_.n_slots_features());
     R_.assign((size_t)p_.n_chars * F, 0.0f);
+    feat_dim_ = F;
     R_m_.assign(R_.size(), 0.0f);
     R_v_.assign(R_.size(), 0.0f);
     std::normal_distribution<float> rn(0.0f, 0.02f);
@@ -162,6 +164,7 @@ void Engine::reset_state() {
         std::fill(L.vtrace.begin(), L.vtrace.end(), 0.0f);
         std::fill(L.rate.begin(), L.rate.end(), 0.0f);
         std::fill(L.trace.begin(), L.trace.end(), 0.0f);
+        std::fill(L.slots.begin(), L.slots.end(), 0.0f);
         std::fill(L.refr.begin(), L.refr.end(), 0);
         std::fill(L.spent.begin(), L.spent.end(), 0);
         std::fill(L.win_start.begin(), L.win_start.end(), 0);
@@ -228,6 +231,15 @@ void Engine::feed(int ch) {
         step();
     }
 
+
+    // desplazar el banco de slots y guardar el perfil de este simbolo
+    for (auto& L : layers_) {
+        const size_t n = (size_t)L.n;
+        if (p_.n_slots > 1) {
+            std::memmove(&L.slots[n], &L.slots[0], sizeof(float) * n * (p_.n_slots - 1));
+        }
+        for (size_t j = 0; j < n; ++j) L.slots[j] = L.rate[j];
+    }
 
     // activacion media del simbolo -> features del readout
     symbols_++;
@@ -419,12 +431,42 @@ void Engine::feature_vector(std::vector<float>& out) const {
     out[F - 1] = 1.0f;
 }
 
+void Engine::set_view(View v) { view_ = v; }
+
 void Engine::features(std::vector<float>& out) const { feature_vector(out); }
+
+// Banco de trabajo para el readout: no descarta simbolos antiguos.
+// Las trazas decaen con constantes de tiempo en TICKS, y un simbolo ocupa solo
+// 5 ticks; con tau corta, la clave desaparece en el relleno. Este banco guarda
+// el perfil de actividad de los ultimos `n_slots` simbolos, uno por slot, de
+// modo que la recuperacion tiene ventana temporal explicita en vez de depender
+// de una constante de decaimiento.
+void Engine::slot_features(std::vector<float>& out) const {
+    const int N = p_.layer_size;
+    const int S = p_.n_slots;
+    const int F = p_.n_slots_features();
+    out.assign(F, 0.0f);
+    const float inv = 1.0f / std::max(1, p_.ticks_per_char);
+    int idx = 0;
+    for (int li = 0; li < p_.n_layers; ++li) {
+        const Layer& L = layers_[li];
+        for (int s = 0; s < S; ++s) {
+            const float* slot = &L.slots[(size_t)s * L.n];
+            float nrm = 0.0f;
+            for (int j = 0; j < L.n; ++j) nrm += slot[j] * slot[j];
+            nrm = std::sqrt(nrm);
+            const float g = (nrm > 1e-6f) ? (inv / nrm) : 0.0f;
+            for (int j = 0; j < L.n && idx < F - 1; ++j) out[idx++] = slot[j] * g;
+        }
+    }
+    out[F - 1] = 1.0f;
+}
 
 void Engine::readout(float* logits) const {
     std::vector<float> f;
-    feature_vector(f);
-    const int F = p_.n_features();
+    if (view_ == View::Slot) slot_features(f);
+    else feature_vector(f);
+    const int F = (int)f.size();
     for (int k = 0; k < p_.n_chars; ++k) {
         float acc = 0.0f;
         const float* row = &R_[(size_t)k * F];
@@ -471,8 +513,9 @@ void Engine::learn(const float* error) {
 
     // 3. readout con Adam (es un clasificador lineal, aqui si vale)
     std::vector<float> f;
-    feature_vector(f);
-    const int F = p_.n_features();
+    if (view_ == View::Slot) slot_features(f);
+    else feature_vector(f);
+    const int F = (int)f.size();
     const float lr = 8e-3f, b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
     const float gclip = 1.0f;   // recorte del gradiente: sin esto diverge
     static thread_local long step = 0;

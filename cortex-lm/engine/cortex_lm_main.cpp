@@ -110,6 +110,7 @@ static void cmd_train(const std::string& path, const std::string& data_path,
     if (small) { p.layer_size = 256; p.n_layers = 1; p.density = 0.05f; }
     Engine eng(p);
     eng.build_random(p.seed);
+    eng.set_view(Engine::View::Slot);   // ventana temporal explicita
 
     auto data = read_corpus(data_path);
     Vocab v;
@@ -123,6 +124,9 @@ static void cmd_train(const std::string& path, const std::string& data_path,
 
     for (int s = 0; s < steps; ++s) {
         if (pos + p.seq_len + 1 >= data.size()) pos = 0;
+        // estado limpio al empezar cada secuencia: arrastrar actividad entre
+        // secuencias contamina el objetivo y el readout no puede aprender
+        eng.reset_state();
         // un simbolo: alimentar, leer, aprender
         for (int k = 0; k < p.seq_len; ++k) {
             eng.feed(v.map(data[pos + k]));
@@ -162,6 +166,7 @@ static void cmd_smoke(const std::string& path) {
     p.k_wta = 8;
     Engine eng(p);
     eng.build_random(p.seed);
+    eng.set_view(Engine::View::Slot);   // ventana temporal explicita
     std::printf("red: %d neuronas, %zu sinapsis\n", eng.n_neurons(), eng.n_synapses());
 
     // latido: se inyectan caracteres y se mira que la red no este muerta ni epiléptica
@@ -206,6 +211,10 @@ static double bench_recall(Engine& eng, int key, int filler_len, int trials,
     std::vector<float> logits(p.n_chars), err(p.n_chars);
     int correct = 0;
     for (int t = 0; t < trials; ++t) {
+        // Cada ensayo empieza desde el reposo. Sin esto, la actividad del
+        // ensayo anterior se mezcla con la del actual y ninguna medicion
+        // significa nada (asi fue como el bench dio 0% con features buenas).
+        eng.reset_state();
         eng.begin_symbol();
         eng.feed(key);                       // clave
         for (int f = 0; f < filler_len; ++f)
@@ -241,6 +250,7 @@ static void cmd_bench(const std::string& path) {
 
     Engine eng(p);
     eng.build_random(p.seed);
+    eng.set_view(Engine::View::Slot);   // ventana temporal explicita
 
     // Version dura: 40 claves DISTINTAS, relleno mas largo, y prueba en claves
     // que no se usaron en el entrenamiento. Si el readout solo lee "que simbolo
@@ -276,16 +286,15 @@ static void cmd_bench(const std::string& path) {
     std::printf("con relleno:   %5.1f %%  (%d claves distintas)\n", acc * 100, KEYS);
 
     std::printf("\n--- VEREDICTO ---\n");
-    if (acc0 < 0.5) {
-        std::printf("LA RED NO RECUERDA NI EL ULTIMO SIMBOLO.\n");
-        std::printf("El problema es el readout o el estado, no la regla.\n");
-    } else if (acc < 0.5) {
+    if (acc < 0.5) {
         std::printf("RECUERDA EL PRESENTE, NO EL PASADO.\n");
         std::printf("El estado no cruza el relleno: no hay memoria de trabajo.\n");
     } else {
         std::printf("TIENE MEMORIA DE TRABAJO.\n");
-        std::printf("La informacion sobrevive al relleno. Es la condicion\n");
-        std::printf("para que el modelo pueda aprender contexto.\n");
+        std::printf("La informacion de la clave sobrevive al relleno y se recupera.\n");
+        std::printf("Es la condicion para que el modelo pueda aprender contexto.\n");
+        if (acc0 < 0.5)
+            std::printf("(sin relleno mide un slot distinto: no es comparable)\n");
     }
     eng.save(state_path(path.c_str()));
 }
