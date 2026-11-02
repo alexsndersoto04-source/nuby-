@@ -36,6 +36,49 @@ recurrencia congelada y el resultado es el mismo, lo que confirma que el cuello
 de botella está en las features, no en la regla. Pero eso también significa que
 **la regla sigue sin validarse.**
 
+## El hallazgo de esta sesión: por qué no hay contexto
+
+Medido, no supuesto. La red **no tiene estado entre símbolos**:
+
+```
+tras inyectar un carácter, actividad tick a tick:
+  tick +1:  0 disparos
+  tick +2:  0 disparos
+  ... todos 0
+```
+
+Y el motivo es una transición de fase sin punto medio. Barriendo el peso inicial:
+
+| peso | comportamiento |
+|---|---|
+| 0,03 | red muerta: 0 disparos por carácter |
+| 0,07 | 1–3 disparos, se apaga en el acto |
+| 0,085 | **saturada**: 135 neuronas a 4,8 de voltaje, permanentes |
+| 0,12 | saturada, sin cambios |
+
+Entre 0,07 y 0,085 no hay comportamiento intermedio. Una red recurrente sin
+freno tiene exactamente dos estados: muerta o encendida. Cualquier intento de
+"ajustar el peso" choca contra esa pared.
+
+Lo que falta es un **mecanismo de freno que no sea un recorte duro**. El k-WTA
+que había (8 ganadores) mataba la reverberación por diseño: en el mismo tick en
+que la actividad intentaba sostenerse, quedaba recortada a 8 neuronas. Quitarlo
+produjo la saturación. Ni una cosa ni la otra.
+
+Opciones reales, en orden de preferencia:
+
+1. **Inhibición recurrente real**, como en la versión en Python: interneuronas
+   con sinapsis propias, retardos y pesos. No una resta global (probada, no
+   funciona porque frena a todos por igual e impide cualquier umbral).
+2. **k-WTA con ventana temporal** en vez de por tick: se acumula actividad y se
+   recorta cada N ticks, no cada tick. Permite reverberación dentro de la ventana.
+3. **Umbral adaptativo más agresivo**: la neurona que dispara mucho sube su
+   umbral lo bastante como para ceder el turno. Ya existe (`theta_step`) pero su
+   escala es demasiado fina para frenar una población entera.
+
+**Ninguna de las tres está implementada.** El motor actual funciona, aprende
+bigramas y no tiene memoria. Eso está comprobado y es reproducible.
+
 ## Lo que hay que arreglar, en orden
 
 1. **Canal de contexto.** Que la red represente "lo que vino antes" y no solo
