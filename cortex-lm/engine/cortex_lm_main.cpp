@@ -16,8 +16,36 @@
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#include <cstdlib>
 
 using namespace cortex;
+
+// Devuelve una ruta de escritura valida para el estado.
+// En Android no existe /tmp; en Termux el temporal es $PREFIX/tmp.
+static std::string state_path(const char* requested) {
+    auto writable = [](const std::string& p) {
+        std::ofstream t(p + ".probe", std::ios::binary);
+        if (!t) return false;
+        t.close();
+        std::remove((p + ".probe").c_str());
+        return true;
+    };
+    if (requested && requested[0]) {
+        std::string p(requested);
+        auto slash = p.find_last_of('/');
+        std::string dir = (slash == std::string::npos) ? "." : p.substr(0, slash);
+        if (dir.empty()) dir = "/";
+        if (writable(dir)) return p;
+        std::fprintf(stderr, "aviso: %s no es escribible, usando temporal\n", dir.c_str());
+    }
+    for (const char* e : {"TMPDIR", "PREFIX"}) {
+        const char* v = std::getenv(e);
+        if (!v) continue;
+        std::string dir = std::string(v) + (std::string(e) == "PREFIX" ? "/tmp" : "");
+        if (writable(dir)) return dir + "/cortex_state.bin";
+    }
+    return "cortex_state.bin";
+}
 
 static std::vector<unsigned char> read_corpus(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
@@ -119,8 +147,9 @@ static void cmd_train(const std::string& path, const std::string& data_path,
             std::fflush(stdout);
         }
     }
-    eng.save(path);
-    std::printf("guardado: %s\n", path.c_str());
+    std::string sp = state_path(path.c_str());
+    eng.save(sp);
+    std::printf("guardado: %s\n", sp.c_str());
 }
 
 static void cmd_smoke(const std::string& path) {
@@ -147,11 +176,12 @@ static void cmd_smoke(const std::string& path) {
     else if (frac <= 0.10) verdict = "MONOPOLIO";
     std::printf("veredicto: %s (%.1f%% de neuronas usadas)\n", verdict, frac * 100);
 
-    eng.save(path);
+    std::string sp = state_path(path.c_str());
+    eng.save(sp);
     Engine e2(p);
-    e2.load(path);
-    std::printf("persistencia: %d neuronas, %zu sinapsis recargadas\n",
-                e2.n_neurons(), e2.n_synapses());
+    e2.load(sp);
+    std::printf("persistencia: %d neuronas, %zu sinapsis recargadas de %s\n",
+                e2.n_neurons(), e2.n_synapses(), sp.c_str());
 }
 
 int main(int argc, char** argv) {

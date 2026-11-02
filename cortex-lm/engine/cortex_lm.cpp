@@ -23,12 +23,6 @@ namespace {
 constexpr uint32_t MAGIC = 0x43585431;  // "CXT1"
 constexpr uint32_t VERSION = 1;
 
-inline float fast_pow_alpha(float alpha, int k) {
-    float r = 1.0f;
-    // k siempre pequeno (1..d_max) en el uso normal
-    for (int i = 0; i < k; ++i) r *= alpha;
-    return r;
-}
 }  // namespace
 
 Engine::Engine(const Params& p) : p_(p) {
