@@ -273,18 +273,7 @@ int Engine::step() {
                 L.in_active[e.post] = 1;
                 L.active.push_back(e.post);
             }
-            // elegibilidad local, actualizada EN EL EVENTO
-            float vp = L.v[e.post];
-            float psi = (vp > p_.v_th) ? 1.0f
-                        : std::max(0.0f, 1.0f - (p_.v_th - vp) * 4.0f);
-            float e_new = L.elig[e.syn] + psi;
-            if (e_new > p_.elig_clip) e_new = p_.elig_clip;
-            else if (e_new < -p_.elig_clip) e_new = -p_.elig_clip;
-            L.elig[e.syn] = e_new;
-            if (!L.in_touch[e.syn]) {
-                L.in_touch[e.syn] = 1;
-                L.touch.push_back(e.syn);
-            }
+
         }
 
         // --- 2/3. integracion: SOLO las neuronas activas ---
@@ -348,6 +337,23 @@ int Engine::step() {
             const i32 hi = L.g.offsets[j + 1];
             for (i32 s = lo; s < hi; ++s) {
                 q.push(t_ + L.g.delay[s], Ev{L.g.post[s], s});
+            }
+
+            // --- plasticidad de tres factores ---
+            // Al disparar la presinaptica, TODAS sus sinapsis salientes quedan
+            // marcadas (traza de elegibilidad). El peso solo cambiara si la
+            // senal de aprendizaje de la postsinaptica lo confirma. Es la misma
+            // forma que usa e-prop y la unica que produce marcas suficientes:
+            // marcar en la LLEGADA dependia de coincidencias casi inexistentes
+            // y dejaba ~1 sinapsis marcada por simbolo.
+            for (i32 s = lo; s < hi; ++s) {
+                if (L.g.sign[s]) continue;
+                float mark = 1.0f + L.vtrace[L.g.post[s]];
+                float x = L.elig[s] + mark;
+                if (x > p_.elig_clip) x = p_.elig_clip;
+                else if (x < -p_.elig_clip) x = -p_.elig_clip;
+                L.elig[s] = x;
+                if (!L.in_touch[s]) { L.in_touch[s] = 1; L.touch.push_back(s); }
             }
         }
         fired_total += (int)cand.size();

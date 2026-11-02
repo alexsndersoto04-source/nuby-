@@ -108,6 +108,31 @@ Queda un tercer problema, medido y no resuelto: la separabilidad entre símbolos
 distintos es solo **+0,09** (coseno 0,907 entre claves distintas contra 0,87 del
 mismo símbolo repetido). Las representaciones se parecen demasiado entre sí.
 
+### Bug de fondo encontrado: la plasticidad local no estaba funcionando
+
+Instrumentando la elegibilidad sinapsis por sinapsis:
+
+```
+it  0: sinapsis con elig != 0 =  0/4887
+it 10: sinapsis con elig != 0 =  0/4887
+it 30: sinapsis con elig != 0 =  0/4887
+```
+
+**Cero.** La regla de aprendizaje local nunca se ejecutó. Los cambios de peso que
+se veían en el corpus venían **solo de la homeostasis**, no del aprendizaje.
+Llevábamos toda la sesión midiendo un motor sin plasticidad.
+
+Causa: la marca de elegibilidad se escribía en la **llegada** de un evento
+sináptico, que depende de que pre y post coincidan en una ventana de pocos
+ticks. A esta densidad de conexión eso casi nunca ocurre: quedaba **1 sinapsis
+marcada por símbolo**, y la siguiente congelación la ponía a cero.
+
+Corrección: marcar al **disparo de la presináptica**, sobre todas sus sinapsis
+salientes, modulado por la traza de la postsináptica. Es la forma de e-prop y la
+única que produce marcas suficientes.
+
+Resultado: de 1 sinapsis marcada por símbolo a **~125**.
+
 ### RESUELTO: memoria de trabajo confirmada
 
 **100 % de acierto.** 40 claves distintas, 10 símbolos de relleno variable,

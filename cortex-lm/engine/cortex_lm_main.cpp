@@ -110,7 +110,10 @@ static void cmd_train(const std::string& path, const std::string& data_path,
     if (small) { p.layer_size = 256; p.n_layers = 1; p.density = 0.05f; }
     Engine eng(p);
     eng.build_random(p.seed);
-    eng.set_view(Engine::View::Slot);   // ventana temporal explicita
+    // CORTEX_VIEW=slot (defecto) | trace  -> comparar las dos lecturas
+    const char* vw = std::getenv("CORTEX_VIEW");
+    eng.set_view((vw && std::strcmp(vw, "trace") == 0) ? Engine::View::Trace
+                                                      : Engine::View::Slot);
 
     auto data = read_corpus(data_path);
     Vocab v;
