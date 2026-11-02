@@ -38,15 +38,26 @@ struct Params {
     // --- dinamica ---
     float dt          = 1.0f;
     float tau_m       = 20.0f;  // constante de membrana
-    float v_th        = 1.0f;
-    float input_gain  = 1.15f;   // corriente por sinapsis sensorial
+    float v_th        = 0.60f;
+    float input_gain  = 0.62f;   // corriente por sinapsis sensorial
     float v_reset     = 0.0f;
     int   refractory  = 2;
     int   ticks_per_char = 5;
 
     // --- competicion ---
     int   k_wta       = 41;     // ganadores por tick (1 % de 4096)
-    float k_wta_frac  = 0.01f;  // si >0, k se deriva del tamano de capa
+    float k_wta_frac  = 0.03f;  // k = max(8, frac * layer_size)
+
+    // --- inhibicion recurrente: el freno que hace posible la memoria ---
+    // Interneuronas mas excitables, con proyeccion divergente y retardo mayor
+    // que la excitacion. Esa asimetria -- excitacion local y rapida, inhibicion
+    // ancha y lenta -- permite que un patron se imponga ANTES de que llegue el
+    // freno. Sin ella, la red solo tiene dos estados: muerta o saturada.
+    float inh_frac    = 0.15f;
+    float inh_bias    = 0.25f;
+    int   inh_delay   = 3;
+    int   inh_fanout  = 5;
+    float inh_weight  = 0.020f;
 
     // --- plasticidad ---
     float tau_e       = 50.0f;  // vida de la traza de elegibilidad
@@ -56,7 +67,7 @@ struct Params {
     float consol_gain = 0.35f;
     float prune_below = 0.05f;
     float weight_norm = 1.0f;   // suma objetivo de pesos excitatorios entrantes
-    float w_init_scale = 0.045f; // escala inicial de pesos
+    float w_init_scale = 0.105f; // escala inicial de pesos
 
     // --- limites (robustez) ---
     float w_max       = 4.0f;
@@ -92,6 +103,7 @@ struct Graph {
     std::vector<i32>   post;
     std::vector<float> weight;
     std::vector<uint8_t> delay;   // 1..d_max
+    std::vector<uint8_t> sign;    // 1 = inhibitoria (resta), 0 = excitatoria (suma)
     size_t n_syn = 0;
 };
 
@@ -112,6 +124,7 @@ struct Layer {
     std::vector<i32>   spent;     // presupuesto gastado en la ventana
     std::vector<i32>   win_start;
     std::vector<i32>   spike_count;
+    std::vector<uint8_t> is_inh;  // 1 = interneurona
 
     // CSR de la capa (indices locales)
     Graph g;
@@ -152,6 +165,7 @@ public:
     // Logits del readout para el caracter siguiente, promediados sobre el
     // ultimo caracter procesado. Tamano n_chars.
     void readout(float* logits) const;
+    void features(std::vector<float>& out) const;  // diagnostico
 
     // --- aprendizaje ---
     // error[k] = softmax(logits)[k] - target[k]. Se difunde por B (fija).

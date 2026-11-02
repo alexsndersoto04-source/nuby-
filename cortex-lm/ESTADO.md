@@ -65,7 +65,42 @@ que había (8 ganadores) mataba la reverberación por diseño: en el mismo tick 
 que la actividad intentaba sostenerse, quedaba recortada a 8 neuronas. Quitarlo
 produjo la saturación. Ni una cosa ni la otra.
 
-Opciones reales, en orden de preferencia:
+### Resuelto: inhibición recurrente
+
+Se implementaron interneuronas de verdad: 15 % de cada capa, umbral más bajo
+(+0,25 accesibles), proyección **divergente** (×5 el abanico de una excitatoria)
+y **retardo 3 frente a 1-32 de la excitación**. Las sinapsis llevan signo, y las
+inhibitorias no se aprenden: el freno sostiene la red, no se adapta.
+
+Resultado medido, barriendo el peso inicial:
+
+| peso | comportamiento |
+|---|---|
+| 0,06 | red muerta |
+| 0,075 | 3 disparos, se apaga en 5 ticks |
+| **0,11** | **15 disparos, reverbera 17 ticks y se apaga sola** |
+| 0,13 | saturada, no se apaga nunca |
+
+**Apareció el punto medio que antes no existía.** La transición dejó de ser una
+pared: hay una ventana de ganancia donde la red reverbera y vuelve sola al
+reposo. Eso es memoria de trabajo, y es la condición para que haya contexto.
+
+Efecto colateral interesante: las sinapsis subieron de 3.062 a 4.887 porque las
+interneuronas proyectan mucho más ancho. Es el coste de tener freno específico.
+
+### Lo que esto NO arregla todavía
+
+El corpus no mejora por sí solo: sigue en ~4,4 bpc. La reverberación existe pero
+el readout todavía no la aprovecha, y la regla de aprendizaje local no ha
+demostrado que ajuste la recurrencia de forma útil.
+
+Orden correcto de aquí en adelante:
+
+1. Validar la regla local en una tarea de memoria (no texto). Si no aprende ahí,
+   no aprenderá lenguaje.
+2. Solo entonces, volver al corpus.
+
+### Opciones descartadas, con el motivo
 
 1. **Inhibición recurrente real**, como en la versión en Python: interneuronas
    con sinapsis propias, retardos y pesos. No una resta global (probada, no

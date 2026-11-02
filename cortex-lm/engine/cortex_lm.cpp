@@ -92,22 +92,42 @@ void Engine::build_random(unsigned seed) {
         Lr.g.post.clear();
         Lr.g.weight.clear();
         Lr.g.delay.clear();
+        Lr.g.sign.clear();
+        Lr.is_inh.assign(N, 0);
         Lr.g.post.reserve((size_t)N * out_deg);
         Lr.g.weight.reserve((size_t)N * out_deg);
         Lr.g.delay.reserve((size_t)N * out_deg);
 
+        // marcar interneuronas: las ultimas `inh_frac` de la capa
+        const int n_inh = std::max(2, (int)(p_.inh_frac * N));
+        for (int j = N - n_inh; j < N; ++j) Lr.is_inh[j] = 1;
+
         std::uniform_int_distribution<int> nd(0, N - 1);
         for (int pre = 0; pre < N; ++pre) {
             Lr.g.offsets[pre] = (i32)Lr.g.post.size();
-            for (int k = 0; k < out_deg; ++k) {
-                int post = nd(rng_);
-                if (post == pre) continue;
-                Lr.g.post.push_back(post);
-                Lr.g.weight.push_back(p_.w_init_scale * (0.5f + 0.5f * uni(rng_)));
-                int d = (int)(ldn(rng_) * p_.d_max * 0.35f);
-                if (d < 1) d = 1;
-                if (d > p_.d_max) d = p_.d_max;
-                Lr.g.delay.push_back((uint8_t)d);
+            if (Lr.is_inh[pre]) {
+                // interneurona: proyeccion divergente a toda la capa, retardo
+                // mayor que la excitacion (llega despues, y por eso puede frenar)
+                const int fan = out_deg * p_.inh_fanout;
+                for (int k = 0; k < fan; ++k) {
+                    int post = nd(rng_);
+                    Lr.g.post.push_back(post);
+                    Lr.g.weight.push_back(p_.inh_weight * (0.6f + 0.8f * uni(rng_)));
+                    Lr.g.delay.push_back((uint8_t)p_.inh_delay);
+                    Lr.g.sign.push_back(1);
+                }
+            } else {
+                for (int k = 0; k < out_deg; ++k) {
+                    int post = nd(rng_);
+                    if (post == pre) continue;
+                    Lr.g.post.push_back(post);
+                    Lr.g.weight.push_back(p_.w_init_scale * (0.5f + 0.5f * uni(rng_)));
+                    int d = (int)(ldn(rng_) * p_.d_max * 0.35f);
+                    if (d < 1) d = 1;
+                    if (d > p_.d_max) d = p_.d_max;
+                    Lr.g.delay.push_back((uint8_t)d);
+                    Lr.g.sign.push_back(0);
+                }
             }
         }
         Lr.g.offsets[N] = (i32)Lr.g.post.size();
@@ -225,7 +245,12 @@ int Engine::step() {
 
         // --- 1. llegadas (solo las de este tick) ---
         for (const Ev& e : q.drain()) {
-            L.v[e.post] += L.g.weight[e.syn] + L.fast[e.syn];
+            const float cur = L.g.weight[e.syn] + L.fast[e.syn];
+            if (L.g.sign[e.syn]) {
+                L.v[e.post] -= cur;
+            } else {
+                L.v[e.post] += cur;
+            }
             if (!L.in_active[e.post]) {
                 L.in_active[e.post] = 1;
                 L.active.push_back(e.post);
@@ -260,7 +285,9 @@ int Engine::step() {
                 L.win_start[j] = t_;
                 L.spent[j] = 0;
             }
-            if (L.v[j] >= p_.v_th + L.theta[j] && L.spent[j] < p_.budget) {
+            const float thr_j = p_.v_th + L.theta[j]
+                                - (L.is_inh[j] ? p_.inh_bias : 0.0f);
+            if (L.v[j] >= thr_j && L.spent[j] < p_.budget) {
                 cand.emplace_back(L.v[j], j);
                 continue;   // no decae: va a disparar
             }
@@ -364,6 +391,8 @@ void Engine::feature_vector(std::vector<float>& out) const {
     }
 }
 
+void Engine::features(std::vector<float>& out) const { feature_vector(out); }
+
 void Engine::readout(float* logits) const {
     std::vector<float> f;
     feature_vector(f);
@@ -403,6 +432,7 @@ void Engine::learn(const float* error) {
             if (e == 0.0f) continue;
             int post = L.g.post[s];
             float sig = feedback_[L.offset + post];
+            if (L.g.sign[s]) continue;   // el freno no se aprende: sostiene la red
             float dw = -p_.eta * sig * e;
             float w = L.g.weight[s] + dw;
             if (w < 0.0f) w = 0.0f;
@@ -455,6 +485,7 @@ void Engine::consolidate() {
         std::vector<float> in_sum(L.n, 0.0f);
         std::vector<i32> in_cnt(L.n, 0);
         for (size_t s = 0; s < L.g.n_syn; ++s) {
+            if (L.g.sign[s]) continue;
             in_sum[L.g.post[s]] += L.g.weight[s];
             in_cnt[L.g.post[s]]++;
         }
@@ -470,6 +501,7 @@ void Engine::consolidate() {
             factor[j] = f;
         }
         for (size_t s = 0; s < L.g.n_syn; ++s) {
+            if (L.g.sign[s]) continue;
             float w = L.g.weight[s] * factor[L.g.post[s]];
             if (w > p_.w_max) w = p_.w_max;
             L.g.weight[s] = w;
@@ -499,6 +531,8 @@ void Engine::save(const std::string& path) const {
         f.write((const char*)L.g.post.data(), sizeof(i32) * ns);
         f.write((const char*)L.g.weight.data(), sizeof(float) * ns);
         f.write((const char*)L.g.delay.data(), ns);
+        f.write((const char*)L.g.sign.data(), ns);
+        f.write((const char*)L.is_inh.data(), L.n);
         f.write((const char*)L.spike_count.data(), sizeof(i32) * L.n);
     }
     size_t rf = R_.size();
@@ -535,10 +569,14 @@ void Engine::load(const std::string& path) {
         L.g.post.resize(ns);
         L.g.weight.resize(ns);
         L.g.delay.resize(ns);
+        L.g.sign.resize(ns);
+        L.is_inh.resize(L.n);
         L.g.n_syn = ns;
         f.read((char*)L.g.post.data(), sizeof(i32) * ns);
         f.read((char*)L.g.weight.data(), sizeof(float) * ns);
         f.read((char*)L.g.delay.data(), ns);
+        f.read((char*)L.g.sign.data(), ns);
+        f.read((char*)L.is_inh.data(), L.n);
         L.spike_count.resize(L.n);
         f.read((char*)L.spike_count.data(), sizeof(i32) * L.n);
         L.elig.assign(ns, 0.0f);
