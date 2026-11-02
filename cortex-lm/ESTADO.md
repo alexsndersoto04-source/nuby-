@@ -108,6 +108,26 @@ Queda un tercer problema, medido y no resuelto: la separabilidad entre símbolos
 distintos es solo **+0,09** (coseno 0,907 entre claves distintas contra 0,87 del
 mismo símbolo repetido). Las representaciones se parecen demasiado entre sí.
 
+### Hallazgo: el corpus estaba clavado en el azar, y el techo real es bajo
+
+Medido con precisión, no estimado:
+
+| referencia | bpc |
+|---|---|
+| uniforme sobre 120 símbolos | 6,91 |
+| **nuestro modelo** | **4,40** |
+| entropía de orden 0 (frecuencias solas) | **4,22** |
+| entropía de orden 1 (bigrama) | **2,88** |
+
+El modelo **no llega ni a contar letras**. Un bigrama trivial da 2,88. Pero
+matiz importante: el texto de prueba tiene solo **37 caracteres distintos** y
+está repetido cuatro veces, así que memorizar infla las cifras. El corpus real
+es indispensable antes de sacar conclusiones de escala.
+
+También se corrigió: `consolidate()` llamaba a `reset_state()`, es decir,
+borraba el contexto a mitad de secuencia cada 500 símbolos. Era una operación
+sobre pesos que destruía actividad.
+
 ### Bug de fondo encontrado: la plasticidad local no estaba funcionando
 
 Instrumentando la elegibilidad sinapsis por sinapsis:

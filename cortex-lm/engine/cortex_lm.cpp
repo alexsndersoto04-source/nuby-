@@ -586,7 +586,10 @@ void Engine::consolidate() {
         }
     }
     symbols_since_consol_ = 0;
-    reset_state();
+    // NO se reinicia el estado aqui: consolidate() es una operacion sobre los
+    // pesos, no sobre la actividad. Reiniciarlo interrumpia el contexto a
+    // mitad de secuencia. La version anterior lo hacia y por eso el
+    // entrenamiento quedaba clavado en el nivel de azar.
 }
 
 // ---------------------------------------------------------------------------

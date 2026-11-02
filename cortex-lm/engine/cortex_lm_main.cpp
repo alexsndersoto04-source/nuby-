@@ -130,7 +130,10 @@ static void cmd_train(const std::string& path, const std::string& data_path,
         // estado limpio al empezar cada secuencia: arrastrar actividad entre
         // secuencias contamina el objetivo y el readout no puede aprender
         eng.reset_state();
-        // un simbolo: alimentar, leer, aprender
+        // un simbolo: alimentar, leer, aprender.
+        // El estado NO se limpia dentro de la secuencia: ahi esta el contexto.
+        // Solo se reinicia entre secuencias, y aun eso hay que revisarlo: el
+        // texto es continuo, cortarlo cada 128 simbolos rompe la continuidad.
         for (int k = 0; k < p.seq_len; ++k) {
             eng.feed(v.map(data[pos + k]));
             eng.readout(logits.data());
