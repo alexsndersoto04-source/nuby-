@@ -238,6 +238,15 @@ def esperar(kid):
             return False
         if "running" in bajo:
             visto_running = True
+            # Cada 5 minutos se intenta enseñar el avance. Kaggle no publica la
+            # salida hasta el final, asi que muchas veces no habra nada; por eso
+            # no se avisa de nada si viene vacio.
+            if int(mins * 2) % 10 == 0 and int(mins) >= 5:
+                avance = lineas_del_registro(kid)
+                if avance:
+                    print("     ultimo del registro:")
+                    for ln in cocinar("\n".join(avance))[-5:]:
+                        print("       " + ln[:160])
         if mins > TIMEOUT_MIN:
             print(f"\nSe acabo el tiempo de espera ({TIMEOUT_MIN} min).")
             print("No pasa nada: la corrida sigue en Kaggle. Para recogerla:")
@@ -245,6 +254,97 @@ def esperar(kid):
             return None
         time.sleep(30)
 
+
+
+
+def lineas_del_registro(kid, solo_ultimas=40):
+    """Devuelve las lineas del registro ya ejecutado, o None si no se puede.
+
+    Kaggle solo publica la salida al terminar, asi que durante la corrida esto
+    devuelve lo que haya (normalmente nada). Se usa solo para dar compania al
+    usuario, nunca para decidir nada.
+    """
+    d = os.path.expanduser("~/cortex_kaggle/log")
+    os.makedirs(d, exist_ok=True)
+    rc, _out = kaggle(["kernels", "output", kid, "-p", d], check=False)
+    if rc != 0:
+        return None
+    texto = ""
+    for root, _dirs, files in os.walk(d):
+        for n in files:
+            p = os.path.join(root, n)
+            try:
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    c = f.read()
+            except Exception:  # noqa: BLE001
+                continue
+            # el registro de verdad es el que tiene las marcas del cuaderno
+            if "CORTEX-LM" in c or "bpc" in c:
+                if len(c) > len(texto):
+                    texto = c
+    if not texto:
+        return None
+    return texto.strip().splitlines()[-solo_ultimas:]
+
+
+def cocinar(texto):
+    """Convierte el registro nuevo de Kaggle en texto legible.
+
+    Kaggle 2.x devuelve una lista de objetos {"stream_name","time","data"},
+    pero con los objetos partidos en VARIAS lineas (cada salto de linea dentro
+    de "data" rompe la linea fisica). Por eso no vale procesar linea a linea:
+    hay que recorrer el texto caracter a caracter y quedarse con cada objeto
+    completo.
+    """
+    import json
+    salida = []
+    i = 0
+    n = len(texto)
+    while i < n:
+        j = texto.find("{", i)
+        if j < 0:
+            resto = texto[i:].strip().strip("[],").strip()
+            if resto:
+                salida.append(resto)
+            break
+        # buscar el cierre del objeto contando llaves
+        prof = 0
+        k = j
+        dentro_cadena = False
+        escape = False
+        while k < n:
+            ch = texto[k]
+            if dentro_cadena:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    dentro_cadena = False
+            else:
+                if ch == '"':
+                    dentro_cadena = True
+                elif ch == "{":
+                    prof += 1
+                elif ch == "}":
+                    prof -= 1
+                    if prof == 0:
+                        k += 1
+                        break
+            k += 1
+        trozo = texto[j:k]
+        i = k
+        try:
+            o = json.loads(trozo)
+        except Exception:  # noqa: BLE001
+            continue
+        d = o.get("data") or ""
+        t = o.get("time")
+        for sub in d.splitlines():
+            if not sub.strip():
+                continue
+            salida.append(f"[{t:7.1f}s] {sub}" if isinstance(t, (int, float)) else sub)
+    return salida
 
 
 def mostrar_registro(kid, lineas=60):
@@ -276,7 +376,8 @@ def mostrar_registro(kid, lineas=60):
         print(f"    https://www.kaggle.com/code/{kid}/log")
         return None
 
-    cola = texto.strip().splitlines()[-lineas:]
+    crudo = texto.strip().splitlines()[-lineas:]
+    cola = cocinar("\n".join(crudo))
     print("\n" + "-" * 62)
     for ln in cola:
         print("  " + ln[:200])
@@ -349,6 +450,8 @@ def main():
     ap.add_argument("--fetch", action="store_true", help="recoger la ultima corrida")
     ap.add_argument("--log", action="store_true",
                     help="mostrar el registro de la ultima corrida y salir")
+    ap.add_argument("--estado", action="store_true",
+                    help="ver el estado actual del kernel y salir")
     a = ap.parse_args()
 
     user = user_de_kaggle()
@@ -357,6 +460,15 @@ def main():
     print(SEP)
     print("CORTEX-LM en Kaggle")
     print(SEP)
+
+    if a.estado:
+        rc, out = kaggle(["kernels", "status", kid], check=False)
+        print(out.strip())
+        if "running" in out.lower():
+            print("\nEsta corriendo. Kaggle no publica el registro hasta el final.")
+            print("Para verlo en vivo, abre en el navegador:")
+            print(f"  https://www.kaggle.com/code/{kid}/log")
+        return 0
 
     if a.log:
         mostrar_registro(kid, lineas=80)
