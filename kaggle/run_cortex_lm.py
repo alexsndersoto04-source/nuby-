@@ -199,15 +199,31 @@ def audit_corpus(text, label):
     problemas = []
     if ratio < 0.50:
         problemas.append(f"corpus repetido: solo {100*ratio:.1f} % de ventanas únicas")
-    if alphabet < 60:
-        problemas.append(f"alfabeto de solo {alphabet} símbolos, no parece texto natural")
+
+    # El alfabeto minimo depende del TAMANO del texto. Una particion de 12.000
+    # caracteres de novela tiene unos 60 simbolos distintos: es normal, no es
+    # sospechoso. Exigir 60 a cualquier trozo abortaba corridas buenas, como la
+    # del 4 de noviembre, donde el corpus completo tenia 121.
+    # Se calcula lo esperable: cuanto mas texto, mas simbolos, con saturacion.
+    # Calibrado con el corpus real de cuatro novelas espanolas:
+    #   completo 4.487.742 -> 121 simbolos
+    #   train      60.000 ->  82
+    #   test       12.000 ->  59
+    # Una particion de 12.000 caracteres con 59 simbolos es normal. El umbral
+    # es deliberadamente bajo: aqui solo se descartan unigramas y texto de
+    # juguete; que el texto sea natural lo decide la variedad de ventanas.
+    esperado = 25 if n < 20_000 else (35 if n < 100_000 else 45)
+    if alphabet < esperado:
+        problemas.append(
+            f"alfabeto de solo {alphabet} símbolos para {n:,} caracteres "
+            f"(esperaba al menos {esperado})")
     if problemas:
         for x in problemas:
             print(f"  *** AVISO: {x}")
         if not LOCAL:
             raise SystemExit(
-                "\n*** CORPUS NO APTO. Cualquier cifra medida sobre él sería"
-                "\n*** memorización. Abortando para no repetir el error anterior.")
+                "\n*** CORPUS NO APTO: " + "; ".join(problemas) +
+                "\n*** Cualquier cifra medida sobre él sería memorización.")
         print("  (modo local: se continúa solo para probar el flujo)")
     print("  -> corpus aceptable: texto variado y no repetido.")
     return ratio
