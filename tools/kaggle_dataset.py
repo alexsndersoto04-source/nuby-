@@ -92,37 +92,51 @@ def auditar(texto, etiqueta):
 
 def main():
     os.makedirs(WORK, exist_ok=True)
+    # Las subcarpetas se crean aqui, no al escribir: si no, el primer open()
+    # falla con FileNotFoundError. Ya paso una vez.
+    os.makedirs(os.path.join(WORK, "motor"), exist_ok=True)
     tok = os.path.expanduser("~/.kaggle/access_token")
     if not os.path.exists(tok) and not os.path.exists(
             os.path.expanduser("~/.kaggle/kaggle.json")):
         die("faltan las credenciales de Kaggle. Ejecuta antes: bash token.sh")
 
     # ---------------------------------------------------------------- texto
-    say("Bajando obras en espanol (esto corre en el telefono, que si tiene red)")
-    partes = []
-    for ident, titulo in LIBROS.items():
-        url = f"https://www.gutenberg.org/cache/epub/{ident}/pg{ident}.txt"
-        print(f"  {titulo}...", end=" ", flush=True)
-        try:
-            t = bajar(url).decode("utf-8", errors="ignore")
-            t = limpiar_gutenberg(t)
-            if len(t) < 50_000:
-                print(f"corto ({len(t):,}), se descarta")
-                continue
-            partes.append(t)
-            print(f"{len(t):,} caracteres")
-        except Exception as e:  # noqa: BLE001
-            print(f"no ({type(e).__name__})")
+    ruta_texto = os.path.join(WORK, "espanol.txt")
+    reutilizar = os.path.exists(ruta_texto) and os.path.getsize(ruta_texto) > 1_000_000
 
-    if not partes:
-        die("no se pudo bajar ninguna obra. Revisa la conexion del telefono.")
+    if reutilizar:
+        # Si ya se bajo antes, no se repite: son varios MB y un fallo posterior
+        # (como el de la carpeta motor) no debe obligar a bajarlo otra vez.
+        say("Reutilizando el texto ya bajado")
+        with open(ruta_texto, encoding="utf-8") as f:
+            texto = f.read()
+        print(f"  {len(texto):,} caracteres")
+    else:
+        say("Bajando obras en espanol (en el telefono, que si tiene red)")
+        partes = []
+        for ident, titulo in LIBROS.items():
+            url = f"https://www.gutenberg.org/cache/epub/{ident}/pg{ident}.txt"
+            print(f"  {titulo}...", end=" ", flush=True)
+            try:
+                t = bajar(url).decode("utf-8", errors="ignore")
+                t = limpiar_gutenberg(t)
+                if len(t) < 50_000:
+                    print(f"corto ({len(t):,}), se descarta")
+                    continue
+                partes.append(t)
+                print(f"{len(t):,} caracteres")
+            except Exception as e:  # noqa: BLE001
+                print(f"no ({type(e).__name__})")
 
-    texto = "\n\n".join(partes).replace("\r\n", "\n")
-    print(f"\ntexto total: {len(texto):,} caracteres")
+        if not partes:
+            die("no se pudo bajar ninguna obra. Revisa la conexion del telefono.")
+
+        texto = "\n\n".join(partes).replace("\r\n", "\n")
+        print(f"\ntexto total: {len(texto):,} caracteres")
+        with open(ruta_texto, "w", encoding="utf-8") as f:
+            f.write(texto)
+
     auditar(texto, "corpus completo")
-
-    with open(os.path.join(WORK, "espanol.txt"), "w", encoding="utf-8") as f:
-        f.write(texto)
 
     # ---------------------------------------------------------------- motor
     say("Bajando el motor")
