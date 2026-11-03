@@ -21,7 +21,7 @@ import subprocess
 import sys
 import urllib.request
 
-REPO = os.environ.get("CORTEX_REPO_URL", "https://github.com/alexsndersoto04-source/nuby-.git")
+REPO_GH = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
 BRANCH = os.environ.get("CORTEX_BRANCH", "arena/c7deda7f-nuby")
 WORK = os.environ.get("CORTEX_REPO_DIR", "/kaggle/working/nuby-")
 # En local (pruebas) se salta la descarga y se usa el corpus de juguete.
@@ -165,16 +165,54 @@ def audit_corpus(text, label):
 # --------------------------------------------------------------------------
 # 2. Repositorio y compilación
 # --------------------------------------------------------------------------
+FICHEROS = [
+    "cortex-lm/Makefile",
+    "cortex-lm/engine/cortex_lm.cpp",
+    "cortex-lm/engine/cortex_lm.hpp",
+    "cortex-lm/engine/cortex_lm_main.cpp",
+    "cortex-lm/tools/bench.cpp",
+    "cortex-lm/tools/bench_joint.cpp",
+    "cortex-lm/tools/make_test_corpus.py",
+]
+
+
+def _descarga(url, destino):
+    req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as f:
+        datos = f.read()
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    with open(destino, "wb") as f:
+        f.write(datos)
+    return len(datos)
+
+
 def get_repo():
-    if not os.path.isdir(os.path.join(WORK, ".git")):
-        print("\n--- clonando el repositorio ---")
-        try:
-            sh(["git", "clone", "--depth", "1", "--branch", BRANCH, REPO, WORK], check=True)
-        except SystemExit:
-            print("  la rama de trabajo no está; probando main")
-            sh(["git", "clone", "--depth", "1", REPO, WORK])
-    sh(["git", "-C", WORK, "log", "--oneline", "-1"])
-    return os.path.join(WORK, "cortex-lm")
+    """Trae solo los ficheros necesarios, sin git.
+
+    Con `git clone` esto dependia de que hubiera git instalado y de la URL.
+    Bajando los ficheros con urllib el cuaderno funciona pegando codigo a mano
+    en Kaggle, sin clonar nada.
+    """
+    if LOCAL:
+        print("\n--- MODO LOCAL: usando el codigo ya presente ---")
+        return os.path.join(WORK, "cortex-lm")
+
+    print("\n--- descargando el motor ---")
+    for rama in (BRANCH, "main"):
+        fallos = []
+        for ruta in FICHEROS:
+            url = f"https://raw.githubusercontent.com/{REPO_GH}/{rama}/{ruta}"
+            try:
+                _descarga(url, os.path.join(WORK, ruta))
+            except Exception as e:  # noqa: BLE001
+                fallos.append(f"{ruta}: {type(e).__name__}")
+        if not fallos:
+            print(f"  {len(FICHEROS)} ficheros desde la rama {rama}")
+            return os.path.join(WORK, "cortex-lm")
+        print(f"  rama {rama}: fallaron {len(fallos)} -> {fallos[:3]}")
+    raise SystemExit(
+        "No se pudo descargar el codigo del repositorio. Comprueba que "
+        "'Internet' esta activado en Settings.")
 
 
 def build(proj):
