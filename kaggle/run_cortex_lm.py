@@ -256,6 +256,33 @@ def _descarga(url, destino):
     return len(datos)
 
 
+def extraer_zips(base):
+    """Descomprime cualquier .zip que haya en un dataset.
+
+    kaggle_dataset.py empaqueta el motor en motor.zip (Kaggle lo pide asi para
+    varios ficheros sueltos), pero el cuaderno espera los .cpp a la vista. Sin
+    esto el motor "no aparece" y el kernel muere diciendo que el dataset solo
+    traia 0 ficheros.
+    """
+    import zipfile
+    extraidos = []
+    destino = os.path.join(WORK, "de_dataset")
+    for root, _dirs, files in os.walk(base):
+        for name in files:
+            if not name.endswith(".zip"):
+                continue
+            origen = os.path.join(root, name)
+            try:
+                with zipfile.ZipFile(origen) as z:
+                    z.extractall(destino)
+                extraidos.append(name)
+            except Exception as e:  # noqa: BLE001
+                print(f"    no pude abrir {name}: {type(e).__name__}")
+    if extraidos:
+        print(f"    descomprimido: {', '.join(extraidos)}")
+    return destino if extraidos else None
+
+
 def buscar_en_dataset():
     """Busca texto y motor en /kaggle/input (datasets adjuntos).
 
@@ -266,23 +293,31 @@ def buscar_en_dataset():
     if not os.path.isdir(base):
         return None, None
 
+    # Los .zip se descomprimen antes de buscar: el motor viene comprimido.
+    extraido = extraer_zips(base)
+
+    raices = [base]
+    if extraido:
+        raices.append(extraido)
+
     texto = None
     motor = None
     mejor = 0
-    for root, _dirs, files in os.walk(base):
-        for name in files:
-            p = os.path.join(root, name)
-            try:
-                tam = os.path.getsize(p)
-            except OSError:
-                continue
-            if name.endswith(".txt") and tam > mejor:
-                mejor = tam
-                texto = p
-        # el motor son los .cpp/.hpp sueltos que sube kaggle_dataset.py
-        cpps = [f for f in files if f.endswith((".cpp", ".hpp"))]
-        if len(cpps) >= 3 and motor is None:
-            motor = root
+    for raiz in raices:
+        for root, _dirs, files in os.walk(raiz):
+            for name in files:
+                p = os.path.join(root, name)
+                try:
+                    tam = os.path.getsize(p)
+                except OSError:
+                    continue
+                if name.endswith(".txt") and tam > mejor:
+                    mejor = tam
+                    texto = p
+            # el motor son los .cpp/.hpp que vienen dentro de motor.zip
+            cpps = [f for f in files if f.endswith((".cpp", ".hpp"))]
+            if len(cpps) >= 3 and motor is None:
+                motor = root
 
     if texto:
         print(f"    texto del dataset: {texto} ({os.path.getsize(texto)/1e6:.1f} MB)")
