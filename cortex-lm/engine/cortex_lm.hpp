@@ -77,16 +77,27 @@ struct Params {
     // El peso se fija PARA QUE el total esperado sea w_scale * v_th cuando
     // dispara la fraccion activa tipica. No se ajusta a mano: se deriva del
     // grado de entrada, que es lo que hacia falta y no existia.
-    float w_scale        = 0.0f;   // 0 = sin recurrencia (linea base sensorial)
+    // 0.30 es el optimo medido (ver ESTADO.md): con 0 la capa es 1024
+    // integradores independientes de su parche sensorial y el techo es el
+    // bigrama; con 0.3 la recurrencia aporta 0,11 bpc. Por encima de 0.4 el
+    // regimen dispara demasiado (87 disp/simbolo) y el lector empeora; en 0.5
+    // ya se pierde toda la ventaja.
+    float w_scale        = 0.30f;
     float active_frac    = 0.02f;  // fraccion de la capa activa por tick
 
     // --- inhibicion ---
     // Divergente, retardada, y sobre todo PROPORCIONAL a la actividad: cada
     // disparo frena a una muestra aleatoria de la capa. Sin esto el regimen
     // no tiene punto fijo y la actividad crece hasta saturar.
-    int   inh_fanout     = 6;
-    float inh_gain       = 0.30f;  // corriente inhibitoria por disparo
-    int   inh_delay      = 2;
+    // La inhibicion es una CORRIENTE proporcional a los disparos del tick
+    // anterior, no eventos discretos. Como eventos, cada disparo generaba
+    // `inh_fanout` llegadas al mismo retardo: con 75 disparos por simbolo eran
+    // 450 restas que caian juntas sobre las mismas neuronas y dejaban su
+    // potencial en cero antes de decidir. La red no disparaba nunca, y solo
+    // funcionaba partiendo de un estado vacio. Medido: 90 neuronas sobre el
+    // umbral y 0 disparos.
+    float inh_gain       = 0.02f;  // corriente inhibitoria por disparo del tick anterior
+    float inh_tau        = 3.0f;   // ticks de persistencia de esa corriente
 
     // --- adaptacion de umbral (fatiga) ---
     // Mecanismo cortical clasico de memoria de trabajo: la neurona que dispara
@@ -98,6 +109,15 @@ struct Params {
 
     // --- plasticidad (elegibilidad + senal difundida) ---
     float eta            = 3e-5f;
+    // Traza de elegibilidad: constante de tiempo en TICKS. Con 20 ticks (~5
+    // simbolos) la ventana cubre la memoria corta sin ensuciarse con el pasado
+    // lejano. eta_slow filtra el error difundido: la senal de tres factores con
+    // error instantaneo es ruido puro y sin filtrar no mueve los pesos.
+    float tau_elig       = 20.0f;
+    float eta_slow       = 0.98f;
+    // Limite de la plasticidad: fraccion del peso inicial que puede moverse.
+    // Sin esto los pesos se van a w_max y la red se satura.
+    float w_frac_max     = 0.60f;
     float elig_decay     = 0.90f;  // por tick
     float elig_clip      = 4.0f;
     float w_min          = 0.0f;
@@ -106,12 +126,13 @@ struct Params {
     // --- homeostasis lenta ---
     // Mantiene la actividad media dentro de una banda, actuando sobre el sesgo
     // de cada neurona. Es lo que impide que el regimen derive con el tiempo.
-    // La homeostasis corrige DERIVA LENTA, no impone una tasa objetivo. Con un
-    // objetivo global fuerte castigaba a las neuronas que reciben la entrada
-    // (disparan mas que la media) hasta apagarlas: dejaba 2 dimensiones vivas
-    // de 1025. Ahora actua despacio y con un margen estrecho.
+    // DESACTIVADA POR DEFECTO, y el motivo esta medido: con texto real la red
+    // se apagaba a 2 disparos por simbolo y solo 16 neuronas de 1024
+    // acumulaban fatiga. La homeostasis se defendia del relleno sintetico
+    // silenciando a las neuronas sensoriales, que son las unicas que llevan
+    // informacion. Se conserva el parametro para poder reactivarla.
     float target_rate    = 0.02f;
-    float homeo_lr       = 1e-4f;
+    float homeo_lr       = 0.0f;   // 0 = desactivada
     float bias_max       = 0.25f;
 
     // --- readout ---
@@ -145,6 +166,7 @@ struct Graph {
     std::vector<i32>     offsets;
     std::vector<i32>     post;
     std::vector<float>   weight;
+    std::vector<float>   w_init;   // peso inicial, para acotar la plasticidad
     std::vector<uint8_t> delay;
     size_t n_syn = 0;
 };
@@ -164,6 +186,14 @@ struct Layer {
     std::vector<int>   spike_count;
     std::vector<uint8_t> active; // 1 si esta en la lista de trabajo
     std::vector<i32>   active_list;
+
+    // Traza de disparo presinaptica con retardo (elegibilidad estilo e-prop).
+    // pre_trace[pre] = 1 en el tick en que disparo `pre` y decae con
+    // alpha_elig = exp(-1/tau_elig) por tick. Se eleva al retardo de la sinapsis
+    // para alinearla con la llegada: el peso solo crece si el disparo
+    // presinaptico llego a tiempo de contribuir al disparo postsinaptico.
+    std::vector<float> pre_trace;
+    float alpha_elig = 0.0f;        // factor de decaimiento por tick
 
     Graph g;
 };
@@ -244,6 +274,7 @@ private:
     std::vector<float> R_m_, R_v_;
     std::vector<float> logits_;
     long t_ = 0;
+    float inh_prev_ = 0.0f;   // actividad reciente que alimenta el freno
     long spikes_ = 0;
     long symbols_ = 0;
     long last_consol_ = 0;

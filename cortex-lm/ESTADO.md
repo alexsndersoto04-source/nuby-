@@ -115,20 +115,133 @@ Tarea: 40 claves, 8 símbolos de relleno, recordar la clave. Azar 2,5 %.
 
 Es memoria de trabajo real, sostenida por fatiga local.
 
-### Texto (entrena 80 %, evalúa 20 % no visto)
+### Texto: la cifra de 0,409 bpc era un artefacto del corpus
 
-| vista | bpc |
-|---|---|
-| **historial de 4 símbolos** | **0,409** |
-| historial, motor anterior (referencia) | 1,396 |
-| tasa de disparo de la red | 4,370 |
-| fatiga de la red | 5,301 |
-| bigrama trivial (contexto de 1 byte) | 2,893 |
+Antes de celebrar cualquier número hay que mirar el corpus. `data/spanish_small.txt`
+se generaba repitiendo el mismo fragmento del Quijote 40 veces con cuatro
+variantes de superficie. Medido:
 
-La curva de la vista de tasa baja despacio y monótona, como un unigrama: la
-fatiga no aporta contexto de texto.
+```
+subcadenas de 80 caracteres: 347 únicas de 15.592 = 2,2 %
+```
+
+Es decir, el 98 % del "test" ya estaba en el entrenamiento. Cualquier BPC
+medido así es memorización, no predicción. **La tabla siguiente queda
+invalidada como medida de calidad** (el 0,409 de la vista de historial sobre
+todo):
+
+| vista | bpc | estado |
+|---|---|---|
+| historial de 4 símbolos | 0,409 | **inválido, fuga de test** |
+| tasa de disparo de la red | 4,370 | inválido además por el bug de inhibición |
+| fatiga de la red | 5,301 | inválido además por el bug de inhibición |
+| bigrama trivial | 2,893 | referencia, estimado con fuga |
+
+Se corrigió el generador: ahora produce dos ficheros disjuntos,
+`spanish_small.txt` (entrenamiento) y `spanish_holdout.txt` (test, variantes de
+superficie que no aparecen en entrenamiento). Se añadió `tools/bench.cpp` con
+ese protocolo.
 
 ---
+
+## Ronda de corrección: dos bugs estructurales más
+
+### Bug 3. La cola de eventos no se vaciaba al drenarla
+
+`DelayQueue::drain()` devolvía el cubo de ese tick **sin vaciarlo**. Como los
+cubos se reutilizan en anillo, los eventos de un tick se reentregaban cada vez
+que el cabezal volvía a ese cubo, para siempre. Consecuencias:
+
+- Con `w_scale = 0` (ver bug 4) esos eventos sumaban un peso de cero, así que
+  el fallo era **invisible**: los cinco tests de `audit` pasaban.
+- Con recurrencia real, la capa se saturaba a **1024 de 1024 neuronas
+  disparando en cada tick** (4096 disparos por símbolo) y la cola crecía hasta
+  agotar la memoria del proceso.
+- Explica también el OOM que mató las primeras pruebas con recurrencia.
+
+Arreglo: vaciar el cubo tras procesarlo (`arrived.clear()`).
+
+### Bug 4. La recurrencia estaba apagada: `w_scale = 0`
+
+`Params::w_scale` valía **0,0** por defecto, con el comentario "0 = sin
+recurrencia (línea base sensorial)". Las 52.173 sinapsis recurrentes se creaban
+con **peso exactamente cero**. La red no era una red recurrente de pulsos: era
+1024 integradores independientes, cada uno con su parche sensorial fijo y su
+fatiga.
+
+Esto explica el techo de bigrama medido antes: el estado no podía contener
+historia porque nada conectaba unas neuronas con otras. Y explica por qué la
+plasticidad nunca cambiaba nada: con `w_init = 0`, el límite
+`w0 * (1 ± w_frac_max)` la dejaba clavada en cero.
+
+Medido con el motor arreglado y el protocolo honesto (8000 símbolos de
+entrenamiento, lector softmax, K=64 dimensiones por retardo × 8 retardos):
+
+| `w_scale` | bpc | acierto |
+|---|---|---|
+| 0,00 (sin recurrencia) | 1,939 | 62,5 % |
+| 0,05 | 1,942 | 62,1 % |
+| 0,20 | 1,886 | 65,9 % |
+| **0,30** | **1,831** | **68,5 %** |
+| 0,40 | 1,925 | 63,5 % |
+| 0,50 | 2,651 | 45,0 % |
+
+La recurrencia aporta **0,11 bpc** con un óptimo claro en 0,30, que es el nuevo
+valor por defecto. Por encima de 0,4 el régimen dispara demasiado (87
+disparos/símbolo) y el lector pierde toda la ventaja.
+
+### Bug 5. La plasticidad nunca se ejecutó
+
+La elegibilidad por sinapsis (`elig`) se leía y se decaía, pero **nunca se
+escribía**: no había ninguna línea que la calculara. El término de tres
+factores valía siempre cero, así que `PLASTIC=1` y `PLASTIC=0` daban resultados
+idénticos hasta el último decimal.
+
+Se implementó una traza de disparo presináptica real (`Layer::pre_trace`), con
+decaimiento exponencial por tick (`tau_elig = 20` ticks ≈ 5 símbolos) y elevada
+al retardo de la sinapsis para alinearla con la llegada del pulso. El error
+difundido por la matriz fija `B` se filtra paso bajo, porque el error
+instantáneo por símbolo es casi todo ruido. Los pesos se acotan a ±60 % de su
+valor inicial para que no se vayan a los extremos.
+
+---
+
+## Estado real del aprendizaje local, sin adornos
+
+Con la plasticidad funcionando de verdad, sobre texto no visto:
+
+| plasticidad | `eta` | deriva de pesos | bpc | acierto |
+|---|---|---|---|---|
+| **no** | — | 0 % | **2,050** | **63,8 %** |
+| sí | 3e-4 | 0,07 % | 2,067 | 63,7 % |
+| sí | 3e-3 | 0,69 % | 2,084 | 62,9 % |
+| sí | 1e-2 | 2,16 % | 1,973 → 2,084 | 64,0 % |
+
+**La plasticidad local, tal como está implementada, no mejora nada: empeora.**
+El efecto crece con `eta` y siempre en la dirección mala. Es un resultado
+negativo y se queda escrito como tal.
+
+Lectura: la señal de tres factores está mal alineada. `feedback_[post]` es el
+error del **símbolo actual**, pero el disparo que contribuyó a ese error ocurrió
+en ticks anteriores y, sobre todo, el objetivo es el símbolo **siguiente**, que
+la red todavía no ha visto. Sin una regla de crédito temporal (e-prop completo,
+con la traza del error propagada hacia atrás en el tiempo), esto no puede
+funcionar.
+
+## Números honestos actuales (protocolo disjunto)
+
+Motor arreglado, recurrencia 0,30, lector softmax K=64 × 8 retardos, 8000
+símbolos de entrenamiento, test sobre `spanish_holdout.txt`:
+
+| modelo | bpc | acierto |
+|---|---|---|
+| **red de pulsos (sin plasticidad)** | **2,050** | **63,8 %** |
+| bigrama de referencia (estimado con train) | 3,060 | — |
+
+Mejor que el bigrama por un margen real, sobre texto no visto. Sirve como
+prueba de que el motor funciona; **no** sirve como cifra final, porque el
+corpus sigue siendo el mismo fragmento repetido con variantes y solo tiene 36
+símbolos distintos. La cifra buena exige el corpus real en Kaggle.
 
 ## Medición nueva: ¿qué guarda la fatiga en texto real?
 

@@ -30,6 +30,7 @@
 #include <cstring>
 #include <cstdio>
 #include <stdexcept>
+#include <cstdlib>
 
 namespace cortex {
 
@@ -146,6 +147,7 @@ void Engine::build_random(unsigned seed) {
         Lr.g.delay.clear();
         Lr.g.post.reserve((size_t)N * out_deg);
         Lr.g.weight.reserve((size_t)N * out_deg);
+        Lr.g.w_init.reserve((size_t)N * out_deg);
         Lr.g.delay.reserve((size_t)N * out_deg);
 
         std::uniform_int_distribution<int> dd(1, std::max(1, p_.d_max));
@@ -156,14 +158,17 @@ void Engine::build_random(unsigned seed) {
                 if (post == pre) continue;
                 Lr.g.post.push_back(post);
                 Lr.g.weight.push_back(w * (0.6f + 0.8f * uni(rng_)));
+                Lr.g.w_init.push_back(Lr.g.weight.back());
                 Lr.g.delay.push_back((uint8_t)dd(rng_));
             }
         }
         Lr.g.offsets[N] = (i32)Lr.g.post.size();
         Lr.g.n_syn = Lr.g.post.size();
         Lr.elig.assign(Lr.g.n_syn, 0.0f);
+        Lr.pre_trace.assign(N, 0.0f);
+        Lr.alpha_elig = std::exp(-1.0f / std::max(1.0f, p_.tau_elig));
 
-        queues_[li].init(std::max(p_.d_max, p_.inh_delay));
+        queues_[li].init(p_.d_max);
     }
 
     const int F = p_.n_features_max();
@@ -195,6 +200,7 @@ void Engine::reset_state() {
         std::fill(L.refr.begin(), L.refr.end(), 0);
         std::fill(L.active.begin(), L.active.end(), 0);
         std::fill(L.elig.begin(), L.elig.end(), 0.0f);
+        std::fill(L.pre_trace.begin(), L.pre_trace.end(), 0.0f);
         L.active_list.clear();
     }
     for (auto& q : queues_) {
@@ -202,6 +208,8 @@ void Engine::reset_state() {
         q.head = 0;
     }
     std::fill(ctx_hist_.begin(), ctx_hist_.end(), 0.0f);
+    std::fill(feedback_.begin(), feedback_.end(), 0.0f);
+    inh_prev_ = 0.0f;
     t_ = 0;
 }
 
@@ -233,74 +241,67 @@ int Engine::step() {
     const float am = p_.alpha_m();
     int fired = 0;
 
+    // La traza presinaptica decae una vez por tick, antes de la decision.
+    for (auto& L : layers_)
+        for (auto& tr : L.pre_trace) tr *= L.alpha_elig;
+
     for (size_t li = 0; li < layers_.size(); ++li) {
         Layer& L = layers_[li];
         DelayQueue& q = queues_[li];
 
-        // 1. llegadas de este tick
-        for (const auto& e : q.drain((int)t_)) {
-            if (e.syn == kInhSyn) {
-                L.v[e.post] -= p_.inh_gain;
-                if (L.v[e.post] < p_.v_reset) L.v[e.post] = p_.v_reset;
-                if (!L.active[e.post]) { L.active[e.post] = 1; L.active_list.push_back(e.post); }
-                continue;
+        // 1. llegadas programadas para este tick.
+        // El cubo DEBE vaciarse al drenarlo. Antes no se vaciaba: los eventos se
+        // reentregaban cada vez que el cabezal volvia a ese cubo (cada `span`
+        // ticks), acumulandose sin limite. Con w_scale=0 esos eventos sumaban
+        // cero y el fallo era invisible; con recurrencia real saturaban la capa
+        // (1024 de 1024 neuronas disparando cada tick) y hacian crecer la cola
+        // hasta agotar la memoria.
+        std::vector<DelayQueue::Ev>& arrived = q.drain((int)t_);
+        for (const auto& ev : arrived) {
+            if (ev.syn == kInhSyn) {
+                L.v[ev.post] -= p_.inh_gain;
+                if (L.v[ev.post] < p_.v_reset) L.v[ev.post] = p_.v_reset;
+            } else {
+                L.v[ev.post] += L.g.weight[ev.syn];
             }
-            L.v[e.post] += L.g.weight[e.syn];
-            if (!L.active[e.post]) { L.active[e.post] = 1; L.active_list.push_back(e.post); }
         }
+        arrived.clear();
 
-        // 2. integracion + decision sobre TODAS las neuronas.
-        //    Recorrer solo la lista "activa" era un error fatal: la fatiga
-        //    (theta) solo decaia en las neuronas de esa lista, asi que al
-        //    vaciarse quedaba congelada en su valor alto y la red no podia
-        //    recuperarse nunca (0 disparos para siempre). Con N del orden de
-        //    miles, recorrer la capa entera por tick es barato y correcto.
-        cand_.clear();
+        // corriente inhibitoria global: proporcional a los disparos del tick
+        // anterior y con decaimiento. Es lo que da un punto fijo al regimen.
+        const float i_inh = p_.inh_gain * inh_prev_;
+
+        // 2. relajacion de la fatiga y de la membrana
         for (int j = 0; j < L.n; ++j) {
-            // la fatiga se relaja en cada tick, dispare o no
             L.theta[j] *= p_.theta_decay;
             if (L.theta[j] < 1e-4f) L.theta[j] = 0.0f;
-
-            if (L.refr[j] > 0) {
-                L.refr[j]--;
-                L.v[j] = p_.v_reset;
-                continue;
-            }
-            // corriente de sesgo: homeostasis lenta sobre la excitabilidad
-            L.v[j] += L.bias[j];
-            if (L.v[j] >= p_.v_th + L.theta[j]) {
-                cand_.push_back({L.v[j], j});
-                continue;
-            }
-            L.v[j] = (L.v[j] - p_.v_reset) * am + p_.v_reset;
+            if (L.refr[j] > 0) { L.refr[j]--; continue; }
+            L.v[j] = (L.v[j] - p_.v_reset) * am + p_.v_reset + L.bias[j] - i_inh;
             if (L.v[j] < 1e-4f) L.v[j] = p_.v_reset;
         }
 
-        // 3. disparo
-        for (const auto& pr : cand_) {
-            i32 j = pr.second;
+        // 3. decision y disparo
+        for (int j = 0; j < L.n; ++j) {
+            if (L.refr[j] > 0) continue;
+            if (L.v[j] < p_.v_th + L.theta[j]) continue;
+
             L.v[j] = p_.v_reset;
             L.refr[j] = p_.refractory;
             L.rate[j] += 1.0f;
             L.spike_count[j]++;
             L.theta[j] = std::min(p_.theta_max, L.theta[j] + p_.theta_step);
-            L.active[j] = 0;
+            L.pre_trace[j] = 1.0f;      // marca temporal del disparo
             fired++;
 
-            // propagacion excitatoria
-            for (i32 s = L.g.offsets[j]; s < L.g.offsets[j + 1]; ++s) {
+            for (i32 s = L.g.offsets[j]; s < L.g.offsets[j + 1]; ++s)
                 q.push((int)t_ + L.g.delay[s], DelayQueue::Ev{L.g.post[s], s});
-            }
-            // freno divergente y retardado: la actividad se autolimita
-            if (p_.inh_gain > 0.0f) {
-                for (int f = 0; f < p_.inh_fanout; ++f) {
-                    i32 tgt = (i32)(rng_() % (u32)L.n);
-                    if (tgt == j) continue;
-                    q.push((int)t_ + p_.inh_delay, DelayQueue::Ev{tgt, kInhSyn});
-                }
-            }
+
+
         }
     }
+
+    // memoria corta de la actividad: el freno del proximo tick
+    inh_prev_ = inh_prev_ * std::exp(-1.0f / std::max(1.0f, p_.inh_tau)) + (float)fired;
 
     t_++;
     spikes_ += fired;
@@ -424,25 +425,42 @@ void Engine::readout(const std::vector<float>& f, float* logits) const {
 }
 
 void Engine::learn(const float* error, const std::vector<float>& f) {
-    // 1. difundir el error por la matriz fija B (feedback alignment)
+    // 1. difundir el error por la matriz fija B (feedback alignment).
+    // Se filtra paso bajo: el error instantaneo por simbolo es casi todo ruido
+    // (uno grande aqui y otro de signo opuesto dos simbolos despues) y la regla
+    // de tres factores necesita una senal con direccion estable.
     for (int j = 0; j < n_neurons_; ++j) {
         float acc = 0.0f;
         const float* row = &B_[(size_t)j * p_.n_chars];
         for (int k = 0; k < p_.n_chars; ++k) acc += row[k] * error[k];
-        feedback_[j] = acc;
+        feedback_[j] = p_.eta_slow * feedback_[j] + (1.0f - p_.eta_slow) * acc;
     }
 
-    // 2. regla de tres factores sobre la recurrencia
+    // 2. regla de tres factores sobre la recurrencia.
+    //    dw = -eta * error_difundido(post) * traza_pre(pre, retardo)
+    // La traza se eleva al retardo de la sinapsis para alinearla con la llegada
+    // del pulso: solo se refuerza la sinapsis que efectivamente contribuyo al
+    // disparo postsinaptico. El signo negativo hace descender la perdida.
     for (auto& L : layers_) {
-        for (size_t s = 0; s < L.g.n_syn; ++s) {
-            float e = L.elig[s];
-            if (e == 0.0f) continue;
-            int post = L.g.post[s];
-            float dw = -p_.eta * feedback_[L.offset + post] * e;
-            float w = L.g.weight[s] + dw;
-            L.g.weight[s] = std::max(p_.w_min, std::min(p_.w_max, w));
+        const int n = L.n;
+        for (int pre = 0; pre < n; ++pre) {
+            const float tr = L.pre_trace[pre];
+            if (tr < 1e-4f) continue;              // nada que aprender en esta sinapsis
+            const i32 s0 = L.g.offsets[pre], s1 = L.g.offsets[pre + 1];
+            for (i32 s = s0; s < s1; ++s) {
+                const int post = L.g.post[s];
+                const float fb = feedback_[L.offset + post];
+                if (fb == 0.0f) continue;
+                const float e = tr * std::exp(-(float)L.g.delay[s] / std::max(1.0f, p_.tau_elig));
+                const float dw = -p_.eta * fb * e;
+                const float w0 = L.g.w_init[s];
+                float w = L.g.weight[s] + dw;
+                const float lo = std::max(p_.w_min, w0 * (1.0f - p_.w_frac_max));
+                const float hi = std::min(p_.w_max, w0 * (1.0f + p_.w_frac_max));
+                L.g.weight[s] = std::max(lo, std::min(hi, w));
+            }
         }
-        // la elegibilidad se relaja por simbolo
+        // decay de la elegibilidad por simbolo (compatibilidad)
         for (auto& e : L.elig) { e *= p_.elig_decay; if (std::fabs(e) < 1e-6f) e = 0.0f; }
     }
 
