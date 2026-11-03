@@ -17,6 +17,7 @@ Cómo lanzarlo: ver kaggle/README.md. No hace falta tocar este fichero.
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -380,11 +381,34 @@ def get_repo():
 
 
 def build(proj):
+    """Compila el motor SIN depender de make.
+
+    La imagen de Kaggle puede no traer make, y no hay internet para instalarlo.
+    Llamando a g++ directamente (que si viene) el problema desaparece.
+    """
     print("\n--- compilando el motor ---")
-    sh(["make", "clean"], cwd=proj, check=False)
-    # 'portable' no usa -march=native: las máquinas de Kaggle cambian.
-    sh(["make", "portable"], cwd=proj)
-    return os.path.join(proj, "bin", "cortex_lm")
+    bin_dir = os.path.join(proj, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    salida = os.path.join(bin_dir, "cortex_lm")
+
+    compilador = None
+    for cand in ("g++", "c++", "clang++"):
+        if shutil.which(cand):
+            compilador = cand
+            break
+    if not compilador:
+        raise SystemExit(
+            "No hay compilador de C++ en el kernel (ni g++, ni c++, ni clang++).\n"
+            "Avisa de esto: significa que hay que compilar en otro sitio.")
+
+    print(f"    compilador: {compilador}")
+    cmd = [compilador, "-O2", "-std=c++17", "-Iengine",
+           "engine/cortex_lm.cpp", "engine/cortex_lm_main.cpp", "-o", salida]
+    sh(cmd, cwd=proj)
+
+    if not os.path.exists(salida):
+        raise SystemExit("la compilacion no produjo el binario")
+    return salida
 
 
 # --------------------------------------------------------------------------

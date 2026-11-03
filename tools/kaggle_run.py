@@ -361,21 +361,48 @@ def mostrar_registro(kid, lineas=60):
         print(f"    https://www.kaggle.com/code/{kid}/log")
         return None
 
-    texto = ""
+    # La descarga incluye TODO lo que produjo el kernel: el corpus, el codigo,
+    # los .html de Kaggle y tambien los .log. Quedarse con el fichero mas
+    # grande devuelve el corpus (4 MB de novela), no el registro: eso es lo que
+    # le paso al usuario, que recibio un parrafo del Quijote como "error".
+    # El registro se identifica por su extension y por su contenido.
+    candidatos = []
     for root, _dirs, files in os.walk(d):
         for n in files:
             p = os.path.join(root, n)
+            try:
+                tam = os.path.getsize(p)
+            except OSError:
+                continue
+            if n.endswith(".log"):
+                candidatos.append((0, tam, p))          # maxima prioridad
+            elif n.endswith(".json"):
+                candidatos.append((1, tam, p))          # formato nuevo anidado
+            elif n.endswith((".txt", ".md")):
+                candidatos.append((2, tam, p))          # ultimo recurso
+
+    texto = ""
+    if candidatos:
+        candidatos.sort()
+        for _prio, _tam, p in candidatos:
             try:
                 with open(p, encoding="utf-8", errors="ignore") as f:
                     c = f.read()
             except Exception:  # noqa: BLE001
                 continue
-            if len(c) > len(texto):
+            # Descartar lo que claramente no es un registro.
+            if "stream_name" in c or "CORTEX-LM" in c or "Traceback" in c \
+                    or "Error" in c:
                 texto = c
+                break
 
     if not texto:
-        print("  El registro vino vacio. Miralo en:")
+        print("  No encontre el registro en la descarga. Miralo en:")
         print(f"    https://www.kaggle.com/code/{kid}/log")
+        print("  Ficheros descargados:")
+        for root, _dirs, files in os.walk(d):
+            for n in sorted(files)[:12]:
+                print(f"    {n} ({os.path.getsize(os.path.join(root, n)):,} bytes)")
         return None
 
     crudo = texto.strip().splitlines()[-lineas:]
