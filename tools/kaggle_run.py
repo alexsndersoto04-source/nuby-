@@ -232,6 +232,9 @@ def esperar(kid):
             pista = interpretar_error(out, kid.split("/")[0])
             if pista:
                 print(pista)
+            # Sin esto el usuario solo sabe QUE fallo, nunca POR QUE. El
+            # registro del kernel es donde esta la causa concreta.
+            mostrar_registro(kid, lineas=60)
             return False
         if "running" in bajo:
             visto_running = True
@@ -241,6 +244,58 @@ def esperar(kid):
             print("    python3 /root/kaggle_run.py --fetch")
             return None
         time.sleep(30)
+
+
+
+def mostrar_registro(kid, lineas=60):
+    """Baja el registro del kernel y muestra el final, que es donde esta el error."""
+    import tempfile
+    d = os.path.expanduser("~/cortex_kaggle/log")
+    os.makedirs(d, exist_ok=True)
+    say("Descargando el registro para ver la causa")
+    rc, out = kaggle(["kernels", "output", kid, "-p", d], check=False)
+    if rc != 0:
+        print("  No pude descargar el registro. Miralo en:")
+        print(f"    https://www.kaggle.com/code/{kid}/log")
+        return None
+
+    texto = ""
+    for root, _dirs, files in os.walk(d):
+        for n in files:
+            p = os.path.join(root, n)
+            try:
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    c = f.read()
+            except Exception:  # noqa: BLE001
+                continue
+            if len(c) > len(texto):
+                texto = c
+
+    if not texto:
+        print("  El registro vino vacio. Miralo en:")
+        print(f"    https://www.kaggle.com/code/{kid}/log")
+        return None
+
+    cola = texto.strip().splitlines()[-lineas:]
+    print("\n" + "-" * 62)
+    for ln in cola:
+        print("  " + ln[:200])
+    print("-" * 62)
+
+    # Diagnostico automatico de los fallos ya conocidos.
+    bajo = texto.lower()
+    if "corpus repetido" in bajo or "corpus no apto" in bajo:
+        print("\nCausa: el texto descargado no era apto (repetido o sin variedad).")
+    elif "no se pudo bajar texto" in bajo:
+        print("\nCausa: el kernel no tenia salida a internet.")
+        print("Activa 'Internet' en Settings del kernel y vuelve a lanzar.")
+    elif "no such file" in bajo or "not found" in bajo:
+        print("\nCausa: falta un fichero del repositorio o un comando en el kernel.")
+    elif "memoryerror" in bajo or "killed" in bajo:
+        print("\nCausa: se quedo sin memoria. Baja CORTEX_TRAIN_CHARS.")
+    elif "auditor" in bajo and "fall" in bajo:
+        print("\nCausa: la auditoria del motor no paso. Es un fallo del motor.")
+    return texto
 
 
 def recoger(kid):
