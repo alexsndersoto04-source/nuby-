@@ -62,6 +62,19 @@ def try_download(url, timeout=60):
         return None
 
 
+def _alcanzable(host, timeout=6):
+    """True si el dominio resuelve y acepta conexion. Rapido y sin reintentos."""
+    import socket
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.getaddrinfo(host, 443)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        socket.setdefaulttimeout(None)
+
+
 def get_corpus():
     """Devuelve el texto completo, de la primera fuente que funcione."""
     if LOCAL:
@@ -90,17 +103,24 @@ def get_corpus():
                                 return f.read()
 
     # Fuente 2: Hugging Face, Wikipedia en español (streaming, solo una parte).
-    try:
-        from datasets import load_dataset  # noqa: PLC0415
-        print("    probando Hugging Face: wikimedia/wikipedia (es)")
-        ds = load_dataset("wikimedia/wikipedia", "20231101.es",
-                          split="train[:2000]", streaming=True)
-        parts = [row["text"] for row in ds]
-        text = "\n\n".join(parts)
-        if len(text) > 500_000:
-            return text
-    except Exception as e:  # noqa: BLE001
-        print(f"    no: Hugging Face ({type(e).__name__}: {e})")
+    # Antes de intentarlo se prueba si el dominio resuelve. Sin esta prueba, el
+    # cliente reintenta cinco veces con espera creciente y se pierden cinco
+    # minutos en algo que se sabe fallido desde el primer segundo: en Kaggle
+    # huggingface.co da Errno -3 (fallo de resolucion de nombres).
+    if _alcanzable("huggingface.co"):
+        try:
+            from datasets import load_dataset  # noqa: PLC0415
+            print("    probando Hugging Face: wikimedia/wikipedia (es)")
+            ds = load_dataset("wikimedia/wikipedia", "20231101.es",
+                              split="train[:2000]", streaming=True)
+            parts = [row["text"] for row in ds]
+            text = "\n\n".join(parts)
+            if len(text) > 500_000:
+                return text
+        except Exception as e:  # noqa: BLE001
+            print(f"    no: Hugging Face ({type(e).__name__}: {e})")
+    else:
+        print("    Hugging Face no resuelve desde aqui, se salta")
 
     # Fuente 3: Project Gutenberg, obras en español de dominio público.
     # 2000 = Don Quijote. Los demás son novelas españolas del catálogo.
