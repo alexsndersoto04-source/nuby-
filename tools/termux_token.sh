@@ -81,40 +81,59 @@ fi
 
 # ---------------------------------------------------------------- copiar a Debian
 say "Copiando dentro de Debian"
-# Se copia DIRECTAMENTE al sistema de ficheros de Debian. Pasar el contenido
-# por tuberia a traves de `proot-distro login` es fragil (proot no siempre
-# reenvia la entrada estandar bien); una copia de fichero no falla.
-ROOTFS="${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/debian"
 
-COPIADO=0
-if [ -d "$ROOTFS/root" ]; then
+# La ruta del rootfs NO es fija: depende de la version de proot-distro y de
+# donde este instalado. Se busca en vez de suponerla; suponerla fue el fallo.
+encontrar_rootfs() {
+    for base in \
+        "${PREFIX:-}/var/lib/proot-distro/installed-rootfs" \
+        "${PREFIX:-}/var/lib/proot-distro/installed-rootfs" \
+        "/data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs" \
+        "$HOME/../usr/var/lib/proot-distro/installed-rootfs" \
+        "/data/data/com.termux/files/home/.proot-distro/installed-rootfs"
+    do
+        [ -d "$base/debian" ] && { printf '%s' "$base/debian"; return 0; }
+    done
+    # ultimo recurso: buscar el directorio por nombre
+    find "${PREFIX:-/data/data/com.termux/files/usr}" "$HOME" \
+         -maxdepth 6 -type d -name debian -path '*installed-rootfs*' 2>/dev/null \
+        | head -1
+}
+
+ROOTFS=$(encontrar_rootfs)
+
+DESTINO=""
+if [ -n "$ROOTFS" ] && [ -d "$ROOTFS/root" ]; then
+    echo "     Debian encontrado en: $ROOTFS"
     mkdir -p "$ROOTFS/root/.kaggle" 2>/dev/null || true
     if cp "$TOKEN" "$ROOTFS/root/.kaggle/kaggle.json" 2>/dev/null; then
-        chmod 600 "$ROOTFS/root/.kaggle/kaggle.json"
-        COPIADO=1
-        echo "     copiado a $ROOTFS/root/.kaggle/"
+        chmod 600 "$ROOTFS/root/.kaggle/kaggle.json" 2>/dev/null || true
+        DESTINO="$ROOTFS/root/.kaggle/kaggle.json"
+        echo "     copiado directamente"
     fi
+else
+    echo "     no encontre el rootfs por mi cuenta; probando dentro de Debian"
 fi
 
-if [ "$COPIADO" -eq 0 ]; then
-    echo "     copia directa no disponible, probando por proot..."
-    proot-distro login debian -- bash -c "mkdir -p /root/.kaggle" \
-        || die "no pude preparar /root/.kaggle dentro de Debian"
-    cp "$TOKEN" "$ROOTFS/root/.kaggle/kaggle.json" 2>/dev/null \
-        || proot-distro login debian -- cp "/root/kaggle_import.json" "/root/.kaggle/kaggle.json" 2>/dev/null \
-        || true
+# Plan B: dejar que la propia Debian cree el fichero. Se copia primero a una
+# ruta accesible desde Termux y se mueve desde dentro, que es lo que funciona
+# siempre porque no depende de adivinar rutas.
+if [ -z "$DESTINO" ] || [ ! -s "$DESTINO" ]; then
+    echo "     escribiendo a traves de proot..."
+    proot-distro login debian -- bash -c 'mkdir -p /root/.kaggle && cat > /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json' < "$TOKEN" 2>/dev/null         || die "no pude escribir dentro de Debian"
 fi
 
-# Comprobacion final sobre el fichero REAL, sin depender de que proot
-# responda: si el fichero tiene contenido en su ruta, esta ahi.
-DESTINO="$ROOTFS/root/.kaggle/kaggle.json"
-if [ ! -s "$DESTINO" ]; then
+# Verificacion: preguntar a Debian, que es la unica que sabe de verdad.
+if proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null; then
+    echo "     verificado dentro de Debian"
+elif [ -n "$DESTINO" ] && [ -s "$DESTINO" ]; then
+    echo "     verificado en disco: $DESTINO"
+    echo "     (proot no respondio, pero el fichero esta en su sitio)"
+else
     die "el fichero no llego a Debian.
-Prueba a mano:
-    mkdir -p \$PREFIX/var/lib/proot-distro/installed-rootfs/debian/root/.kaggle
-    cp $TOKEN \$PREFIX/var/lib/proot-distro/installed-rootfs/debian/root/.kaggle/kaggle.json"
+Prueba a mano, en una sola linea:
+    proot-distro login debian -- bash -c 'mkdir -p /root/.kaggle && cat > /root/.kaggle/kaggle.json' < $TOKEN"
 fi
-echo "     verificado: $DESTINO"
 
 # Y si proot responde, comprobarlo tambien desde dentro (aviso, no error).
 if ! proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null; then
