@@ -43,7 +43,11 @@ def user_de_kaggle():
     ruta = os.path.expanduser("~/.kaggle/kaggle.json")
     try:
         with open(ruta, encoding="utf-8") as f:
-            return json.load(f)["username"]
+            u = json.load(f)["username"]
+        # Kaggle usa identificadores en minusculas para los slugs, aunque el
+        # perfil se muestre con mayusculas. Con "Alexsndersoto" la subida falla
+        # con un error de permisos que no explica nada.
+        return u.strip().lower()
     except Exception:
         raise SystemExit(
             f"No encuentro credenciales validas en {ruta}.\n"
