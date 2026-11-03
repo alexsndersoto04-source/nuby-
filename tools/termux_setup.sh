@@ -44,8 +44,16 @@ if [ ! -x /root/kv/bin/pip ]; then
     python3 -m venv /root/kv
 fi
 /root/kv/bin/pip install -q --upgrade pip
-/root/kv/bin/pip install -q kaggle
-/root/kv/bin/kaggle --version
+# `six` tiene que ir explicito: el paquete de Kaggle lo usa (kaggle/models/
+# upload_file.py) pero no lo declara como dependencia, asi que en una
+# instalacion limpia se rompe al arrancar con ModuleNotFoundError: six.
+/root/kv/bin/pip install -q kaggle six
+# comprobar que arranca de verdad, no solo que pip dijo que si
+if ! /root/kv/bin/kaggle --version; then
+    echo "Kaggle no arranca; faltan dependencias. Instalando las habituales..."
+    /root/kv/bin/pip install -q six urllib3 certifi python-dateutil requests tqdm
+    /root/kv/bin/kaggle --version
+fi
 ' || die "fallo al instalar kaggle dentro de Debian"
 
 # ---------------------------------------------------------------- 4. credenciales
