@@ -126,18 +126,11 @@ def get_corpus():
 
     print("\n--- buscando texto español real ---")
 
-    # Fuente 1: fichero adjunto como dataset de Kaggle.
-    for d in ("/kaggle/input",):
-        if os.path.isdir(d):
-            for root, _dirs, files in os.walk(d):
-                for name in files:
-                    if name.endswith((".txt", ".csv", ".tsv")):
-                        p = os.path.join(root, name)
-                        size = os.path.getsize(p)
-                        if size > 200_000:
-                            print(f"    adjunto encontrado: {p} ({size/1e6:.1f} MB)")
-                            with open(p, encoding="utf-8", errors="ignore") as f:
-                                return f.read()
+    # Fuente 1: dataset adjunto. Es la unica que no necesita red.
+    ruta_txt, _ = buscar_en_dataset()
+    if ruta_txt:
+        with open(ruta_txt, encoding="utf-8", errors="ignore") as f:
+            return f.read()
 
     # Fuente 2: Hugging Face, Wikipedia en español (streaming, solo una parte).
     # Antes de intentarlo se prueba si el dominio resuelve. Sin esta prueba, el
@@ -222,6 +215,26 @@ def audit_corpus(text, label):
 # --------------------------------------------------------------------------
 # 2. Repositorio y compilación
 # --------------------------------------------------------------------------
+# Se escribe tal cual cuando el motor viene de un dataset, para no depender de
+# bajar el Makefile.
+Makefile_ = """CXX      ?= g++
+CXXFLAGS ?= -O2 -std=c++17
+INC      := -Iengine
+SRC      := engine/cortex_lm.cpp engine/cortex_lm_main.cpp
+BIN      := bin/cortex_lm
+
+all: $(BIN)
+
+$(BIN): $(SRC) engine/cortex_lm.hpp
+\t@mkdir -p bin
+\t$(CXX) $(CXXFLAGS) $(INC) $(SRC) -o $(BIN)
+
+portable: $(BIN)
+
+clean:
+\trm -rf bin
+"""
+
 FICHEROS = [
     "cortex-lm/Makefile",
     "cortex-lm/engine/cortex_lm.cpp",
@@ -243,6 +256,41 @@ def _descarga(url, destino):
     return len(datos)
 
 
+def buscar_en_dataset():
+    """Busca texto y motor en /kaggle/input (datasets adjuntos).
+
+    Es la unica via que funciona sin internet: los datasets se montan dentro
+    del kernel sin necesitar red.
+    """
+    base = "/kaggle/input"
+    if not os.path.isdir(base):
+        return None, None
+
+    texto = None
+    motor = None
+    mejor = 0
+    for root, _dirs, files in os.walk(base):
+        for name in files:
+            p = os.path.join(root, name)
+            try:
+                tam = os.path.getsize(p)
+            except OSError:
+                continue
+            if name.endswith(".txt") and tam > mejor:
+                mejor = tam
+                texto = p
+        # el motor son los .cpp/.hpp sueltos que sube kaggle_dataset.py
+        cpps = [f for f in files if f.endswith((".cpp", ".hpp"))]
+        if len(cpps) >= 3 and motor is None:
+            motor = root
+
+    if texto:
+        print(f"    texto del dataset: {texto} ({os.path.getsize(texto)/1e6:.1f} MB)")
+    if motor:
+        print(f"    motor del dataset: {motor}")
+    return texto, motor
+
+
 def get_repo():
     """Trae solo los ficheros necesarios, sin git.
 
@@ -253,6 +301,30 @@ def get_repo():
     if LOCAL:
         print("\n--- MODO LOCAL: usando el codigo ya presente ---")
         return os.path.join(WORK, "cortex-lm")
+
+    # Si hay motor en un dataset adjunto, se usa y no hace falta red.
+    _txt, ruta_motor = buscar_en_dataset()
+    if ruta_motor:
+        destino = os.path.join(WORK, "cortex-lm")
+        os.makedirs(os.path.join(destino, "engine"), exist_ok=True)
+        os.makedirs(os.path.join(destino, "tools"), exist_ok=True)
+        nombres = {"cortex_lm.cpp": "engine", "cortex_lm.hpp": "engine",
+                   "cortex_lm_main.cpp": "engine",
+                   "bench.cpp": "tools", "bench_joint.cpp": "tools"}
+        copiados = 0
+        for nombre, sub in nombres.items():
+            origen = os.path.join(ruta_motor, nombre)
+            if os.path.exists(origen):
+                import shutil
+                shutil.copy(origen, os.path.join(destino, sub, nombre))
+                copiados += 1
+        if copiados >= 5:
+            print(f"  motor copiado del dataset ({copiados} ficheros)")
+            # el Makefile se genera aqui: no hace falta bajarlo
+            with open(os.path.join(destino, "Makefile"), "w", encoding="utf-8") as f:
+                f.write(Makefile_)
+            return destino
+        print(f"  el dataset solo traia {copiados} ficheros de motor, se ignora")
 
     print("\n--- descargando el motor ---")
     for rama in (BRANCH, "main"):

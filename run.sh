@@ -4,6 +4,8 @@
 #   bash run.sh             lanzar y esperar el resultado
 #   bash run.sh --no-wait   solo lanzar (puedes cerrar Termux)
 #   bash run.sh --fetch     recoger el resultado de la ultima corrida
+#   bash run.sh --dataset USUARIO/SLUG
+#                           usar un dataset adjunto: funciona SIN internet
 #
 # Este fichero se baja UNA vez a mano y a partir de ahi no cambia. Todo lo que
 # evoluciona (el lanzador, el cuaderno, el motor) se descarga en el momento,

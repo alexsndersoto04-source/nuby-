@@ -143,7 +143,7 @@ def descargar(remoto, destino, local_base=None):
         f.write(datos)
 
 
-def preparar_carpeta(user):
+def preparar_carpeta(user, dataset=None):
     d = os.path.expanduser("~/cortex_kaggle")
     os.makedirs(d, exist_ok=True)
 
@@ -162,8 +162,10 @@ def preparar_carpeta(user):
         "kernel_type": "script",
         "is_private": True,
         "enable_gpu": False,
-        "enable_internet": True,
-        "dataset_sources": [],
+        # Sin internet si el dataset trae todo: asi el kernel funciona aunque
+        # Kaggle niegue la red a la cuenta.
+        "enable_internet": dataset is None,
+        "dataset_sources": [dataset] if dataset else [],
         "competition_sources": [],
         "kernel_sources": [],
         "model_sources": [],
@@ -204,8 +206,8 @@ def interpretar_error(salida, user):
     return None
 
 
-def lanzar(user):
-    d, kid = preparar_carpeta(user)
+def lanzar(user, dataset=None):
+    d, kid = preparar_carpeta(user, dataset)
     say(f"Subiendo a Kaggle como {kid}")
     rc, out = kaggle(["kernels", "push", "-p", d], check=False)
     print(out.strip()[-2500:])
@@ -452,6 +454,8 @@ def main():
                     help="mostrar el registro de la ultima corrida y salir")
     ap.add_argument("--estado", action="store_true",
                     help="ver el estado actual del kernel y salir")
+    ap.add_argument("--dataset", metavar="USUARIO/SLUG",
+                    help="dataset con el texto y el motor; permite kernels sin internet")
     a = ap.parse_args()
 
     user = user_de_kaggle()
@@ -478,7 +482,7 @@ def main():
         recoger(kid)
         return 0
 
-    kid = lanzar(user)
+    kid = lanzar(user, a.dataset)
     if a.no_wait:
         say("Lanzado. Para recoger el resultado:")
         print("    python3 /root/kaggle_run.py --fetch")
