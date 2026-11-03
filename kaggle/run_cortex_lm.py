@@ -75,6 +75,43 @@ def _alcanzable(host, timeout=6):
         socket.setdefaulttimeout(None)
 
 
+def comprobar_internet():
+    """Falla rapido si el kernel no tiene salida a red.
+
+    Kaggle desactiva internet en silencio si la cuenta no ha verificado el
+    telefono: se pide en el kernel, se ignora, y el cuaderno se pasa ocho
+    minutos reintentando dominios que no resuelven. Mejor decirlo en dos
+    segundos y con el enlace que lo arregla.
+    """
+    if LOCAL:
+        return
+    # Un dataset adjunto no necesita red, asi que si hay uno, no hace falta.
+    if os.path.isdir("/kaggle/input"):
+        for root, _d, files in os.walk("/kaggle/input"):
+            for name in files:
+                if name.endswith((".txt", ".csv", ".tsv")):
+                    if os.path.getsize(os.path.join(root, name)) > 200_000:
+                        print("hay un dataset adjunto: no hace falta internet")
+                        return
+
+    if _alcanzable("raw.githubusercontent.com") or _alcanzable("www.gutenberg.org"):
+        return
+
+    raise SystemExit(
+        "\n" + "=" * 62 + "\n"
+        "ESTE KERNEL NO TIENE SALIDA A INTERNET.\n\n"
+        "Por eso fallan todos los dominios (Errno -3). Kaggle desactiva\n"
+        "internet aunque se le pida, si la cuenta no ha verificado el\n"
+        "telefono.\n\n"
+        "Solucion (una sola vez, 2 minutos):\n"
+        "  1. Abre en el navegador:  https://www.kaggle.com/settings\n"
+        "  2. Busca 'Phone verification' y verifica tu numero.\n"
+        "  3. Vuelve a lanzar:  bash run.sh\n\n"
+        "Alternativa sin verificar el telefono: sube un .txt grande en\n"
+        "espanol como dataset y adjuntalo al kernel.\n"
+        + "=" * 62)
+
+
 def get_corpus():
     """Devuelve el texto completo, de la primera fuente que funcione."""
     if LOCAL:
@@ -270,6 +307,7 @@ def main():
     print("CORTEX-LM — banco de medida sobre texto español real")
     print(SEP)
 
+    comprobar_internet()
     text = get_corpus()
     text = strip_gutenberg(text)
     text = text.replace("\r\n", "\n")
