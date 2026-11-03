@@ -18,3 +18,5 @@ android/local.properties
 # Python
 __pycache__/
 *.pyc
+
+kaggle/avance.txt
