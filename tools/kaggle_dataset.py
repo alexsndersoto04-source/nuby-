@@ -58,6 +58,28 @@ def die(m):
     sys.exit(1)
 
 
+def binario_kaggle():
+    """Localiza el ejecutable de kaggle.
+
+    Esta instalado en un entorno virtual (/root/kv/bin/kaggle), que no esta en
+    el PATH. Dar por hecho que se llama "kaggle" a secas rompe con
+    FileNotFoundError. Ha pasado dos veces.
+    """
+    import shutil as _sh
+    candidatos = [
+        "/root/kv/bin/kaggle",
+        os.path.expanduser("~/kv/bin/kaggle"),
+        "/usr/local/bin/kaggle",
+    ]
+    for c in candidatos:
+        if os.path.exists(c) and os.access(c, os.X_OK):
+            return c
+    encontrado = _sh.which("kaggle")
+    if encontrado:
+        return encontrado
+    die("no encuentro el ejecutable de kaggle. Reinstala con: bash setup.sh")
+
+
 def bajar(url, timeout=90):
     req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as f:
@@ -91,6 +113,10 @@ def auditar(texto, etiqueta):
 
 
 def main():
+    global KAG
+    KAG = binario_kaggle()
+    print(f"usando: {KAG}")
+
     os.makedirs(WORK, exist_ok=True)
     # Las subcarpetas se crean aqui, no al escribir: si no, el primer open()
     # falla con FileNotFoundError. Ya paso una vez.
@@ -158,7 +184,7 @@ def main():
     except Exception:  # noqa: BLE001
         pass
     if not usuario:
-        r = subprocess.run(["kaggle", "config", "view"], capture_output=True, text=True)
+        r = subprocess.run([KAG, "config", "view"], capture_output=True, text=True)
         m = re.search(r"username[^:]*[:=]\s*([\w.-]+)", r.stdout + r.stderr, re.I)
         usuario = m.group(1).lower() if m else None
     if not usuario:
@@ -175,12 +201,12 @@ def main():
     # ---------------------------------------------------------------- subir
     say("Subiendo a Kaggle como dataset privado")
     ref = f"{usuario}/{SLUG}"
-    r = subprocess.run(["kaggle", "datasets", "create", "-p", WORK, "-r", "zip"],
+    r = subprocess.run([KAG, "datasets", "create", "-p", WORK, "-r", "zip"],
                        capture_output=True, text=True)
     salida = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 and "already exists" in salida.lower():
         print("  ya existia, subiendo version nueva")
-        r = subprocess.run(["kaggle", "datasets", "version", "-p", WORK, "-r", "zip",
+        r = subprocess.run([KAG, "datasets", "version", "-p", WORK, "-r", "zip",
                             "-m", "corpus actualizado"], capture_output=True, text=True)
         salida = (r.stdout or "") + (r.stderr or "")
     print(salida.strip()[-1200:])
