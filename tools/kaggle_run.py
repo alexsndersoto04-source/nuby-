@@ -39,19 +39,81 @@ def say(msg):
     print(f"\n==> {msg}", flush=True)
 
 
-def user_de_kaggle():
-    ruta = os.path.expanduser("~/.kaggle/kaggle.json")
+def _rutas_credenciales():
+    home = os.path.expanduser("~")
+    return [os.path.join(home, ".kaggle", "access_token"),
+            os.path.join(home, ".kaggle", "kaggle.json")]
+
+
+def hay_credenciales():
+    """True si hay credenciales en cualquiera de los dos formatos."""
+    if os.environ.get("KAGGLE_API_TOKEN"):
+        return True
+    for r in _rutas_credenciales():
+        try:
+            if os.path.getsize(r) > 10:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def preparar_auth():
+    """Deja las credenciales como las espera la version instalada.
+
+    Kaggle CLI 2.2.5 cambio el sistema: ya no usa kaggle.json, sino un unico
+    token (KGAT_...) en ~/.kaggle/access_token o en KAGGLE_API_TOKEN. Aqui se
+    acepta cualquiera de las dos formas y se exporta la variable de entorno,
+    que es la via mas fiable y no depende de que el CLI mire el fichero.
+    """
+    home = os.path.expanduser("~")
+    token = None
+
+    # 1) formato nuevo
     try:
-        with open(ruta, encoding="utf-8") as f:
-            u = json.load(f)["username"]
-        # Kaggle usa identificadores en minusculas para los slugs, aunque el
-        # perfil se muestre con mayusculas. Con "Alexsndersoto" la subida falla
-        # con un error de permisos que no explica nada.
-        return u.strip().lower()
+        with open(os.path.join(home, ".kaggle", "access_token"), encoding="utf-8") as f:
+            token = f.read().strip() or None
+    except OSError:
+        pass
+
+    # 2) formato clasico: solo vale si el CLI es antiguo, pero se conserva
+    usuario = None
+    try:
+        with open(os.path.join(home, ".kaggle", "kaggle.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        usuario = (d.get("username") or "").strip()
+        if not token:
+            k = (d.get("key") or "").strip()
+            if k.startswith("KGAT_"):
+                token = k
     except Exception:
+        pass
+
+    if token:
+        os.environ["KAGGLE_API_TOKEN"] = token
+
+    if not token and not usuario:
         raise SystemExit(
-            f"No encuentro credenciales validas en {ruta}.\n"
-            "Ejecuta primero:  bash termux_setup.sh")
+            "No encuentro credenciales de Kaggle en ningun formato.\n"
+            "Crealas con:\n    bash token.sh")
+
+    # Kaggle usa identificadores en minusculas para los slugs, aunque el perfil
+    # se muestre con mayusculas. Con mayusculas la subida falla sin explicar.
+    if usuario:
+        return usuario.lower()
+
+    # Sin usuario en el fichero: preguntarselo a Kaggle.
+    rc, out = kaggle(["config", "view"], check=False)
+    m = re.search(r"username[^:]*[:=]\s*([\w.-]+)", out, re.I)
+    if m:
+        return m.group(1).lower()
+    raise SystemExit(
+        "Tengo el token pero no se tu nombre de usuario de Kaggle.\n"
+        "Anadelo al fichero ~/.kaggle/kaggle.json como {\"username\":\"tu_nombre\"}")
+
+
+def user_de_kaggle():
+    return preparar_auth()
 
 
 def kaggle(args, check=False):

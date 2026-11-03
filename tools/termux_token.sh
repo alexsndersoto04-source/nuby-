@@ -1,9 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Crea kaggle.json a partir del token que ya tienes guardado.
+# Instala las credenciales de Kaggle dentro de Debian.
 #
-# Sirve para cuando NO se descargo el fichero pero si se copio la clave (por
-# ejemplo, a una nota). Se pide el usuario y la clave, se escribe el fichero
-# con el formato correcto y se deja dentro de Debian, listo para usar.
+# Kaggle CLI 2.2.5 cambio la forma de autenticarse. Ahora hay dos formatos:
+#
+#   NUEVO: un unico texto que empieza por KGAT_  ->  ~/.kaggle/access_token
+#   VIEJO: un JSON {"username":..,"key":..}     ->  ~/.kaggle/kaggle.json
+#
+# Este instalador acepta cualquiera de los dos y lo coloca donde toca, asi que
+# da igual cual tenga el usuario en la nota.
 #
 # Uso:  bash termux_token.sh
 set -u
@@ -11,82 +15,100 @@ set -u
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-TOKEN="${HOME}/kaggle.json"
-
-command -v proot-distro >/dev/null || die "falta proot-distro. Ejecuta antes: bash setup.sh"
+command -v proot-distro >/dev/null || die "falta proot-distro.
+Primero:  pkg install -y proot-distro curl"
 
 cat <<'EXPLICA'
 
-Vamos a crear el fichero de credenciales a mano, con lo que ya tienes.
+Vamos a instalar tus credenciales de Kaggle.
 
-Necesitas dos datos (los dos estan en la nota que guardaste):
+Necesitas UNO de estos dos datos, el que tengas en la nota:
 
-  - usuario de Kaggle  (el nombre de tu cuenta, no el correo)
-  - clave              (un texto largo de letras y numeros)
+  1) Un texto largo que empieza por  KGAT_     <- el moderno
+  2) Un JSON con "username" y "key"            <- el clasico
 
-Cuando el script pida la clave, puedes PEGARLA: manten pulsada la pantalla
-en Termux y elige "Pegar".
+Se puede pegar cualquiera de los dos y el script decide solo donde va.
+
+Para pegar en Termux: manten pulsada la pantalla y elige "Pegar".
 
 EXPLICA
 
-# ---------------------------------------------------------------- usuario
-KU=""
-while [ -z "$KU" ]; do
-    printf 'Usuario de Kaggle: '
-    read -r KU
-    KU=$(printf '%s' "$KU" | tr -d ' \t\r')
+# ---------------------------------------------------------------- entrada
+DATO=""
+while [ -z "$DATO" ]; do
+    printf 'Pega aqui tu token (o el JSON) y pulsa Enter: '
+    # Se lee una sola linea; si el JSON viene con saltos, se pide igual.
+    read -r DATO
+    DATO=$(printf '%s' "$DATO" | tr -d '\r')
 done
 
-# ---------------------------------------------------------------- clave
-KK=""
-while [ -z "$KK" ]; do
-    printf 'Clave (pega aqui y pulsa Enter): '
-    read -r KK
-    KK=$(printf '%s' "$KK" | tr -d ' \t\r')
-done
-
-# Si el usuario pego el token completo con formato JSON, se extrae.
-case "$KK" in
-    *'{'*)
-        KK=$(printf '%s' "$KK" | tr -d '\n' | sed -n 's/.*"key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        [ -n "$KK" ] || die "parecia un JSON pero no encontre la clave dentro"
+# ---------------------------------------------------------------- clasificar
+MODO=""
+case "$DATO" in
+    KGAT_*|kgat_*)
+        MODO="token"
+        ;;
+    *'{'*'"key"'*)
+        MODO="json"
+        # extraer usuario y clave del JSON pegado
+        KU=$(printf '%s' "$DATO" | tr -d '\n' | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        KK=$(printf '%s' "$DATO" | tr -d '\n' | sed -n 's/.*"key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        [ -n "$KK" ] || die "el JSON no tiene el campo key"
+        ;;
+    *)
+        # Si es un texto largo sin prefijo conocido, se trata como token nuevo.
+        if [ "${#DATO}" -ge 24 ]; then
+            MODO="token"
+        else
+            die "eso no parece un token (${#DATO} caracteres).
+Copia el texto completo de la nota."
+        fi
         ;;
 esac
 
-# ---------------------------------------------------------------- validar
-if [ "${#KK}" -lt 16 ]; then
-    die "la clave es demasiado corta (${#KK} caracteres). Revisa la nota."
-fi
-case "$KK" in
-    *[!A-Za-z0-9+/=_-]*) die "la clave tiene caracteres raros. Copiala otra vez." ;;
+echo "     formato detectado: $MODO"
+
+# ---------------------------------------------------------------- sanidad
+case "$MODO" in
+    token)
+        case "$DATO" in
+            *[!A-Za-z0-9_+=/-]*) die "el token tiene caracteres raros. Copialo otra vez." ;;
+        esac
+        if [ "${#DATO}" -lt 24 ]; then
+            die "el token es demasiado corto (${#DATO} caracteres)."
+        fi
+        ;;
+    json)
+        [ -n "$KU" ] || die "el JSON pegado no tiene username"
+        [ "${#KK}" -ge 16 ] || die "la clave del JSON es demasiado corta."
+        ;;
 esac
 
 # ---------------------------------------------------------------- escribir
-say "Escribiendo el fichero de credenciales"
+# Se preparan LAS DOS formas. Cuesta nada y evita tener que adivinar que
+# version de la herramienta hay instalada.
+say "Preparando las credenciales"
+TMPDIR_="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+mkdir -p "$TMPDIR_" 2>/dev/null || TMPDIR_="$HOME"
+ACCESO="$TMPDIR_/access_token"
+JSONF="$TMPDIR_/kaggle.json"
+
 umask 077
-printf '{"username":"%s","key":"%s"}\n' "$KU" "$KK" > "$TOKEN" || die "no pude escribir $TOKEN"
-chmod 600 "$TOKEN"
-echo "     $TOKEN"
-
-# Comprobar que es JSON valido antes de seguir.
-if command -v python3 >/dev/null 2>&1; then
-    python3 - "$TOKEN" "$KU" <<'PY' || die "el fichero generado no es valido"
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d["username"] == sys.argv[2], "el usuario no coincide"
-assert len(d["key"]) >= 16, "clave corta"
-print("     JSON valido, usuario:", d["username"])
-PY
+if [ "$MODO" = "token" ]; then
+    printf '%s\n' "$DATO" > "$ACCESO"
+    # Un JSON con solo la clave tampoco estorba si la herramienta es antigua.
+    printf '{"username":"","key":"%s"}\n' "$DATO" > "$JSONF"
+else
+    printf '{"username":"%s","key":"%s"}\n' "$KU" "$KK" > "$JSONF"
+    printf '%s\n' "$KK" > "$ACCESO"
 fi
+chmod 600 "$ACCESO" "$JSONF"
 
-# ---------------------------------------------------------------- copiar a Debian
+# ---------------------------------------------------------------- copiar
 say "Copiando dentro de Debian"
 
-# La ruta del rootfs NO es fija: depende de la version de proot-distro y de
-# donde este instalado. Se busca en vez de suponerla; suponerla fue el fallo.
 encontrar_rootfs() {
     for base in \
-        "${PREFIX:-}/var/lib/proot-distro/installed-rootfs" \
         "${PREFIX:-}/var/lib/proot-distro/installed-rootfs" \
         "/data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs" \
         "$HOME/../usr/var/lib/proot-distro/installed-rootfs" \
@@ -94,57 +116,61 @@ encontrar_rootfs() {
     do
         [ -d "$base/debian" ] && { printf '%s' "$base/debian"; return 0; }
     done
-    # ultimo recurso: buscar el directorio por nombre
     find "${PREFIX:-/data/data/com.termux/files/usr}" "$HOME" \
-         -maxdepth 6 -type d -name debian -path '*installed-rootfs*' 2>/dev/null \
-        | head -1
+         -maxdepth 6 -type d -name debian -path '*installed-rootfs*' 2>/dev/null | head -1
 }
 
 ROOTFS=$(encontrar_rootfs)
-
-DESTINO=""
+COPIADO=0
 if [ -n "$ROOTFS" ] && [ -d "$ROOTFS/root" ]; then
-    echo "     Debian encontrado en: $ROOTFS"
+    echo "     Debian en: $ROOTFS"
     mkdir -p "$ROOTFS/root/.kaggle" 2>/dev/null || true
-    if cp "$TOKEN" "$ROOTFS/root/.kaggle/kaggle.json" 2>/dev/null; then
-        chmod 600 "$ROOTFS/root/.kaggle/kaggle.json" 2>/dev/null || true
-        DESTINO="$ROOTFS/root/.kaggle/kaggle.json"
+    if cp "$ACCESO" "$ROOTFS/root/.kaggle/access_token" 2>/dev/null && \
+       cp "$JSONF"   "$ROOTFS/root/.kaggle/kaggle.json"  2>/dev/null; then
+        chmod 600 "$ROOTFS/root/.kaggle/access_token" "$ROOTFS/root/.kaggle/kaggle.json" 2>/dev/null || true
+        COPIADO=1
         echo "     copiado directamente"
     fi
-else
-    echo "     no encontre el rootfs por mi cuenta; probando dentro de Debian"
 fi
 
-# Plan B: dejar que la propia Debian cree el fichero. Se copia primero a una
-# ruta accesible desde Termux y se mueve desde dentro, que es lo que funciona
-# siempre porque no depende de adivinar rutas.
-if [ -z "$DESTINO" ] || [ ! -s "$DESTINO" ]; then
+if [ "$COPIADO" -eq 0 ]; then
     echo "     escribiendo a traves de proot..."
-    proot-distro login debian -- bash -c 'mkdir -p /root/.kaggle && cat > /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json' < "$TOKEN" 2>/dev/null         || die "no pude escribir dentro de Debian"
+    proot-distro login debian -- bash -c '
+        mkdir -p /root/.kaggle
+        cat > /root/.kaggle/access_token
+        chmod 600 /root/.kaggle/access_token
+    ' < "$ACCESO" || die "no pude escribir dentro de Debian"
+    proot-distro login debian -- bash -c '
+        mkdir -p /root/.kaggle
+        cat > /root/.kaggle/kaggle.json
+        chmod 600 /root/.kaggle/kaggle.json
+    ' < "$JSONF" || true
 fi
 
-# Verificacion: preguntar a Debian, que es la unica que sabe de verdad.
-if proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null; then
-    echo "     verificado dentro de Debian"
-elif [ -n "$DESTINO" ] && [ -s "$DESTINO" ]; then
-    echo "     verificado en disco: $DESTINO"
-    echo "     (proot no respondio, pero el fichero esta en su sitio)"
+# ---------------------------------------------------------------- verificar
+say "Comprobando que Kaggle las acepta"
+if proot-distro login debian -- test -s /root/.kaggle/access_token 2>/dev/null; then
+    echo "     access_token presente"
+elif proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null; then
+    echo "     kaggle.json presente"
 else
-    die "el fichero no llego a Debian.
-Prueba a mano, en una sola linea:
-    proot-distro login debian -- bash -c 'mkdir -p /root/.kaggle && cat > /root/.kaggle/kaggle.json' < $TOKEN"
+    die "no hay ningun fichero de credenciales dentro de Debian"
 fi
 
-# Y si proot responde, comprobarlo tambien desde dentro (aviso, no error).
-if ! proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null; then
-    echo "     (aviso: proot no confirmo la lectura; el fichero esta en su ruta)"
+# La prueba de verdad: pedir algo a Kaggle. Si contesta, las credenciales
+# valen; si no, se avisa aqui y no tres pasos mas adelante.
+if proot-distro login debian -- /root/kv/bin/kaggle config view >/dev/null 2>&1; then
+    echo "     Kaggle responde"
+else
+    echo "     (aviso: no pude confirmar con Kaggle; se intentara al lanzar)"
 fi
+
+# Limpieza: los temporales tienen la clave en claro.
+rm -f "$ACCESO" "$JSONF"
 
 cat <<LISTO
 
-Listo. Ya hay credenciales dentro de Debian.
-
-Ahora lanza la medida con:
+Listo. Lanza la medida con:
 
     bash run.sh
 

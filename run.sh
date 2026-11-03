@@ -30,9 +30,17 @@ proot-distro login debian -- test -s /root/kv/bin/python 2>/dev/null || die "Fal
 Solucion:
   bash setup.sh"
 
-proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null || die "Faltan las credenciales de Kaggle.
+# Kaggle CLI 2.2.5 usa ~/.kaggle/access_token; las versiones antiguas usaban
+# ~/.kaggle/kaggle.json. Vale cualquiera de los dos.
+if proot-distro login debian -- test -s /root/.kaggle/access_token 2>/dev/null; then
+    :
+elif proot-distro login debian -- test -s /root/.kaggle/kaggle.json 2>/dev/null; then
+    :
+else
+    die "Faltan las credenciales de Kaggle.
 Solucion:
   bash token.sh"
+fi
 
 # --- el lanzador se descarga SIEMPRE, sin comprobar versiones ------------
 step "Preparando el lanzador"
