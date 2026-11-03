@@ -60,6 +60,45 @@ el número una vez y vuelve a lanzar. El script te da el enlace exacto.
 
 ---
 
+## Ruta sin credenciales (si el kaggle.json da guerra)
+
+No necesita `kaggle.json`, ni `pip`, ni Debian. Se hace todo desde el navegador
+del teléfono.
+
+1. Entra en <https://www.kaggle.com> y accede a tu cuenta.
+2. Arriba a la derecha: **Create → New Notebook**.
+3. En **Settings** (panel derecho):
+   - **Internet → ON** (obligatorio)
+   - **Accelerator → None**
+4. Pega el código del cuaderno:
+   abre en otra pestaña
+
+   ```
+   https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/arena/c7deda7f-nuby/kaggle/run_cortex_lm.py
+   ```
+
+   y si no puedes copiar, basta con ejecutarlo sin pegarlo: crea una celda y
+   escribe estas cuatro líneas
+
+   ```python
+   import urllib.request
+   url = "https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/arena/c7deda7f-nuby/kaggle/run_cortex_lm.py"
+   code = urllib.request.urlopen(url).read().decode()
+   exec(compile(code, "run_cortex_lm.py", "exec"), {"__name__": "__main__"})
+   ```
+
+   Esa celda son cuatro líneas cortas, se pueden escribir a mano.
+5. Pulsa **Run All**.
+
+Al terminar, la tabla sale al final del registro del cuaderno (sección
+**Log**), empezando por la palabra `RESUMEN`.
+
+### Por qué esto es más fiable
+
+`kaggle.json` es una llave privada de tu cuenta. Si se pierde, hay que ir a
+Settings y regenerarla. La ruta del navegador no maneja la llave en ningún
+momento: tú ya has iniciado sesión, y el cuaderno corre en tu cuenta.
+
 ## Qué va a pasar
 
 1. **Baja texto español de verdad.** Prueba un dataset adjunto, Wikipedia en

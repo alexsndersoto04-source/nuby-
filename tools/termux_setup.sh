@@ -73,8 +73,12 @@ if [ -z "$CREDS" ]; then
     CREDS=$(find "$HOME" -maxdepth 6 -name 'kaggle*.json' 2>/dev/null | head -1)
 fi
 if [ -z "$CREDS" ]; then
-    CREDS=$(find /sdcard /storage/emulated/0 -maxdepth 4 -name 'kaggle*.json' \
-             -not -path '*/Android/*' 2>/dev/null | head -1)
+    # Ojo: el navegador a veces guarda "kaggle (1).json", asi que se busca
+    # cualquier json que empiece por kaggle, y con mas profundidad.
+    CREDS=$(find /sdcard /storage/emulated/0 -maxdepth 6 \
+             \( -name 'kaggle*.json' -o -name '*kaggle*.json' \) \
+             -not -path '*/Android/data/*' -not -path '*/Android/obb/*' \
+             2>/dev/null | head -1)
 fi
 
 # Si aparece, se copia al home para no depender del permiso de la memoria.
@@ -126,6 +130,23 @@ Y volver a lanzar:
        bash setup.sh
 
 AYUDA
+    # Diagnostico: decir que SI se ve en la carpeta de descargas. Sin esto el
+    # usuario no sabe si el problema es el nombre, la carpeta o que el fichero
+    # no se descargo.
+    echo "--- diagnostico ---"
+    for d in /sdcard/Download /sdcard/Downloads /sdcard/Descargas \
+             /storage/emulated/0/Download "$HOME"; do
+        [ -d "$d" ] || continue
+        js=$(ls -1 "$d" 2>/dev/null | grep -i '\.json$' | head -5)
+        if [ -n "$js" ]; then
+            echo "  json en $d:"
+            echo "$js" | sed 's/^/    /'
+        fi
+    done
+    echo "  (si no aparece ninguno, el fichero no se ha descargado)"
+    echo
+    echo "Plan B sin credenciales: ver kaggle/README.md, seccion"
+    echo "'Ruta sin credenciales'. No necesita kaggle.json."
     exit 1
 fi
 echo "     encontrado en: $CREDS"
