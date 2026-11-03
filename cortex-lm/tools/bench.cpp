@@ -45,6 +45,7 @@ int main(int argc, char** argv) {
     const int   PL    = argc > 5 ? std::atoi(argv[5]) : 0;
     const float ETA   = argc > 6 ? (float)std::atof(argv[6]) : 0.0f;
     const float WSC   = argc > 7 ? (float)std::atof(argv[7]) : -1.0f;
+    const int   LAG   = argc > 8 ? std::atoi(argv[8]) : 1;   // 1 = siguiente simbolo, 0 = actual
 
     Params p;
     p.eta = ETA > 0 ? ETA : p.eta;
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
             // lector; aqui usamos el error de un bigrama para aislar el efecto
             // de la plasticidad sobre la representacion.
             std::vector<float> err(256, 0.0f);
-            err[train[t + 1]] = -1.0f;
+            err[train[t + LAG]] = -1.0f;
             err[train[t]] = 1.0f;
             e.learn(err.data(), f);
         }
@@ -129,8 +130,8 @@ int main(int argc, char** argv) {
     std::vector<double> W((size_t)256 * NF, 0.0), b(256, 0.0), lg(256);
     const double lr = 0.05;
     for (int ep = 0; ep < EPOCH; ++ep)
-        for (int t = 0; t + 1 < NTR; ++t) {
-            const int y = train[t + 1];
+        for (int t = 0; t + std::max(1, LAG) < NTR; ++t) {
+            const int y = train[t + LAG];
             double mx = -1e30;
             for (int c = 0; c < 256; ++c) {
                 double v = b[c];
@@ -165,13 +166,13 @@ int main(int argc, char** argv) {
     for (int t = 0; t + 1 < NTR; ++t) { bi[{train[t], train[t + 1]}]++; uni[train[t]]++; }
 
     e.reset_state();
-    for (size_t t = 0; t + 1 < test.size(); ++t) {
+    for (size_t t = 0; t + std::max(1, LAG) < test.size(); ++t) {
         e.feed(test[t]);
         e.theta_features(f);
         for (int h = LH - 1; h > 0; --h) ring[h] = ring[h - 1];
         ring[0] = f;
 
-        const int y = test[t + 1];
+        const int y = test[t + LAG];
         {
             auto it = bi.find({test[t], test[t + 1]});
             const double c = it == bi.end() ? 0.0 : it->second;
@@ -197,7 +198,7 @@ int main(int argc, char** argv) {
         n++;
     }
 
-    std::printf("PLASTIC=%d eta=%.1e w_scale=%.2f K=%d LH=%d | train=%d\n", PL, ETA, p.w_scale, K, LH, NTR);
+    std::printf("PLASTIC=%d eta=%.1e w_scale=%.2f K=%d LH=%d LAG=%d | train=%d\n", PL, ETA, p.w_scale, K, LH, LAG, NTR);
     std::printf("  TEST (texto no visto, %d simbolos): %.3f bpc | acierto %.1f %%\n", n, bits / n, 100.0 * cor / n);
     std::printf("  bigrama de referencia            : %.3f bpc\n", bitsBigram / n);
     return 0;

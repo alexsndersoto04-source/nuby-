@@ -115,6 +115,9 @@ struct Params {
     // error instantaneo es ruido puro y sin filtrar no mueve los pesos.
     float tau_elig       = 20.0f;
     float eta_slow       = 0.98f;
+    // Escala de la senal e-prop. R_ esta acotada a +-8; con este factor la
+    // senal queda en el mismo orden que la de la matriz B normal (sigma 1).
+    float eprop_scale    = 0.125f;
     // Limite de la plasticidad: fraccion del peso inicial que puede moverse.
     // Sin esto los pesos se van a w_max y la red se satura.
     float w_frac_max     = 0.60f;
@@ -263,6 +266,7 @@ private:
     std::vector<DelayQueue> queues_;
     std::vector<float> B_;        // retroalimentacion fija (n_neurons x n_chars)
     std::vector<float> feedback_;
+    std::vector<float> fb_prev_;   // filtro paso bajo de la senal de aprendizaje
     std::vector<int>   sensory_;    // mapa fijo simbolo -> neuronas de la capa 0
     std::vector<float> sensory_w_;  // corriente graduada de cada conexion sensorial
     std::vector<int>   memmap_;     // mapa fijo simbolo -> neuronas del canal de memoria

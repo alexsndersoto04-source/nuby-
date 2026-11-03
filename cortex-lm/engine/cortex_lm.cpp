@@ -103,6 +103,7 @@ void Engine::build_random(unsigned seed) {
 
     n_neurons_ = N * L;
     feedback_.assign(n_neurons_, 0.0f);
+    fb_prev_.assign(n_neurons_, 0.0f);
 
     // B: retroalimentacion fija, no se entrena. Conecta cada neurona con una
     // muestra de la salida y permite difundir la senal de error sin gradientes.
@@ -209,6 +210,7 @@ void Engine::reset_state() {
     }
     std::fill(ctx_hist_.begin(), ctx_hist_.end(), 0.0f);
     std::fill(feedback_.begin(), feedback_.end(), 0.0f);
+    std::fill(fb_prev_.begin(), fb_prev_.end(), 0.0f);
     inh_prev_ = 0.0f;
     t_ = 0;
 }
@@ -425,15 +427,34 @@ void Engine::readout(const std::vector<float>& f, float* logits) const {
 }
 
 void Engine::learn(const float* error, const std::vector<float>& f) {
-    // 1. difundir el error por la matriz fija B (feedback alignment).
-    // Se filtra paso bajo: el error instantaneo por simbolo es casi todo ruido
-    // (uno grande aqui y otro de signo opuesto dos simbolos despues) y la regla
-    // de tres factores necesita una senal con direccion estable.
-    for (int j = 0; j < n_neurons_; ++j) {
-        float acc = 0.0f;
-        const float* row = &B_[(size_t)j * p_.n_chars];
-        for (int k = 0; k < p_.n_chars; ++k) acc += row[k] * error[k];
-        feedback_[j] = p_.eta_slow * feedback_[j] + (1.0f - p_.eta_slow) * acc;
+    // 1. senal de aprendizaje por neurona (estilo e-prop).
+    // Se difunde el error por la matriz de LECTURA, no por una matriz aleatoria.
+    // Con B aleatoria cada neurona recibe el error de un simbolo al azar, asi
+    // que la senal de tres factores no tiene credito especifico y solo inyecta
+    // ruido: medido, empeoraba de forma monotona con eta. R_ si esta entrenada,
+    // y su transpuesta es exactamente la direccion en que cada feature reduce
+    // la perdida.
+    //
+    //   L_j = sum_c R[c][j] * error[c]
+    //
+    // R esta acotada a +-8, asi que hace falta un factor de escala: sin el, la
+    // senal es ~8x mayor que con B normal y la plasticidad desestabiliza.
+    {
+        std::vector<float> fn;
+        normalize(f, fn);
+        std::fill(feedback_.begin(), feedback_.end(), 0.0f);
+        const int stride = p_.n_features_max();
+        const int F = std::min((int)fn.size(), stride);
+        for (int j = 0; j < F; ++j) {
+            float acc = 0.0f;
+            for (int k = 0; k < p_.n_chars; ++k) acc += R_[(size_t)k * stride + j] * error[k];
+            feedback_[j] = p_.eprop_scale * acc;
+        }
+        // El filtro paso bajo sigue haciendo falta: el error por simbolo es
+        // casi todo ruido y la regla necesita una direccion estable.
+        for (int j = 0; j < n_neurons_; ++j)
+            feedback_[j] = p_.eta_slow * fb_prev_[j] + (1.0f - p_.eta_slow) * feedback_[j];
+        fb_prev_ = feedback_;
     }
 
     // 2. regla de tres factores sobre la recurrencia.

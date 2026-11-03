@@ -221,12 +221,63 @@ Con la plasticidad funcionando de verdad, sobre texto no visto:
 El efecto crece con `eta` y siempre en la dirección mala. Es un resultado
 negativo y se queda escrito como tal.
 
-Lectura: la señal de tres factores está mal alineada. `feedback_[post]` es el
-error del **símbolo actual**, pero el disparo que contribuyó a ese error ocurrió
-en ticks anteriores y, sobre todo, el objetivo es el símbolo **siguiente**, que
-la red todavía no ha visto. Sin una regla de crédito temporal (e-prop completo,
-con la traza del error propagada hacia atrás en el tiempo), esto no puede
-funcionar.
+### Intento de arreglo 1: alinear el crédito en el tiempo
+
+La primera hipótesis fue que el crédito estaba desalineado: `feedback_[post]`
+es el error del símbolo **actual**, pero el objetivo es el **siguiente**.
+
+Se probó con el objetivo puesto en el símbolo actual (crédito perfectamente
+alineado, el lector llega al 96,5 % de acierto):
+
+| plasticidad | bpc | acierto |
+|---|---|---|
+| no | **0,577** | **96,5 %** |
+| sí (`eta` = 1e-3, matriz `B` aleatoria) | 0,657 | 95,6 % |
+
+Sigue empeorando. **La alineación temporal no era el problema.**
+
+### Intento de arreglo 2: señal de e-prop en vez de matriz aleatoria
+
+Si no era el tiempo, era la señal. Con `B` aleatoria cada neurona recibe el
+error de un símbolo al azar: no hay crédito específico y la regla solo inyecta
+ruido. Se sustituyó por la señal real de e-prop, difundiendo el error por la
+matriz de **lectura entrenada**:
+
+```
+L_j = sum_c R[c][j] * error[c]          (escalada por eprop_scale = 0.125)
+```
+
+| plasticidad | `eta` | bpc |
+|---|---|---|
+| no | — | **0,577** |
+| sí, e-prop | 1e-3 | 0,581 |
+| sí, e-prop | 1e-2 | 0,597 |
+| sí, e-prop | 3e-2 | 0,598 |
+
+El daño baja (de 0,657 a 0,581) pero **sigue sin haber ganancia**. La razón es
+de protocolo, no de regla: en `bench.cpp` la red ve el texto en **una sola
+pasada** y el lector se entrena después, así que la plasticidad solo llega a
+ver una `R_` aleatoria y su señal de aprendizaje vale casi cero. Hay que
+entrenar los dos a la vez.
+
+### Intento de arreglo 3: entrenamiento conjunto en línea
+
+Se añadió `tools/bench_joint.cpp`: lector y plasticidad aprenden símbolo a
+símbolo, en línea. Con presupuesto corto (3000 símbolos, 2 épocas) el lector
+todavía no está entrenado y todas las variantes quedan en ~3,78 bpc, así que
+esta prueba **no distingue** nada: hace falta ejecutarla en Kaggle con el
+corpus completo. El régimen de disparo se comprobó estable (37,7
+disparos/símbolo en ambos casos, sin fuga).
+
+### Conclusión honesta de la ronda
+
+La plasticidad local, ya ejecutándose de verdad, **no ha producido ninguna
+mejora medible en ninguna de las tres formulaciones**. Lo que sí está
+demostrado es que el motor ya funciona: guarda historia, la recurrencia aporta
+0,11 bpc y el conjunto mejora al bigrama por más de un bit sobre texto no
+visto. El aprendizaje local sigue siendo el problema abierto, y ahora está
+acotado: no es el tiempo, no es (solo) la matriz de retroalimentación, y el
+banco para decidirlo existe.
 
 ## Números honestos actuales (protocolo disjunto)
 
