@@ -42,21 +42,43 @@ Solucion:
   bash token.sh"
 fi
 
-# --- el lanzador se descarga SIEMPRE, sin comprobar versiones ------------
+# --- el lanzador se descarga SIEMPRE -------------------------------------
 step "Preparando el lanzador"
-proot-distro login debian -- bash -c \
-    "$CURL '$RAW/tools/kaggle_run.py' -o /root/kaggle_run.py" \
+
+# La rama puede venir de una copia vieja en cache del operador (ya ha pasado).
+# Si el fichero descargado no tiene una funcion reciente, se reintenta contra
+# un commit concreto, cuya URL nadie puede tener cacheada porque incluye el
+# hash. Asi no hay que adivinar nunca que version llego.
+PIN="3f6da60"
+MARCA="mostrar_registro"
+
+descargar_lanzador() {
+    local url="$1"
+    proot-distro login debian -- bash -c \
+        "$CURL '$url' -o /root/kaggle_run.py" 2>/dev/null
+}
+
+tiene_marca() {
+    proot-distro login debian -- grep -q "$MARCA" /root/kaggle_run.py 2>/dev/null
+}
+
+descargar_lanzador "$RAW/tools/kaggle_run.py" \
   || die "No pude descargar el lanzador. ¿Hay conexion?"
+
+if ! tiene_marca; then
+    echo "     la copia de la rama parece antigua, probando por commit"
+    descargar_lanzador \
+      "https://raw.githubusercontent.com/$REPO/$PIN/tools/kaggle_run.py" || true
+fi
 
 proot-distro login debian -- test -s /root/kaggle_run.py 2>/dev/null \
   || die "El lanzador llego vacio. Vuelve a intentarlo."
 
-# Comprobar que es la version nueva: la vieja no tenia esto.
-if proot-distro login debian -- grep -q "user_de_kaggle" /root/kaggle_run.py 2>/dev/null; then
+if tiene_marca; then
     echo "     lanzador listo"
 else
-    die "El lanzador descargado no es el esperado.
-Comprueba la conexion y vuelve a intentarlo."
+    die "El lanzador descargado no es el esperado, ni por rama ni por commit.
+Es un problema de conexion, no de configuracion."
 fi
 
 # --- arrancar ------------------------------------------------------------
