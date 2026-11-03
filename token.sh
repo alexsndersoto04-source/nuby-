@@ -32,11 +32,16 @@ Comprueba que hay conexion."
 [ -s "$INST" ] || die "El instalador llego vacio."
 
 # Comprobar que es el bueno y no una copia vieja o una pagina de error.
-# Se buscan cadenas que SI estan en el instalador real.
-if ! grep -q "Usuario de Kaggle" "$INST" 2>/dev/null || \
-   ! grep -q "Copiando dentro de Debian" "$INST" 2>/dev/null; then
+# Las cadenas tienen que ser estables: antes se comprobaba "Usuario de Kaggle",
+# que desaparecio al cambiar el mensaje del prompt, y el propio token.sh se
+# quedo inservible. Ahora se busca algo que no va a cambiar: que sepa tratar
+# los dos formatos de credenciales.
+if ! grep -q "access_token" "$INST" 2>/dev/null || \
+   ! grep -q "KGAT_" "$INST" 2>/dev/null; then
     die "El instalador descargado no es el esperado (¿copia vieja en cache?).
-Vuelve a intentarlo en unos segundos."
+Mira que contiene:
+    head -5 \"$INST\"
+Y si es basura, vuelve a intentarlo."
 fi
 
 step "Arrancando el instalador"

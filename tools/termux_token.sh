@@ -35,10 +35,19 @@ EXPLICA
 
 # ---------------------------------------------------------------- entrada
 DATO=""
+INTENTOS=0
 while [ -z "$DATO" ]; do
+    INTENTOS=$((INTENTOS + 1))
+    if [ "$INTENTOS" -gt 5 ]; then
+        die "no recibi ningun token. Vuelve a ejecutarlo cuando lo tengas a mano."
+    fi
     printf 'Pega aqui tu token (o el JSON) y pulsa Enter: '
-    # Se lee una sola linea; si el JSON viene con saltos, se pide igual.
-    read -r DATO
+    # read devuelve fallo al llegar al final de la entrada (Ctrl+D). Sin esta
+    # comprobacion el bucle imprimia el mensaje sin parar.
+    if ! read -r DATO; then
+        printf '\n'
+        die "entrada cerrada sin token. Vuelve a ejecutarlo y pega el token."
+    fi
     DATO=$(printf '%s' "$DATO" | tr -d '\r')
 done
 
