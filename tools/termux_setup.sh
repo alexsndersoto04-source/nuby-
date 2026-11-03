@@ -68,22 +68,62 @@ for p in \
 do
     [ -f "$p" ] && CREDS="$p" && break
 done
+# Las dos rutas mas probables: el home y la memoria del telefono.
 if [ -z "$CREDS" ]; then
     CREDS=$(find "$HOME" -maxdepth 6 -name 'kaggle*.json' 2>/dev/null | head -1)
 fi
+if [ -z "$CREDS" ]; then
+    CREDS=$(find /sdcard /storage/emulated/0 -maxdepth 4 -name 'kaggle*.json' \
+             -not -path '*/Android/*' 2>/dev/null | head -1)
+fi
+
+# Si aparece, se copia al home para no depender del permiso de la memoria.
+case "$CREDS" in
+    /sdcard/*|/storage/*)
+        mkdir -p "$HOME"
+        cp "$CREDS" "$HOME/kaggle.json" && echo "     copiado desde la memoria del telefono"
+        CREDS="$HOME/kaggle.json"
+        ;;
+esac
 
 if [ -z "$CREDS" ]; then
     cat <<'AYUDA'
 
-No encontre kaggle.json. Hay que bajarlo (una sola vez):
+Kaggle 2.2.5 ya funciona, solo falta el fichero de credenciales
+(es el mismo para siempre: se baja una vez).
 
-  1. En el navegador entra en https://www.kaggle.com/settings
-  2. Pulsa "Create New Token" (seccion API)
-  3. Se descarga kaggle.json
+  1. En el navegador abre  https://www.kaggle.com/settings
+  2. Baja hasta "API" y pulsa "Create New Token"
+  3. Se descargara un fichero llamado kaggle.json
 
-Si no puedes descargarlo, activa primero el acceso a Descargas:
-     termux-setup-storage
-y acepta el permiso. Despues vuelve a ejecutar este script.
+Ahora hay que dejarlo en la carpeta de Descargas del telefono para que este
+script lo encuentre. Lo mas facil:
+
+       termux-setup-storage
+
+(Acepta el permiso que saldra en pantalla. Si ya lo aceptaste antes, este paso
+no hace falta.)
+
+Y despues:
+
+  - Si el fichero se quedo en Descargas, nada mas: vuelve a lanzar esto
+       bash setup.sh
+    y lo encontrara solo.
+
+  - Si no lo encuentras, muevelo tu al home de Termux. Desde el navegador
+    suele estar en "Descargas"; puedes copiarlo con:
+
+       cp /sdcard/Download/kaggle.json ~/kaggle.json
+
+    (o /sdcard/Descargas/kaggle.json si el telefono esta en espanol)
+
+Comprobar que quedo bien:
+
+       ls -l ~/kaggle.json
+
+Y volver a lanzar:
+
+       bash setup.sh
 
 AYUDA
     exit 1
