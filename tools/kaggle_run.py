@@ -347,6 +347,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--no-wait", action="store_true", help="lanzar y salir")
     ap.add_argument("--fetch", action="store_true", help="recoger la ultima corrida")
+    ap.add_argument("--log", action="store_true",
+                    help="mostrar el registro de la ultima corrida y salir")
     a = ap.parse_args()
 
     user = user_de_kaggle()
@@ -355,6 +357,10 @@ def main():
     print(SEP)
     print("CORTEX-LM en Kaggle")
     print(SEP)
+
+    if a.log:
+        mostrar_registro(kid, lineas=80)
+        return 0
 
     if a.fetch:
         recoger(kid)
