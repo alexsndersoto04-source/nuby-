@@ -369,6 +369,34 @@ def buscar_en_dataset():
     return texto, motor
 
 
+def escribir_motor_pegado():
+    """Escribe el motor que viene pegado en el propio cuaderno.
+
+    Devuelve la carpeta del proyecto, o None si el cuaderno no lo trae.
+    Esto va ANTES de mirar el dataset: el motor del dataset se queda viejo en
+    cuanto se cambia el codigo, y regenerarlo a mano es un paso que se olvida.
+    """
+    try:
+        motor = motor_pegado()          # noqa: F821  (lo inyecta el lanzador)
+    except Exception:                                    # noqa: BLE001
+        return None
+    if not motor:
+        return None
+    destino = os.path.join(WORK, "cortex-lm")
+    os.makedirs(os.path.join(destino, "engine"), exist_ok=True)
+    os.makedirs(os.path.join(destino, "tools"), exist_ok=True)
+    for ruta, texto in motor.items():
+        rel = ruta.split("cortex-lm/", 1)[-1]
+        salida = os.path.join(destino, rel)
+        os.makedirs(os.path.dirname(salida), exist_ok=True)
+        with open(salida, "w", encoding="utf-8") as f:
+            f.write(texto)
+    with open(os.path.join(destino, "Makefile"), "w", encoding="utf-8") as f:
+        f.write(Makefile_)
+    print(f"  motor pegado en el cuaderno ({len(motor)} ficheros)")
+    return destino
+
+
 def get_repo():
     """Trae solo los ficheros necesarios, sin git.
 
@@ -376,6 +404,12 @@ def get_repo():
     Bajando los ficheros con urllib el cuaderno funciona pegando codigo a mano
     en Kaggle, sin clonar nada.
     """
+    # 1) el motor que viaja pegado en este mismo cuaderno: siempre al dia
+    pegado = escribir_motor_pegado()
+    if pegado:
+        parte("motor del cuaderno (no hace falta dataset al dia)")
+        return pegado
+
     if LOCAL:
         print("\n--- MODO LOCAL: usando el codigo ya presente ---")
         return os.path.join(WORK, "cortex-lm")

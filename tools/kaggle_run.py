@@ -143,16 +143,82 @@ def descargar(remoto, destino, local_base=None):
         f.write(datos)
 
 
+# Ficheros del motor que viajan dentro del cuaderno.
+MOTOR = [
+    "cortex-lm/engine/cortex_lm.cpp",
+    "cortex-lm/engine/cortex_lm.hpp",
+    "cortex-lm/engine/cortex_lm_main.cpp",
+    "cortex-lm/tools/bench_rls.cpp",
+]
+
+
+def descargar_texto(remoto, local_base=None):
+    """Baja un fichero del repo y lo devuelve como texto."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        destino = os.path.join(td, os.path.basename(remoto))
+        descargar(remoto, destino, local_base)
+        with open(destino, encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def empaquetar_motor(motor, cuaderno):
+    """Devuelve el cuaderno con el motor metido como cadena comprimida."""
+    import base64
+    import zlib
+
+    crudo = json.dumps(motor, ensure_ascii=False).encode("utf-8")
+    b64 = base64.b64encode(zlib.compress(crudo, 9)).decode("ascii")
+    trozos = [b64[i:i + 76] for i in range(0, len(b64), 76)]
+    bloque = "\n".join(f'    "{t}"' for t in trozos)
+
+    cabecera = (
+        "# ---------------------------------------------------------------------------\n"
+        "# MOTOR PEGADO.\n"
+        "# Va dentro del cuaderno, no en el dataset: asi el kernel no depende de que\n"
+        "# el dataset adjunto este al dia. Se genero automaticamente desde el\n"
+        "# repositorio; no editar a mano.\n"
+        "# ---------------------------------------------------------------------------\n"
+        "import base64 as _b64\n"
+        "import json as _json\n"
+        "import zlib as _zlib\n"
+        "\n"
+        "_MOTOR_B64 = (\n"
+        f"{bloque}\n"
+        ")\n"
+        "\n"
+        "\n"
+        "def motor_pegado():\n"
+        "    return _json.loads(_zlib.decompress(_b64.b64decode(_MOTOR_B64))\n"
+        "                       .decode('utf-8'))\n"
+        "\n"
+        "\n"
+    )
+    return cabecera + cuaderno
+
+
 def preparar_carpeta(user, dataset=None):
     d = os.path.expanduser("~/cortex_kaggle")
     os.makedirs(d, exist_ok=True)
 
-    say("Descargando el codigo del repositorio")
-    # El cuaderno baja el motor el solo; aqui solo hacen falta su codigo y su
-    # ficha. Asi el paquete sube en segundos aunque haya mala conexion.
-    descargar("kaggle/run_cortex_lm.py", os.path.join(d, "run_cortex_lm.py"),
-              os.environ.get("CORTEX_LOCAL_BASE"))
-    print("     run_cortex_lm.py")
+    say("Preparando el paquete del kernel")
+    # El CUADERNO viaja con su codigo pegado. Asi el kernel no depende ni de
+    # internet ni de que el dataset este al dia: cuando el dataset era antiguo,
+    # el kernel se paraba por un fichero que faltaba y habia que regenerarlo a
+    # mano. Empaquetando el motor como texto, ese paso desaparece.
+    nb = descargar_texto("kaggle/run_cortex_lm.py",
+                         os.environ.get("CORTEX_LOCAL_BASE"))
+    motor = {}
+    for ruta in MOTOR:
+        try:
+            motor[ruta] = descargar_texto(ruta, os.environ.get("CORTEX_LOCAL_BASE"))
+        except Exception as e:  # noqa: BLE001
+            raise SystemExit(f"No pude bajar {ruta} del repositorio ({e}).")
+    pegado = empaquetar_motor(motor, nb)
+    with open(os.path.join(d, "run_cortex_lm.py"), "w", encoding="utf-8") as f:
+        f.write(pegado)
+    print(f"     cuaderno + motor pegado ({len(motor)} ficheros, "
+          f"{len(pegado) // 1024} KB)")
 
     meta = {
         "id": f"{user}/{SLUG_TITULO}",
