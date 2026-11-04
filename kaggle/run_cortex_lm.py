@@ -285,9 +285,7 @@ FICHEROS = [
     "cortex-lm/engine/cortex_lm.cpp",
     "cortex-lm/engine/cortex_lm.hpp",
     "cortex-lm/engine/cortex_lm_main.cpp",
-    "cortex-lm/tools/bench.cpp",
-    "cortex-lm/tools/bench_joint.cpp",
-    "cortex-lm/tools/make_test_corpus.py",
+    "cortex-lm/tools/bench_rls.cpp",
 ]
 
 
@@ -388,12 +386,12 @@ def get_repo():
         destino = os.path.join(WORK, "cortex-lm")
         os.makedirs(os.path.join(destino, "engine"), exist_ok=True)
         os.makedirs(os.path.join(destino, "tools"), exist_ok=True)
+        # bench_rls.cpp es el banco bueno (lector RLS y capa con memoria). Si el
+        # dataset es antiguo y no lo trae, se usa bench_joint.cpp como sustituto:
+        # compila igual pero mide menos cosas. Antes se exigian 5 ficheros
+        # EXACTOS y un dataset de 4 tumbaba la corrida entera por eso.
         nombres = {"cortex_lm.cpp": "engine", "cortex_lm.hpp": "engine",
-                   "cortex_lm_main.cpp": "engine",
-                   "bench_rls.cpp": "tools", "bench_joint.cpp": "tools"}
-        # bench_rls.cpp es el banco que usa el lector RLS (regla local) y la
-        # capa con memoria. Es el que da la cifra buena; los otros quedan como
-        # referencia historica.
+                   "cortex_lm_main.cpp": "engine", "bench_rls.cpp": "tools"}
         copiados = 0
         for nombre, sub in nombres.items():
             origen = os.path.join(ruta_motor, nombre)
@@ -401,7 +399,18 @@ def get_repo():
                 import shutil
                 shutil.copy(origen, os.path.join(destino, sub, nombre))
                 copiados += 1
-        if copiados >= 5:
+        # sustituto si el dataset es antiguo
+        destino_bench = os.path.join(destino, "tools", "bench_rls.cpp")
+        if not os.path.exists(destino_bench):
+            for alt in ("bench_joint.cpp", "bench.cpp"):
+                origen_alt = os.path.join(ruta_motor, alt)
+                if os.path.exists(origen_alt):
+                    import shutil
+                    shutil.copy(origen_alt, destino_bench)
+                    print(f"  el dataset no traia bench_rls.cpp: uso {alt}")
+                    copiados += 1
+                    break
+        if copiados >= 4:
             print(f"  motor copiado del dataset ({copiados} ficheros)")
             # el Makefile se genera aqui: no hace falta bajarlo
             with open(os.path.join(destino, "Makefile"), "w", encoding="utf-8") as f:
@@ -538,6 +547,21 @@ def main():
     # ------------------------------------------------------------------
     SEMILLAS = [1234, 7, 99, 2024, 555]
     # argumentos: NTR EPOCAS K LH PL ETA WSCALE LAG NORM METODO lambda alf p0 SEED
+    # Segun que banco se haya podido copiar, los argumentos son distintos.
+    # bench_rls: NTR EPOCAS K LH PL ETA WSCALE LAG NORM METODO lambda alf p0 SEED
+    # bench_joint (sustituto): EPOCHS K LH PL ETA WSCALE LAG [NMAX]
+    # Pasarle los argumentos de uno al otro no da error: da una medida falsa.
+    # Por eso se comprueba que el banco sea el bueno antes de medir.
+    with open(os.path.join(proj, "tools", "bench_rls.cpp"),
+              encoding="utf-8", errors="ignore") as f:
+        es_rls = "rls_paso" in f.read()
+    if not es_rls:
+        parte("AVISO: el dataset es antiguo y no trae el banco RLS")
+        print("\nEl dataset adjunto no trae bench_rls.cpp, que es el unico banco")
+        print("que mide el sistema definitivo. Sin el, las cifras de abajo NO")
+        print("valen: son otro banco con otros argumentos. Hay que regenerar el")
+        print("dataset en el telefono con:  python3 tools/kaggle_dataset.py")
+
     def correr(tag, argv):
         parte(f"{tag} arrancando")
         out = run_bench(proj, {"src": "bench_rls.cpp", "tag": tag, "argv": argv})
@@ -567,6 +591,16 @@ def main():
         parte(f"{nombre}: media {media:.3f} bpc desv {desv:.3f}")
         return {"nombre": nombre, "media": media, "desv": desv,
                 "vals": vals, "bpc": media, "acc": 0.0}
+
+    if not es_rls:
+        # Sin el banco bueno no se mide: mejor decirlo que publicar una cifra
+        # que parece un resultado y no lo es.
+        parte("PARADO: hace falta regenerar el dataset con el motor actual")
+        print("\n" + SEP)
+        print("NO SE MIDIO NADA. Copia este mensaje en el chat.")
+        print(SEP)
+        print(f"auditoría del motor: {'TODO OK' if audit_ok else 'FALLÓ'}")
+        return 2
 
     print("\n--- sistema completo, texto no visto, 5 semillas ---")
     # LH=8: con la linea de retardo (configuracion que cumple el objetivo).

@@ -42,9 +42,12 @@ MOTOR = [
     "cortex-lm/engine/cortex_lm.cpp",
     "cortex-lm/engine/cortex_lm.hpp",
     "cortex-lm/engine/cortex_lm_main.cpp",
-    "cortex-lm/tools/bench.cpp",
-    "cortex-lm/tools/bench_joint.cpp",
+    "cortex-lm/tools/bench_rls.cpp",
 ]
+
+# Commit fijo de reserva: si la rama da una copia cacheada o falla, se
+# pide por hash, que no se puede cachear.
+PIN = "bd68925"
 
 SEP = "=" * 62
 
@@ -170,8 +173,13 @@ def main():
         destino = os.path.join(WORK, "motor", os.path.basename(ruta))
         try:
             datos = bajar(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{ruta}")
-        except Exception as e:  # noqa: BLE001
-            die(f"no pude bajar {ruta} ({type(e).__name__})")
+        except Exception:  # noqa: BLE001
+            # La versión fijada por commit como reserva: una rama se puede
+            # cachear, un hash no.
+            try:
+                datos = bajar(f"https://raw.githubusercontent.com/{REPO}/{PIN}/{ruta}")
+            except Exception as e:  # noqa: BLE001
+                die(f"no pude bajar {ruta} ({type(e).__name__})")
         with open(destino, "wb") as f:
             f.write(datos)
         print(f"  {os.path.basename(ruta)} ({len(datos):,} bytes)")
