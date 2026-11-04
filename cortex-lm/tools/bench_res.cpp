@@ -351,6 +351,112 @@ struct Ref {
     }
 };
 
+
+// --------------------------------------------------------------- 2a etapa
+// Una capa recurrente PEQUENA que no ve el texto: ve el ESTADO de la primera
+// etapa. Su trabajo es comprimir: de 1.500 numeros a unos cientos, quedandose
+// con lo que cambia despacio (el hilo de la frase) y tirando el detalle letra a
+// letra. La conectividad tambien es fija y aleatoria; solo la lee el lector.
+//
+// Por que puede ayudar: el lector lineal tiene que sacar 70 probabilidades de un
+// vector que cambia muchisimo en cada simbolo. Una segunda etapa con su propia
+// dinamica le da una version mas estable de ese vector, que es mas facil de
+// leer. Es el mismo truco que ya funciono al pasar de la ventana al estado.
+struct Etapa2 {
+    int N = 0, NI = 0, grado = 8;
+    std::vector<int> ix;
+    std::vector<float> wv;
+    std::vector<float> x, xn;
+    double rho = 0.8, beta = 1.0;
+
+    void init(int n, int n_in, unsigned seed, double radio, double ganancia,
+              int g) {
+        N = n; NI = n_in; rho = radio; beta = ganancia;
+        grado = std::min(g, std::max(1, n_in));
+        std::mt19937 rng(seed * 7919u + 13u);
+        std::normal_distribution<double> nd(0.0, 1.0);
+        std::uniform_int_distribution<int> jd(0, n_in - 1);
+        ix.assign((size_t)N * grado, 0);
+        wv.assign((size_t)N * grado, 0.0f);
+        const double sw = 1.0 / std::sqrt((double)grado);
+        for (int i = 0; i < N; ++i)
+            for (int k = 0; k < grado; ++k) {
+                ix[(size_t)i * grado + k] = jd(rng);
+                wv[(size_t)i * grado + k] = (float)(nd(rng) * sw);
+            }
+        x.assign(N, 0.0f);
+        xn.assign(N, 0.0f);
+    }
+
+    void reset() { std::fill(x.begin(), x.end(), 0.0f); }
+
+    void paso(const float *in) {
+        const float r = (float)rho, b = (float)beta;
+        for (int i = 0; i < N; ++i) {
+            const int *pi = &ix[(size_t)i * grado];
+            const float *pv = &wv[(size_t)i * grado];
+            float ent = 0.0f;
+            for (int k = 0; k < grado; ++k) ent += pv[k] * in[pi[k]];
+            // recurrencia: se mezcla con el estado anterior de la propia etapa
+            xn[i] = std::tanh(r * x[(size_t)((i * 7 + 3) % (size_t)N)] + b * ent);
+        }
+        x.swap(xn);
+    }
+};
+
+
+// --------------------------------------------------- sistema combinado (PPM)
+// La red sola pierde contra un contador de 2-3 caracteres, y el contador solo no
+// usa nada de lo que la red aporta (que es mucho: bate al bigrama por 0,30).
+// Aqui se combinan los dos con un peso aprendido, y se mide SIEMPRE la version
+// sin red sobre el mismo texto. Si el combinado no mejora al contador solo, la
+// red no aporta nada que el contador no tuviera.
+struct Ppm {
+    int C = 0, A = 256;
+    double alfa = 1.0;
+    std::vector<std::map<std::string, std::map<int, int>>> ord;
+    std::vector<std::map<std::string, int>> tot;
+    std::map<int, int> uni;
+
+    void entrena(const std::vector<unsigned char> &t, int n) {
+        ord.assign((size_t)C + 1, {});
+        tot.assign((size_t)C + 1, {});
+        for (int i = 0; i + 1 < n; ++i) uni[t[i]]++;
+        for (int o = 1; o <= C; ++o)
+            for (int i = 0; i + o < n; ++i) {
+                const std::string k((const char *)&t[i], (size_t)o);
+                ord[o][k][t[i + o]]++;
+                tot[o][k]++;
+            }
+    }
+
+    // p(y | ultimos o) con retroceso. La primera vez que aparece un contexto se
+    // cuenta como "nuevo": es la senal que usa el peso adaptativo.
+    double p(int y, const unsigned char *fin, int o, bool *nuevo) const {
+        if (o == 0) {
+            if (nuevo) *nuevo = false;
+            double s = 0.0;
+            for (auto &kv : uni) s += kv.second;
+            auto it = uni.find(y);
+            const double cnt = it == uni.end() ? 0.0 : (double)it->second;
+            return (cnt + 0.1) / (s + 0.1 * A);
+        }
+        const std::string k((const char *)(fin - (o - 1)), (size_t)o);
+        auto it = ord[o].find(k);
+        bool baja_nueva = false;
+        const double baja = p(y, fin, o - 1, &baja_nueva);
+        if (it == ord[o].end()) {
+            if (nuevo) *nuevo = true;
+            return baja;
+        }
+        if (nuevo) *nuevo = false;
+        const double t_ = (double)tot[o].at(k);
+        auto jt = it->second.find(y);
+        const double cnt = jt == it->second.end() ? 0.0 : (double)jt->second;
+        return (cnt + alfa * baja) / (t_ + alfa);
+    }
+};
+
 // ---------------------------------------------------- lector de dos escalas
 // Un lector lineal no mezcla bien dos tipos de rasgo que se comportan distinto:
 // el estado del reservorio (denso, continuo) y el contexto directo (one-hot,
@@ -401,6 +507,10 @@ int main(int argc, char **argv) {
     const double BETA = argc > 15 ? std::atof(argv[15]) : 0.0;  // simbolo anterior
     const int ADA = argc > 16 ? std::atoi(argv[16]) : 0;
     const double ESC = argc > 17 ? std::atof(argv[17]) : 1.0;  // escalas de memoria
+    const int N2 = argc > 18 ? std::atoi(argv[18]) : 0;   // segunda etapa
+    const double RHO2 = argc > 19 ? std::atof(argv[19]) : 0.8;
+    const double BETA2 = argc > 20 ? std::atof(argv[20]) : 1.0;
+    const int VEL  = argc > 21 ? std::atoi(argv[21]) : 0;  // velocidad del estado
 
     auto train = load("data/real_train.txt");
     auto test  = load("data/real_hold.txt");
@@ -420,8 +530,15 @@ int main(int argc, char **argv) {
     // cuenta y la mezcla se aprende aparte. Con un solo lector el contexto
     // corto quedaba dominado por el estado del reservorio (medido: 2,948).
     const bool dos = CC > 0;
-    const int F = dos ? N : (N + CC);
+    // rasgos del lector: estado (+ 2a etapa) y, si no hay dos lectores,
+    // tambien el contexto directo.
+    const int F0 = N * (VEL ? 2 : 0) + (VEL ? 0 : N) + (N2 > 0 ? N2 : 0);
+    const int F = F0 + (dos ? 0 : CC);
     Lector lec;
+    // Con VEL cada neurona aporta dos rasgos: posicion y velocidad.
+    const int FD = N * (VEL ? 2 : 1) + (N2 > 0 ? N2 : 0);
+    const int Fr = (dos ? FD : FD + CC) + 0;
+    (void)Fr;
     lec.init(F, clases, LAM, P0, METODO == 1);
     lec.tasa_grad = TLR;
     lec.decae = DECAE;
@@ -437,6 +554,15 @@ int main(int argc, char **argv) {
     Mezcla mez;
     mez.tasa = 0.02;
 
+    // Normalizacion: DESACTIVADA. Se probo y sale rota (27 bpc): al dividir por
+    // la desviacion, las neuronas casi mudas (desv ~ 0) explotan. No se deja
+    // como opcion para no dejar una trampa.
+    const std::vector<double> mu(N, 0.0), sd(N, 1.0);
+    std::vector<float> xprev(N, 0.0f);
+
+    Etapa2 e2;
+    if (N2 > 0 && N > 0) e2.init(N2, N, SEED, RHO2, BETA2, 8);
+
     Reservorio res;
     // grado ANTES de init: init dimensiona las listas de vecinos con el.
     if (N > 0) res.init(N, 256, SEED, AL, RH, GRADO);
@@ -445,8 +571,9 @@ int main(int argc, char **argv) {
 
     std::printf("adagrad %d | ", lec.adagrad);
     std::printf("train %d | test %d | alfabeto %d | rasgos %d (reservorio %d + contexto %d)"
-                " | alfa %.2f rho %.2f escalas %.1f | metodo %s tasa %.3f seed %u\n",
-                NTR, NTE, A, F, N, CC, AL, RH, ESC,
+                " | alfa %.2f rho %.2f escalas %.1f | etapa2 %d (rho2 %.2f beta2 %.2f)"
+                " | metodo %s tasa %.3f seed %u\n",
+                NTR, NTE, A, F, N, CC, AL, RH, ESC, N2, RHO2, BETA2,
                 METODO == 1 ? "RLS/FORCE" : "error local", TLR, SEED);
 
     // z: estado del reservorio (normalizado) + contexto directo one-hot
@@ -455,11 +582,22 @@ int main(int argc, char **argv) {
         double bits = 0.0, bits1 = 0.0, bits2 = 0.0;
         int m = 0;
         if (N > 0) res.reset();
+        if (N2 > 0) e2.reset();
+        std::fill(xprev.begin(), xprev.end(), 0.0f);
         std::fill(zc.begin(), zc.end(), 0.0);
         for (int t = 0; t + 1 < n; ++t) {
             if (N > 0) {
                 res.paso(txt[t]);
-                for (int i = 0; i < N; ++i) lec.z[i] = res.x[i];
+                for (int i = 0; i < N; ++i) {
+                    const double v = (res.x[i] - mu[i]) / sd[i];
+                    lec.z[i] = v;
+                    if (VEL) lec.z[N + i] = v - (xprev[i] - mu[i]) / sd[i];
+                    xprev[i] = res.x[i];
+                }
+                if (N2 > 0) {
+                    e2.paso(res.x.data());
+                    for (int i = 0; i < N2; ++i) lec.z[N + i] = e2.x[i];
+                }
             }
             // contexto directo: ultimos CC simbolos (el actual incluido)
             if (dos && N > 0) {
@@ -483,7 +621,7 @@ int main(int argc, char **argv) {
                 }
             } else {
                 Lector &L = (N == 0 && dos) ? lec2 : lec;
-                const int base = (N == 0 && dos) ? 0 : N;
+                const int base = (N == 0 && dos) ? 0 : F0;
                 for (int c = 0; c < CC; ++c) {
                     const int k = t - c;
                     if (k < 0) continue;
@@ -520,6 +658,47 @@ int main(int argc, char **argv) {
     // --- test ---
     const int nte = std::min((int)test.size(), NTE);
     std::vector<unsigned char> te(test.begin(), test.begin() + nte);
+    // probabilidad de la red para cada simbolo del test (en orden)
+    std::vector<float> p_red;
+    {
+        p_red.reserve(nte + 1);
+        if (N > 0) res.reset();
+        if (N2 > 0) e2.reset();
+        std::fill(xprev.begin(), xprev.end(), 0.0f);
+        for (int t = 0; t + 1 < nte; ++t) {
+            if (N > 0) {
+                res.paso(te[t]);
+                for (int i = 0; i < N; ++i) {
+                    const double v = (res.x[i] - mu[i]) / sd[i];
+                    lec.z[i] = v;
+                    if (VEL) lec.z[N + i] = v - (xprev[i] - mu[i]) / sd[i];
+                    xprev[i] = res.x[i];
+                }
+                if (N2 > 0) {
+                    e2.paso(res.x.data());
+                    for (int i = 0; i < N2; ++i) lec.z[N + i] = e2.x[i];
+                }
+            }
+            if (dos && N > 0) {
+                for (int c = 0; c < CC; ++c) {
+                    const int k = t - c;
+                    if (k < 0) continue;
+                    lec2.z[c * 256 + te[k]] = 1.0;
+                }
+                const double q1 = lec.prob(te[t + 1]);
+                const double q2 = lec2.prob(te[t + 1]);
+                p_red.push_back((float)mez.bits_y_ajusta(q1, q2, false, 1.0));
+                (void)0;
+                for (int c = 0; c < CC; ++c) {
+                    const int k = t - c;
+                    if (k < 0) continue;
+                    lec2.z[c * 256 + te[k]] = 0.0;
+                }
+            } else {
+                p_red.push_back((float)-std::log2(std::max(1e-12, lec.prob(te[t + 1]))));
+            }
+        }
+    }
     auto res_test = lee(te, nte, false);
 
     // --- referencias ---
@@ -545,5 +724,46 @@ int main(int argc, char **argv) {
     std::printf("  diferencia frente al BIGRAMA      : %+.3f bpc (%s)\n",
                 res_test.first - r1, res_test.first < r1 ? "GANA" : "PIERDE");
     std::printf("  simbolos de test                  : %d\n", res_test.second);
+
+    // ---------------- sistema combinado: red + contador ----------------
+    // Comparacion justa: los DOS predicen el MISMO objetivo (el siguiente
+    // simbolo). El contador usa hasta CP caracteres de historia (el propio
+    // caracter actual incluido) y retrocede cuando no ha visto ese contexto.
+    // Su error se mide aparte, y luego se combinan con un peso adaptable que
+    // solo usa la senal local (que modelo acerto mas en ese simbolo).
+    const int CP = argc > 22 ? std::atoi(argv[22]) : 1;
+    if (CP > 0 && (int)p_red.size() == nte - 1) {
+        Ppm pp; pp.C = CP; pp.A = A; pp.entrena(train, NTR);
+
+        // contador solo, sobre el mismo objetivo
+        double bits_ppm = 0.0;
+        for (int t = 0; t + 1 < nte; ++t)
+            bits_ppm += -std::log2(std::max(1e-12, pp.p(te[t + 1], &te[t], CP, nullptr)));
+        bits_ppm /= std::max(1, nte - 1);
+
+        // combinacion con peso adaptativo (media de probabilidades)
+        double b = 0.0, s_comb = 0.0;
+        const double tasa_m = 0.02;
+        for (int t = 0; t + 1 < nte; ++t) {
+            const double q = pp.p(te[t + 1], &te[t], CP, nullptr);
+            const double pr = std::pow(2.0, -(double)p_red[t]);
+            const double w = 1.0 / (1.0 + std::exp(-b));
+            const double mix = (1.0 - w) * pr + w * q;
+            s_comb += -std::log2(std::max(1e-12, mix));
+            const double g = (pr - q) / std::max(1e-12, mix) * w * (1.0 - w);
+            b -= tasa_m * g;
+        }
+        const double comb = s_comb / std::max(1, nte - 1);
+
+        std::printf("\n--- sistema combinado (los dos predicen el siguiente) ---\n");
+        std::printf("  contador %d caracteres solo        : %.3f bpc\n", CP, bits_ppm);
+        std::printf("  red sola                          : %.3f bpc\n", res_test.first);
+        std::printf("  red + contador (peso adaptable)   : %.3f bpc\n", comb);
+        std::printf("  lo que aporta la red al contador  : %+.3f bpc\n",
+                    comb - bits_ppm);
+        std::printf("  lo que aporta el contador a la red: %+.3f bpc\n",
+                    comb - res_test.first);
+    }
+
     return 0;
 }
