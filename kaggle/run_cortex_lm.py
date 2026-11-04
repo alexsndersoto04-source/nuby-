@@ -35,10 +35,11 @@ LOCAL = os.environ.get("CORTEX_LOCAL", "") == "1"
 #     banco A, train 60.000 y 10 epocas ...... 176 s por prueba
 #     banco B, train 20.000 y 2 epocas ....... 18 s
 #     banco B, train 40.000 y 2 epocas ....... 33 s
-# Con las cifras de aqui, la corrida entera cabe en ~25 min.
-TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "40000"))
-HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "8000"))
-EPOCHS_A = int(os.environ.get("CORTEX_EPOCHS_A", "4"))
+# Corrida completa medida en local con 12.000/3.000: 4 min 37 s.
+# Con estas cifras sale en ~25 min en un nucleo lento, y Kaggle da 90.
+TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "30000"))
+HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "6000"))
+EPOCHS_A = int(os.environ.get("CORTEX_EPOCHS_A", "3"))
 EPOCHS_B = int(os.environ.get("CORTEX_EPOCHS_B", "2"))
 
 SEP = "=" * 70
