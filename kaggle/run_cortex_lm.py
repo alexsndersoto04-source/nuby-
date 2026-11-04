@@ -32,15 +32,13 @@ LOCAL = os.environ.get("CORTEX_LOCAL", "") == "1"
 # local con el motor real, porque la corrida anterior (60.000 caracteres y 8
 # epocas) se paso de los 90 minutos y Kaggle ni siquiera llego a publicar el
 # registro. Medido con un solo nucleo lento (parecido al de Kaggle):
-#     banco A, train 60.000 y 10 epocas ...... 176 s por prueba
-#     banco B, train 20.000 y 2 epocas ....... 18 s
-#     banco B, train 40.000 y 2 epocas ....... 33 s
-# Corrida completa medida en local con 12.000/3.000: 4 min 37 s.
-# Con estas cifras sale en ~25 min en un nucleo lento, y Kaggle da 90.
-TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "30000"))
-HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "6000"))
-EPOCHS_A = int(os.environ.get("CORTEX_EPOCHS_A", "3"))
-EPOCHS_B = int(os.environ.get("CORTEX_EPOCHS_B", "2"))
+# Medido en local: 20 corridas con 4.000/2.000 tardan 2 min. Con 20.000/5.000
+# y un nucleo lento son unos 25-30 min: cabe de sobra en los 90 de Kaggle.
+TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "20000"))
+HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "5000"))
+# El lector RLS converge en UNA pasada, asi que ya no hay "epocas" que elegir.
+# Lo que manda es el tamano del texto: 20 corridas (4 condiciones x 5 semillas)
+# tienen que caber en el tiempo de Kaggle.
 
 SEP = "=" * 70
 
@@ -392,7 +390,10 @@ def get_repo():
         os.makedirs(os.path.join(destino, "tools"), exist_ok=True)
         nombres = {"cortex_lm.cpp": "engine", "cortex_lm.hpp": "engine",
                    "cortex_lm_main.cpp": "engine",
-                   "bench.cpp": "tools", "bench_joint.cpp": "tools"}
+                   "bench_rls.cpp": "tools", "bench_joint.cpp": "tools"}
+        # bench_rls.cpp es el banco que usa el lector RLS (regla local) y la
+        # capa con memoria. Es el que da la cifra buena; los otros quedan como
+        # referencia historica.
         copiados = 0
         for nombre, sub in nombres.items():
             origen = os.path.join(ruta_motor, nombre)
@@ -528,46 +529,84 @@ def main():
 
     # --- bancos ---
     N = min(TRAIN_CHARS, len(train) - 2)
-    runs = []
-    print("\n--- banco A: lector entrenado sobre features congeladas ---")
-    for tag, argv in (
-        ("A_sin", [N, EPOCHS_A, 64, 8, 0, 0, 0.30, 0]),
-        ("A_con", [N, EPOCHS_A, 64, 8, 1, 1e-3, 0.30, 0]),
-    ):
-        parte(f"banco A [{tag}] arrancando (mide el lector)")
-        out = run_bench(proj, {"src": "bench.cpp", "tag": tag, "argv": argv})
+    runs = []          # historico
+    ref_bigram = float("nan")
+    # ------------------------------------------------------------------
+    # El sistema definitivo: lector RLS (regla local) + capa con memoria.
+    # bench_rls usa el motor que se acaba de mejorar: 8 ticks por simbolo y
+    # fatiga mas lenta. Cinco semillas por condicion, como se acordo.
+    # ------------------------------------------------------------------
+    SEMILLAS = [1234, 7, 99, 2024, 555]
+    # argumentos: NTR EPOCAS K LH PL ETA WSCALE LAG NORM METODO lambda alf p0 SEED
+    def correr(tag, argv):
+        parte(f"{tag} arrancando")
+        out = run_bench(proj, {"src": "bench_rls.cpp", "tag": tag, "argv": argv})
+        nonlocal ref_bigram
         r = parse(out)
         if r:
-            runs.append((f"A {tag.split('_')[1]}", r))
-            parte(f"banco A [{tag}] hecho: {r['bpc']:.3f} bpc, acierto {r['acc']:.1f}%")
-        else:
-            parte(f"banco A [{tag}] no dio un resultado legible")
+            parte(f"{tag}: {r['bpc']:.3f} bpc, acierto {r['acc']:.1f}%")
+            runs.append(r)
+            if ref_bigram != ref_bigram:      # primera vez (NaN)
+                ref_bigram = r["bigram"]
+        return r
 
-    print("\n--- banco B: entrenamiento conjunto en línea, símbolo siguiente ---")
-    for tag, argv in (
-        ("B_sin",     [EPOCHS_B, 64, 8, 0, 0,    0.30, 1, N]),
-        ("B_con_bajo",[EPOCHS_B, 64, 8, 1, 1e-3, 0.30, 1, N]),
-        ("B_con_medio",[EPOCHS_B, 64, 8, 1, 1e-2, 0.30, 1, N]),
-        ("B_con_alto",[EPOCHS_B, 64, 8, 1, 3e-2, 0.30, 1, N]),
-    ):
-        parte(f"banco B [{tag}] arrancando (aprendizaje en linea)")
-        out = run_bench(proj, {"src": "bench_joint.cpp", "tag": tag, "argv": argv})
-        r = parse(out)
-        if r:
-            runs.append((f"B {tag.split('_', 1)[1]}", r))
-            parte(f"banco B [{tag}] hecho: {r['bpc']:.3f} bpc, acierto {r['acc']:.1f}%")
-        else:
-            parte(f"banco B [{tag}] no dio un resultado legible")
+    def serie(nombre, base_argv):
+        """Corre las 5 semillas y devuelve media y desviacion."""
+        vals = []
+        for sem in SEMILLAS:
+            r = correr(f"{nombre}_s{sem}", list(base_argv) + [sem])
+            if r:
+                vals.append(r["bpc"])
+        if not vals:
+            return None
+        media = sum(vals) / len(vals)
+        var = sum((v - media) ** 2 for v in vals) / max(1, len(vals) - 1)
+        desv = var ** 0.5
+        print(f"  {nombre}: media {media:.3f} desv {desv:.3f} "
+              f"({', '.join(f'{v:.3f}' for v in vals)})")
+        parte(f"{nombre}: media {media:.3f} bpc desv {desv:.3f}")
+        return {"nombre": nombre, "media": media, "desv": desv,
+                "vals": vals, "bpc": media, "acc": 0.0}
+
+    print("\n--- sistema completo, texto no visto, 5 semillas ---")
+    # LH=8: con la linea de retardo (configuracion que cumple el objetivo).
+    sys_sin = serie("Sistema sin plasticidad",
+                    [N, 1, 64, 8, 0, 0, 0.30, 1, 0, 1, 1.0, 1.0, 100])
+    sys_con = serie("Sistema con plasticidad",
+                    [N, 1, 64, 8, 1, 3e-4, 0.30, 1, 0, 1, 1.0, 1.0, 100])
+
+    print("\n--- la capa sola, sin linea de retardo (LH=1) ---")
+    # Aqui la unica memoria posible es la capa. Sirve para saber cuanto aporta.
+    cap_sin = serie("Capa sola sin plasticidad",
+                    [N, 1, 64, 1, 0, 0, 0.30, 1, 0, 1, 1.0, 1.0, 100])
+    cap_con = serie("Capa sola con plasticidad",
+                    [N, 1, 64, 1, 1, 3e-4, 0.30, 1, 0, 1, 1.0, 1.0, 100])
 
     # --- resumen ---
     parte("TODO TERMINADO: tabla lista")
     print("\n" + SEP)
-    print("RESUMEN (bpc menor es mejor; 'bigrama' es la referencia a batir)")
+    print("RESUMEN: bpc sobre texto NO VISTO. Cinco semillas. Menor es mejor.")
     print(SEP)
-    print(f"{'prueba':<16}{'bpc':>8}{'acierto':>10}{'bigrama':>10}{'mejora':>10}")
-    for name, r in runs:
-        mej = r["bigram"] - r["bpc"]
-        print(f"{name:<16}{r['bpc']:>8.3f}{r['acc']:>9.1f}%{r['bigram']:>10.3f}{mej:>+10.3f}")
+    print(f"{'condicion':<34}{'media':>8}{'desv':>8}  {'mejor':>7}{'peor':>7}")
+    filas = [sys_sin, sys_con, cap_sin, cap_con]
+    for f in filas:
+        if not f:
+            continue
+        print(f"{f['nombre']:<34}{f['media']:>8.3f}{f['desv']:>8.3f}"
+              f"  {min(f['vals']):>7.3f}{max(f['vals']):>7.3f}")
+    print(SEP)
+    if sys_sin and sys_con:
+        d = sys_con["media"] - sys_sin["media"]
+        pool = ((sys_sin["desv"] ** 2 + sys_con["desv"] ** 2) / 2) ** 0.5
+        veredicto = "EMPATE" if abs(d) < 2 * pool else "EFECTO"
+        print(f"plasticidad en el sistema completo: {d:+.3f} bpc -> {veredicto}")
+    if cap_sin and cap_con:
+        d = cap_con["media"] - cap_sin["media"]
+        pool = ((cap_sin["desv"] ** 2 + cap_con["desv"] ** 2) / 2) ** 0.5
+        veredicto = "EMPATE" if abs(d) < 2 * pool else "EFECTO"
+        print(f"plasticidad en la capa sola:        {d:+.3f} bpc -> {veredicto}")
+    if ref_bigram == ref_bigram:
+        print(f"bigrama de referencia: {ref_bigram:.3f} bpc")
     print(SEP)
     print(f"auditoría del motor: {'TODO OK' if audit_ok else 'FALLÓ'}")
     print("Copia esta tabla y pégala en el chat.")
