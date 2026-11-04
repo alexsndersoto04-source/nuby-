@@ -209,17 +209,42 @@ def main():
     # ---------------------------------------------------------------- subir
     say("Subiendo a Kaggle como dataset privado")
     ref = f"{usuario}/{SLUG}"
-    r = subprocess.run([KAG, "datasets", "create", "-p", WORK, "-r", "zip"],
+    # Primero se INTENTA una version nueva. Si el dataset no existe, version
+    # falla con "not found" y entonces se crea. Antes se hacia al reves y la
+    # deteccion de "ya existe" estaba escrita como "already exists", pero Kaggle
+    # contesta 'The requested slug "..." is already in use by a dataset': la
+    # condicion nunca se cumplia, se daba por bueno el fallo y se imprimia
+    # "Dataset listo" sin haber subido NADA. Ese fue el error que hizo que la
+    # corrida siguiente siguiera viendo el dataset viejo.
+    print("  intentando subir VERSION nueva del dataset")
+    r = subprocess.run([KAG, "datasets", "version", "-p", WORK, "-r", "zip",
+                        "-m", "motor actualizado (RLS + capa con memoria)"],
                        capture_output=True, text=True)
     salida = (r.stdout or "") + (r.stderr or "")
-    if r.returncode != 0 and "already exists" in salida.lower():
-        print("  ya existia, subiendo version nueva")
-        r = subprocess.run([KAG, "datasets", "version", "-p", WORK, "-r", "zip",
-                            "-m", "corpus actualizado"], capture_output=True, text=True)
+    bajo = salida.lower()
+    if r.returncode != 0 and ("not found" in bajo or "404" in bajo
+                              or "does not exist" in bajo):
+        print("  el dataset no existe todavia: creandolo")
+        r = subprocess.run([KAG, "datasets", "create", "-p", WORK, "-r", "zip"],
+                           capture_output=True, text=True)
         salida = (r.stdout or "") + (r.stderr or "")
-    print(salida.strip()[-1200:])
+    print(salida.strip()[-1500:])
     if r.returncode != 0:
-        die("Kaggle rechazo el dataset")
+        die("Kaggle rechazo el dataset. El texto de arriba dice por que.")
+
+    # Comprobacion de verdad: el dataset tiene que llevar el banco RLS.
+    print()
+    say("Comprobando que el dataset lleva el banco RLS")
+    listado = subprocess.run([KAG, "datasets", "files", ref],
+                             capture_output=True, text=True)
+    txt = (listado.stdout or "") + (listado.stderr or "")
+    print(txt.strip()[:600])
+    if listado.returncode == 0 and txt.strip() and "bench_rls" not in txt:
+        print()
+        print("  OJO: el listado no menciona bench_rls.cpp.")
+        print("  Kaggle puede tardar unos minutos en propagar la version nueva.")
+        print("  Si la corrida se para con 'dataset antiguo', espera 5 minutos")
+        print("  y vuelve a lanzar la version del dataset a mano en Kaggle.")
 
     print("\n" + SEP)
     print("Dataset listo:  " + ref)
