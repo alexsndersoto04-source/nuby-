@@ -52,7 +52,11 @@ struct Params {
     float v_th           = 1.0f;   // umbral
     float v_reset        = 0.0f;
     int   refractory     = 1;      // ticks de refractario
-    int   ticks_per_char = 4;      // ticks por simbolo
+    // 8 ticks por simbolo (antes 4). Medido: subir el tiempo de integracion es
+    // la unica palanca de memoria que mejora por si sola (3,437 -> 3,327 bpc a
+    // LH=1) y, combinada con theta_decay 0,95, baja el sistema completo de
+    // 0,941 a 0,532 bpc (43 %). Ver OPCION-B-MEMORIA.md.
+    int   ticks_per_char = 8;      // ticks por simbolo
 
     // --- entrada sensorial ---
     // Cada simbolo enciende un subconjunto fijo de neuronas de la capa 0 con
@@ -104,7 +108,9 @@ struct Params {
     // sube su umbral y tarda en recuperarse. El patron de fatiga codifica que
     // acaba de ocurrir.
     float theta_step     = 0.28f;  // cuanto sube el umbral por disparo
-    float theta_decay    = 0.80f;  // cuanto se relaja por tick
+    // 0,95 y no 0,80: la fatiga es lo que codifica el pasado, asi que relajarla
+    // mas despacio la conserva. A 0,98 se pasa de freno y empeora (3,497 bpc).
+    float theta_decay    = 0.95f;  // cuanto se relaja por tick
     float theta_max      = 1.10f;  // la fatiga debe poder apagar la entrada
 
     // --- plasticidad (elegibilidad + senal difundida) ---
