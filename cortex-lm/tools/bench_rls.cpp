@@ -68,10 +68,14 @@ int main(int argc, char** argv) {
     const double rls_p0 = argc > 13 ? std::atof(argv[13]) : 100.0;
     // Semilla de la red. Necesaria para medir ruido entre inicializaciones.
     const unsigned SEED_ARG = argc > 14 ? (unsigned)std::atoi(argv[14]) : 1234u;
+    // Escala de la senal e-prop. OJO: el 7o argumento es w_scale (el peso
+    // recurrente), NO esto. Confundirlos invalida la comparacion.
+    const float EPROP_ARG = argc > 15 ? (float)std::atof(argv[15]) : -1.0f;
 
     Params p;
     p.eta = ETA > 0 ? ETA : p.eta;
     if (WSC >= 0) p.w_scale = WSC;
+    if (EPROP_ARG >= 0) p.eprop_scale = EPROP_ARG;
     p.seed = SEED_ARG;
     Engine e(p);
     e.build_random(p.seed);
@@ -164,16 +168,38 @@ int main(int argc, char** argv) {
     std::vector<int> clases;
     for (int t = 0; t < NTR; ++t) es_clase[train[t]] = 1;
     for (int c = 0; c < 256; ++c) if (es_clase[c]) clases.push_back(c);
-    // Huella de los pesos: si la plasticidad no los mueve, las dos condiciones
-    // salen identicas y la comparacion no mide nada.
+    // --- Huella de la plasticidad, sinapsis a sinapsis ---
+    // OJO: mirar el cambio de la MEDIA de los pesos no sirve, y ese fue mi error
+    // anterior: unos pesos suben y otros bajan y la media se cancela, asi que
+    // parecia que la plasticidad no hacia nada. Lo que hay que medir es el
+    // cambio ABSOLUTO de cada sinapsis.
     {
-        double w_fin = 0.0;
-        const auto& g1 = e.layer(0).g;
-        for (float w : g1.weight) w_fin += w;
-        w_fin /= (double)std::max<size_t>(1, g1.weight.size());
-        std::printf("  [pesos] media inicial %.5f -> final %.5f (cambio %+.2e)\n",
-                    w_ini, w_fin, w_fin - w_ini);
+        const auto& g = e.layer(0).g;
+        size_t n = g.weight.size();
+        double suma = 0.0, suma2 = 0.0, tipico = 0.0;
+        size_t movidas = 0, movidas_1pc = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const double d = std::fabs((double)g.weight[i] - (double)g.w_init[i]);
+            suma += d; suma2 += d * d;
+            tipico += std::fabs((double)g.w_init[i]);
+            if (d > 1e-7) movidas++;
+            if (d > 0.01 * std::fabs((double)g.w_init[i])) movidas_1pc++;
+        }
+        const double media = suma / std::max<size_t>(1, n);
+        const double var = suma2 / std::max<size_t>(1, n) - media * media;
+        const double sd = var > 0 ? std::sqrt(var) : 0.0;
+        tipico /= std::max<size_t>(1, n);
+        std::printf("  [plasticidad] sinapsis %zu | movidas %zu (%.1f %%) | "
+                    "movidas >1%% del peso %zu (%.1f %%)\n",
+                    n, movidas, 100.0 * movidas / std::max<size_t>(1, n),
+                    movidas_1pc, 100.0 * movidas_1pc / std::max<size_t>(1, n));
+        std::printf("  [plasticidad] eta=%.3g eprop_scale=%.3g w_scale=%.2f\n",
+                (double)ETA, (double)p.eprop_scale, (double)p.w_scale);
+    std::printf("  [plasticidad] cambio absoluto medio %.3e | desv %.3e | "
+                    "peso tipico %.3f | ratio %.3f %%\n",
+                    media, sd, tipico, 100.0 * media / std::max(1e-12, tipico));
     }
+
     std::printf("  clases reales en el train: %d de 256\n", (int)clases.size());
 
     // --- lector softmax multinomial (unico componente que usa gradiente) ---
