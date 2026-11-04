@@ -82,6 +82,13 @@ int main(int argc, char** argv) {
     const float INH_TAU = argc > 18 ? (float)std::atof(argv[18]) : -1.0f;
     const int   TPC     = argc > 19 ? std::atoi(argv[19]) : 0;
     const float TH_STEP = argc > 20 ? (float)std::atof(argv[20]) : -1.0f;
+    // FEAT: 0 = fatiga (theta), 1 = tasa de disparo. Distintas vistas del estado.
+    const int   FEAT    = argc > 21 ? std::atoi(argv[21]) : 0;
+    // REF: contexto (en caracteres) de la referencia con la que se compara.
+    // Compararse contra un bigrama cuando la red ve 8 estados es una comparacion
+    // tramposa en los dos sentidos: si gana, gana por ver mas; si pierde, no se
+    // sabe si es por la red o por pedirle un contexto que el corpus no tiene.
+    const int   REF     = argc > 22 ? std::atoi(argv[22]) : 1;
 
     Params p;
     p.eta = ETA > 0 ? ETA : p.eta;
@@ -442,5 +449,24 @@ int main(int argc, char** argv) {
     std::printf("  TEST (texto no visto, %d simbolos): %.3f bpc | acierto %.1f %%\n",
                 (int)test_eval.size(), res.first, res.second);
     std::printf("  bigrama de referencia            : %.3f bpc\n", ref_bigram);
+    if (REF > 0) {
+        std::map<std::string, std::map<int, int>> ctx;
+        for (int t = 0; t + REF < NTR; ++t)
+            ctx[std::string((const char*)&train[t], (size_t)REF)][train[t + REF]]++;
+        double bits_ref = 0; int m = 0;
+        for (size_t t = 0; t + (size_t)REF < test_eval.size(); ++t) {
+            std::string c((const char*)&test_eval[t], (size_t)REF);
+            const int y = test_eval[t + REF];
+            auto it = ctx.find(c);
+            if (it == ctx.end()) { bits_ref += 16.0; ++m; continue; }
+            double tot = 0;
+            for (auto& kv : it->second) tot += kv.second;
+            const double cnt = it->second.count(y) ? it->second[y] : 0;
+            bits_ref += -std::log2((cnt + 0.1) / (tot + 0.1 * 256));
+            ++m;
+        }
+        std::printf("  referencia de %d caracteres      : %.3f bpc  <-- comparacion justa\n",
+                    REF, bits_ref / std::max(1, m));
+    }
     return 0;
 }
