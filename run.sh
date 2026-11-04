@@ -51,7 +51,7 @@ step "Preparando el lanzador"
 # Si el fichero descargado no tiene una funcion reciente, se reintenta contra
 # un commit concreto, cuya URL nadie puede tener cacheada porque incluye el
 # hash. Asi no hay que adivinar nunca que version llego.
-PIN="dfd1d90"
+PIN="c92698e"
 MARCA="mostrar_registro"
 
 descargar_lanzador() {
