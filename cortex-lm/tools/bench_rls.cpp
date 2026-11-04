@@ -71,11 +71,27 @@ int main(int argc, char** argv) {
     // Escala de la senal e-prop. OJO: el 7o argumento es w_scale (el peso
     // recurrente), NO esto. Confundirlos invalida la comparacion.
     const float EPROP_ARG = argc > 15 ? (float)std::atof(argv[15]) : -1.0f;
+    // --- memoria de la capa (Opción B) ---
+    // Estas son las palancas que NUNCA se habian movido. Con los valores de
+    // partida la red olvida en 2-3 simbolos: la fatiga se relaja al 0,80 por
+    // tick (0,41 por simbolo con 4 ticks) y tau_m=10 deja pasar el 67 % por
+    // simbolo. Ninguna regla de aprendizaje puede construir memoria sobre un
+    // sustrato que olvida.
+    const float TAU_M   = argc > 16 ? (float)std::atof(argv[16]) : -1.0f;
+    const float TH_DEC  = argc > 17 ? (float)std::atof(argv[17]) : -1.0f;
+    const float INH_TAU = argc > 18 ? (float)std::atof(argv[18]) : -1.0f;
+    const int   TPC     = argc > 19 ? std::atoi(argv[19]) : 0;
+    const float TH_STEP = argc > 20 ? (float)std::atof(argv[20]) : -1.0f;
 
     Params p;
     p.eta = ETA > 0 ? ETA : p.eta;
     if (WSC >= 0) p.w_scale = WSC;
     if (EPROP_ARG >= 0) p.eprop_scale = EPROP_ARG;
+    if (TAU_M >= 0) p.tau_m = TAU_M;
+    if (TH_DEC >= 0) p.theta_decay = TH_DEC;
+    if (INH_TAU >= 0) p.inh_tau = INH_TAU;
+    if (TPC > 0) p.ticks_per_char = TPC;
+    if (TH_STEP >= 0) p.theta_step = TH_STEP;
     p.seed = SEED_ARG;
     Engine e(p);
     e.build_random(p.seed);
@@ -151,6 +167,27 @@ int main(int argc, char** argv) {
         float emedio = 0, emax = 0;
         e.stats_error_local(0, emedio, emax);
         std::printf("  [error local] medio %.4f | maximo %.4f\n", emedio, emax);
+    }
+    {
+        // Diagnostico: si las features se vuelven constantes, el lector no
+        // puede distinguir nada aunque el bpc parezca razonable.
+        double m = 0, mn = 1e30, mx = -1e30;
+        for (int t = 0; t < NTR; ++t)
+            for (int k = 0; k < K; ++k) {
+                const double v = SS[t][sel[k]];
+                m += v; mn = std::min(mn, v); mx = std::max(mx, v);
+            }
+        m /= (double)NTR * K;
+        double var = 0;
+        for (int t = 0; t < NTR; ++t)
+            for (int k = 0; k < K; ++k) {
+                const double d = SS[t][sel[k]] - m;
+                var += d * d;
+            }
+        var /= (double)NTR * K;
+        std::printf("  [features] media %.5f desv %.5f min %.4f max %.4f | disparos/simbolo %.1f\n",
+                    m, std::sqrt(var), mn, mx,
+                    (double)e.spikes() / std::max(1.0, (double)NTR));
     }
 
     // NORM=1: recalcular media y desviacion DESPUES de la plasticidad. Con
