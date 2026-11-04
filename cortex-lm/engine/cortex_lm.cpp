@@ -168,6 +168,12 @@ void Engine::build_random(unsigned seed) {
         Lr.elig.assign(Lr.g.n_syn, 0.0f);
         Lr.pre_trace.assign(N, 0.0f);
         Lr.alpha_elig = std::exp(-1.0f / std::max(1.0f, p_.tau_elig));
+        // Paso 4: traza postsinaptica.
+        Lr.post_trace.assign(N, 0.0f);
+        Lr.alpha_post = std::exp(-1.0f / std::max(1.0f, p_.tau_post));
+        // Paso 5: prediccion top-down por neurona.
+        Lr.pred.assign(N, 0.0f);
+        Lr.pred_err.assign(N, 0.0f);
 
         queues_[li].init(p_.d_max);
     }
@@ -243,9 +249,11 @@ int Engine::step() {
     const float am = p_.alpha_m();
     int fired = 0;
 
-    // La traza presinaptica decae una vez por tick, antes de la decision.
-    for (auto& L : layers_)
+    // Las trazas decaen una vez por tick, antes de la decision.
+    for (auto& L : layers_) {
         for (auto& tr : L.pre_trace) tr *= L.alpha_elig;
+        for (auto& tr : L.post_trace) tr *= L.alpha_post;   // Paso 4
+    }
 
     for (size_t li = 0; li < layers_.size(); ++li) {
         Layer& L = layers_[li];
@@ -293,6 +301,7 @@ int Engine::step() {
             L.spike_count[j]++;
             L.theta[j] = std::min(p_.theta_max, L.theta[j] + p_.theta_step);
             L.pre_trace[j] = 1.0f;      // marca temporal del disparo
+            L.post_trace[j] = 1.0f;     // Paso 4: la de destino, en su capa
             fired++;
 
             for (i32 s = L.g.offsets[j]; s < L.g.offsets[j + 1]; ++s)
@@ -334,6 +343,7 @@ void Engine::end_symbol() {
 void Engine::feed(int ch) {
     if (ch < 0 || ch >= p_.n_chars) throw std::out_of_range("simbolo fuera de rango");
     ctx_hist_[ch] = 1.0f;
+    ch_actual_ = ch;                 // Paso 5: lo usa el error de prediccion
     inject_only(ch);
     for (int s = 0; s < p_.ticks_per_char; ++s) step();
     end_symbol();
@@ -426,6 +436,65 @@ void Engine::readout(const std::vector<float>& f, float* logits) const {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PASO 5: senal de error propia de la capa
+// ---------------------------------------------------------------------------
+// La capa de entrada sabe que simbolo esta viendo (es su propia entrada). Su
+// prediccion top-down es: "estas neuronas deberian haber disparado, porque son
+// las que este simbolo enciende". El error de prediccion es la diferencia
+// entre esa prediccion y los disparos que ocurrieron de verdad.
+//
+// Esta senal es LOCAL: cada neurona compara lo que esperaba de si misma con lo
+// que hizo. No depende del lector, ni de una matriz aleatoria, ni de nadie
+// aguas abajo. Y es verificable: se puede imprimir su magnitud.
+void Engine::error_local(int capa, std::vector<float>& out) {
+    if (capa < 0 || capa >= (int)layers_.size()) { out.clear(); return; }
+    Layer& L = layers_[capa];
+    out.assign(L.n, 0.0f);
+
+    // poblacion que este simbolo deberia encender (la de su parche sensorial)
+    std::vector<float> objetivo(L.n, 0.0f);
+    if (capa == 0 && ch_actual_ >= 0 && ch_actual_ < p_.n_chars) {
+        const int patch = p_.patch_size();
+        const int tex = std::max(4, patch / 2);
+        const int per = patch + tex;
+        const int* dst = &sensory_[(size_t)ch_actual_ * per];
+        for (int i = 0; i < per; ++i) objetivo[dst[i]] = 1.0f;
+    }
+
+    // disparos reales del ultimo simbolo, normalizados a [0,1]
+    float maxr = 0.0f;
+    for (int j = 0; j < L.n; ++j) maxr = std::max(maxr, L.rate[j]);
+    const float inv = maxr > 1e-6f ? 1.0f / maxr : 0.0f;
+
+    float suma = 0.0f, mx = 0.0f;
+    for (int j = 0; j < L.n; ++j) {
+        const float real = L.rate[j] * inv;
+        // prediccion suavizada: sigue a la actividad esperada sin copiarla
+        L.pred[j] += p_.pred_lr * (objetivo[j] - L.pred[j]);
+        const float e = p_.pred_gain * (real - L.pred[j]);
+        out[j] = e;
+        suma += std::fabs(e);
+        mx = std::max(mx, std::fabs(e));
+    }
+    L.pred_err = out;
+    (void)suma; (void)mx;
+}
+
+void Engine::stats_error_local(int capa, float& medio, float& maximo) const {
+    medio = 0.0f;
+    maximo = 0.0f;
+    if (capa < 0 || capa >= (int)layers_.size()) return;
+    const Layer& L = layers_[capa];
+    if (L.pred_err.empty()) return;
+    double acc = 0.0;
+    for (float e : L.pred_err) {
+        acc += std::fabs(e);
+        maximo = std::max(maximo, std::fabs(e));
+    }
+    medio = (float)(acc / (double)L.pred_err.size());
+}
+
 void Engine::learn(const float* error, const std::vector<float>& f) {
     // 1. senal de aprendizaje por neurona (estilo e-prop).
     // Se difunde el error por la matriz de LECTURA, no por una matriz aleatoria.
@@ -439,7 +508,9 @@ void Engine::learn(const float* error, const std::vector<float>& f) {
     //
     // R esta acotada a +-8, asi que hace falta un factor de escala: sin el, la
     // senal es ~8x mayor que con B normal y la plasticidad desestabiliza.
-    {
+    // Si no llega error, la senal local por neurona (Paso 5) es la unica que
+    // se usa y este bloque no hace falta. Antes petaba con puntero nulo.
+    if (error != nullptr && !R_.empty()) {
         std::vector<float> fn;
         normalize(f, fn);
         std::fill(feedback_.begin(), feedback_.end(), 0.0f);
@@ -457,23 +528,43 @@ void Engine::learn(const float* error, const std::vector<float>& f) {
         fb_prev_ = feedback_;
     }
 
-    // 2. regla de tres factores sobre la recurrencia.
-    //    dw = -eta * error_difundido(post) * traza_pre(pre, retardo)
-    // La traza se eleva al retardo de la sinapsis para alinearla con la llegada
-    // del pulso: solo se refuerza la sinapsis que efectivamente contribuyo al
-    // disparo postsinaptico. El signo negativo hace descender la perdida.
+    // 2. REGLA DE TRES FACTORES (Pasos 4 y 5 del plan acordado).
+    //
+    //    dw = -eta * s_local(post) * traza_pre(pre) * traza_post(post)
+    //
+    //   - traza_pre(pre): el pulso presinaptico llego a tiempo de contribuir.
+    //   - traza_post(post): la neurona de destino acaba de disparar. Es el
+    //     factor que faltaba: sin el, la regla refuerza "lo que estaba activo
+    //     cuando hubo error" en vez de "lo que hizo disparar a la neurona".
+    //   - s_local(post): error de prediccion de la PROPIA capa (Paso 5), no el
+    //     error del lector difundido por una matriz. Es local y verificable.
+    //
+    // El signo es negativo porque el error se define como (real - predicho):
+    // si la neurona disparo mas de lo que predecía, el error es positivo y hay
+    // que bajar el peso que la excito.
+    //
+    // La senal local por neurona se calcula UNA vez por capa y simbolo.
+    std::vector<float> s_local;
     for (auto& L : layers_) {
         const int n = L.n;
+        // Si el banco no rellena la senal local (capas sin prediccion), se cae
+        // al error difundido de siempre, para no romper otras herramientas.
+        error_local((int)(&L - layers_.data()), s_local);
+        const bool usar_local = !s_local.empty();
+        const float decay_post_w = p_.trace_post_w;
+
         for (int pre = 0; pre < n; ++pre) {
             const float tr = L.pre_trace[pre];
             if (tr < 1e-4f) continue;              // nada que aprender en esta sinapsis
             const i32 s0 = L.g.offsets[pre], s1 = L.g.offsets[pre + 1];
             for (i32 s = s0; s < s1; ++s) {
                 const int post = L.g.post[s];
-                const float fb = feedback_[L.offset + post];
-                if (fb == 0.0f) continue;
+                const float tp = 1.0f + decay_post_w * (L.post_trace[post] - 1.0f);
+                if (tp < 1e-4f) continue;          // el destino no disparo: no hubo causa
+                const float sgn = usar_local ? s_local[post] : feedback_[L.offset + post];
+                if (sgn == 0.0f) continue;
                 const float e = tr * std::exp(-(float)L.g.delay[s] / std::max(1.0f, p_.tau_elig));
-                const float dw = -p_.eta * fb * e;
+                const float dw = -p_.eta * sgn * e * tp;
                 const float w0 = L.g.w_init[s];
                 float w = L.g.weight[s] + dw;
                 const float lo = std::max(p_.w_min, w0 * (1.0f - p_.w_frac_max));
@@ -485,7 +576,10 @@ void Engine::learn(const float* error, const std::vector<float>& f) {
         for (auto& e : L.elig) { e *= p_.elig_decay; if (std::fabs(e) < 1e-6f) e = 0.0f; }
     }
 
-    // 3. readout con Adam (sobre las features normalizadas)
+    // 3. readout con Adam (sobre las features normalizadas).
+    // Si no llega error del lector (senal puramente local, Paso 5), aqui no hay
+    // nada que hacer: el lector de este banco es otro y aprende por su cuenta.
+    if (error == nullptr) return;
     std::vector<float> fn;
     normalize(f, fn);
     const int F = (int)fn.size();

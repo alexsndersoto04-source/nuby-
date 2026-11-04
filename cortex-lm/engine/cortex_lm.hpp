@@ -121,6 +121,24 @@ struct Params {
     // Limite de la plasticidad: fraccion del peso inicial que puede moverse.
     // Sin esto los pesos se van a w_max y la red se satura.
     float w_frac_max     = 0.60f;
+    // --- PASO 4: factor postsinaptico ---
+    // dw = -eta * (senal local) * traza_pre * traza_post
+    // La traza postsinaptica marca cuando disparo la neurona de DESTINO. Sin
+    // ella la regla refuerza "lo que estaba activo cuando hubo error", no "lo
+    // que hizo disparar a la neurona". Es el tercer factor que faltaba.
+    float tau_post       = 12.0f;  // ticks de la traza postsinaptica
+    float trace_post_w   = 1.0f;   // peso del factor post (0 = regla antigua)
+
+    // --- PASO 5: senal de error propia de la capa ---
+    // La capa de entrada tiene una prediccion top-down de que poblacion deberia
+    // activarse (la que corresponde al simbolo actual, que es su propia
+    // entrada). El error de prediccion es la diferencia entre esa prediccion y
+    // los disparos que realmente ocurrieron. Es local, verificable y NO depende
+    // del lector ni de ninguna matriz aleatoria.
+    float pred_lr        = 0.02f;  // ritmo de la prediccion top-down
+    float pred_gain      = 1.0f;   // cuanto pesa el error local (1 = el)
+    float bias_homeo_lr  = 0.0f;   // homeostasis de umbral (Paso 6, mas adelante)
+
     float elig_decay     = 0.90f;  // por tick
     float elig_clip      = 4.0f;
     float w_min          = 0.0f;
@@ -196,6 +214,14 @@ struct Layer {
     // para alinearla con la llegada: el peso solo crece si el disparo
     // presinaptico llego a tiempo de contribuir al disparo postsinaptico.
     std::vector<float> pre_trace;
+    // Traza postsinaptica (Paso 4): vale 1 en el tick en que la neurona de
+    // destino disparo y decae con tau_post. Es el tercer factor de la regla.
+    std::vector<float> post_trace;
+    float alpha_post = 0.0f;        // factor de decaimiento por tick
+    // Prediccion top-down por neurona (Paso 5): que actividad espera de si
+    // misma esta neurona, dado el simbolo que la capa esta viendo.
+    std::vector<float> pred;
+    std::vector<float> pred_err;    // error de prediccion del ultimo simbolo
     float alpha_elig = 0.0f;        // factor de decaimiento por tick
 
     Graph g;
@@ -250,6 +276,12 @@ public:
     void normalize(const std::vector<float>& in, std::vector<float>& out) const;
     void update_norm(const std::vector<float>& f);
     void learn(const float* error, const std::vector<float>& f);
+    // PASO 5: error de prediccion local de una capa (difiere prediccion y
+    // disparos reales del ultimo simbolo, actualiza la prediccion y devuelve
+    // el error por neurona).
+    void error_local(int capa, std::vector<float>& out);
+    // Estadisticas del error local: cuantas neuronas y cuanto.
+    void stats_error_local(int capa, float& medio, float& maximo) const;
 
     long   ticks() const { return t_; }
     long   spikes() const { return spikes_; }
@@ -278,6 +310,7 @@ private:
     std::vector<float> R_m_, R_v_;
     std::vector<float> logits_;
     long t_ = 0;
+    int  ch_actual_ = -1;     // simbolo que se esta presentando (Paso 5)
     float inh_prev_ = 0.0f;   // actividad reciente que alimenta el freno
     long spikes_ = 0;
     long symbols_ = 0;

@@ -135,21 +135,37 @@ int main(int argc, char** argv) {
         w_ini /= std::max(1, nw);
     }
 
-    // --- pasada 2: features con (o sin) plasticidad local ---
+    // --- pasada de plasticidad DENTRO del bucle (Pasos 4 y 5) ---
+    // La regla se aplica mientras se lee, no en una pasada aparte y congelada
+    // despues: asi el peso cambia y las features del test salen de la red ya
+    // plasticada, que es como funcionaria de verdad.
     e.reset_state();
     std::vector<std::vector<float>> SS(NTR);
     for (int t = 0; t < NTR; ++t) {
         e.feed(train[t]);
         e.theta_features(f);
         SS[t] = f;
-        if (PL) {
-            // Error difundido por la matriz fija B. En el uso real sale del
-            // lector; aqui usamos el error de un bigrama para aislar el efecto
-            // de la plasticidad sobre la representacion.
-            std::vector<float> err(256, 0.0f);
-            err[train[t + LAG]] = -1.0f;
-            err[train[t]] = 1.0f;
-            e.learn(err.data(), f);
+        if (PL) e.learn(nullptr, f);   // la regla ya usa su senal local (Paso 5)
+    }
+    if (PL) {
+        float emedio = 0, emax = 0;
+        e.stats_error_local(0, emedio, emax);
+        std::printf("  [error local] medio %.4f | maximo %.4f\n", emedio, emax);
+    }
+
+    // NORM=1: recalcular media y desviacion DESPUES de la plasticidad. Con
+    // pesos que se mueven un 50 % la normalizacion congelada deja de valer.
+    if (NORM && PL) {
+        for (int k = 0; k < K; ++k) {
+            double a = 0;
+            for (int t = 0; t < NTR; ++t) a += SS[t][sel[k]];
+            mu[k] = a / NTR;
+            double v = 0;
+            for (int t = 0; t < NTR; ++t) {
+                const double d = SS[t][sel[k]] - mu[k];
+                v += d * d;
+            }
+            sd[k] = std::sqrt(v / NTR) + 1.0;
         }
     }
 
