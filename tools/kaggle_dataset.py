@@ -47,7 +47,7 @@ MOTOR = [
 
 # Commit fijo de reserva: si la rama da una copia cacheada o falla, se
 # pide por hash, que no se puede cachear.
-PIN = "f14de83"
+PIN = "dfd1d90"
 
 SEP = "=" * 62
 
