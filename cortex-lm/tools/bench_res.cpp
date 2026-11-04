@@ -23,6 +23,14 @@
 //  B) solo los ultimos C caracteres + lector local  (la vara, sin red)
 //  C) referencias con retroceso a orden menor: 1, 2, 3 y la MISMA C
 //
+// VARIANTES MEDIDAS (ver OPCION2B-DIAGNOSTICO.md):
+//   - C > 0 y N > 0: DOS lectores (estado y contexto) con peso de mezcla
+//     aprendido. Medido: la mezcla no aporta; el peso converge a 0,07.
+//   - N = 0, C > 0: solo contexto directo (sirve para ver que un lector lineal
+//     es PEOR que contar: 3,076 frente a 2,775 de la referencia).
+//   - ESCALAS > 1: cada neurona con su constante de fuga. Empeora (3,12 y 3,24
+//     frente a 3,008).
+//
 // Uso:
 //   bench_res NTR NTE N ALFA RHO [SEED] [LAMBDA] [P0] [C]
 //     NTR    simbolos de entrenamiento (desde el principio del fichero)
@@ -74,8 +82,19 @@ struct Reservorio {
     std::vector<int>   widx;     // N x grado
     std::vector<float> wval;     // N x grado
     std::vector<float> x, xn;
+    std::vector<float> alfa;     // constante de fuga por neurona
     // Corriente de fondo. Medido: 0,05 constante satura el tanh (todo a +1) y
     // empeora 0,58 bpc. Se queda en 0 salvo que se pida lo contrario.
+    // Reparto de constantes de fuga: de lento (1/max_esc) a 1. Con
+    // max_esc = 1 todas son iguales (una sola escala, como antes).
+    void escalas(double max_esc) {
+        if (max_esc <= 1.0) { std::fill(alfa.begin(), alfa.end(), 1.0f); return; }
+        for (int i = 0; i < N; ++i) {
+            const double f = (double)i / std::max(1, N - 1);
+            alfa[i] = (float)(1.0 / std::pow(max_esc, f));   // 1 -> 1/max_esc
+        }
+    }
+
     float sesgo = 0.0f;
     double g = 1.0, rho = 0.9;
     int grado = 8;
@@ -108,6 +127,8 @@ struct Reservorio {
             }
         x.assign(N, 0.0f);
         xn.assign(N, 0.0f);
+        alfa.assign(N, 1.0f);
+        for (int i = 0; i < N; ++i) alfa[i] = 1.0f;
     }
 
     void reset() { std::fill(x.begin(), x.end(), 0.0f); previo = -1; }
@@ -126,8 +147,9 @@ struct Reservorio {
             const float *wv = &wval[(size_t)i * grado];
             float acc = 0.0f;
             for (int k = 0; k < grado; ++k) acc += wv[k] * x[ix[k]];
-            x[i] = std::tanh(r * acc + gg * win[i] + sesgo
+            const float nuevo = std::tanh(r * acc + gg * win[i] + sesgo
                              + (win2 ? bb * win2[i] : 0.0f));
+            x[i] = (1.0f - alfa[i]) * x[i] + alfa[i] * nuevo;
         }
         previo = simbolo;
     }
@@ -244,6 +266,24 @@ struct Lector {
         return bits;
     }
 
+    // Probabilidad que este lector da a la clase correcta, con el z actual.
+    // NO mueve nada: se usa para mezclar escalas.
+    double prob(int y_real) const {
+        const int y = pos[y_real];
+        if (y < 0) return 1e-12;
+        double mx = -1e30, sm = 0.0;
+        std::vector<double> v(C);
+        for (int c = 0; c < C; ++c) {
+            double a = b[c];
+            const double *w = &W[(size_t)c * F];
+            for (int k = 0; k < F; ++k) a += w[k] * z[k];
+            v[c] = a;
+            if (a > mx) mx = a;
+        }
+        for (int c = 0; c < C; ++c) { v[c] = std::exp(v[c] - mx); sm += v[c]; }
+        return std::max(1e-12, v[y] / sm);
+    }
+
     double evaluar(int y_real, double T) const {
         double mx = -1e30, sm = 0.0;
         std::vector<double> v(C);
@@ -301,13 +341,43 @@ struct Ref {
     }
 
     double evalua(const std::vector<unsigned char> &t, int desde) const {
-        double bits = 0.0;
+        double bits = 0.0, bits1 = 0.0, bits2 = 0.0;
         int m = 0;
         for (size_t i = (size_t)desde; i + (size_t)C < t.size(); ++i) {
             bits += -std::log2(std::max(1e-12, p(t[i + C], &t[i + C - 1], C)));
             ++m;
         }
         return bits / std::max(1, m);
+    }
+};
+
+// ---------------------------------------------------- lector de dos escalas
+// Un lector lineal no mezcla bien dos tipos de rasgo que se comportan distinto:
+// el estado del reservorio (denso, continuo) y el contexto directo (one-hot,
+// dispersisimo). Entrenados juntos, el paso de aprendizaje lo domina el
+// reservorio y el contexto corto se aprende tarde y mal.
+//
+// Aqui cada escala tiene SU lector, con la MISMA regla local, y la prediccion
+// final es la mezcla de las dos. El peso de la mezcla tambien se aprende con la
+// senal local (diferencia de probabilidades sobre la clase correcta).
+struct Mezcla {
+    double b = 0.0;         // logit del peso de la segunda escala
+    double tasa = 0.02;
+
+    double peso() const { return 1.0 / (1.0 + std::exp(-b)); }
+
+    // p1, p2: probabilidad que cada escala da a la clase correcta.
+    // bits de la mezcla y ajuste local del peso.
+    double bits_y_ajusta(double p1, double p2, bool aprender, double T) {
+        const double w = peso();
+        const double p = (1.0 - w) * p1 + w * p2;
+        const double bits = -std::log2(std::max(1e-12, p));
+        if (aprender) {
+            // dL/db con L en nats: (p1 - p2)/p * w(1-w), pasado a bits.
+            const double g = (p1 - p2) / std::max(1e-12, p) * w * (1.0 - w);
+            b -= tasa * g / (T * 0.6931472);
+        }
+        return bits;
     }
 };
 
@@ -330,6 +400,7 @@ int main(int argc, char **argv) {
     const int GRADO = argc > 14 ? std::atoi(argv[14]) : 8;
     const double BETA = argc > 15 ? std::atof(argv[15]) : 0.0;  // simbolo anterior
     const int ADA = argc > 16 ? std::atoi(argv[16]) : 0;
+    const double ESC = argc > 17 ? std::atof(argv[17]) : 1.0;  // escalas de memoria
 
     auto train = load("data/real_train.txt");
     auto test  = load("data/real_hold.txt");
@@ -345,7 +416,11 @@ int main(int argc, char **argv) {
     for (int c = 0; c < 256; ++c) if (visto[c]) clases.push_back(c);
     const int A = (int)clases.size();
 
-    const int F = N + CC;
+    // DOS LECTORES cuando hay contexto directo: cada escala aprende por su
+    // cuenta y la mezcla se aprende aparte. Con un solo lector el contexto
+    // corto quedaba dominado por el estado del reservorio (medido: 2,948).
+    const bool dos = CC > 0;
+    const int F = dos ? N : (N + CC);
     Lector lec;
     lec.init(F, clases, LAM, P0, METODO == 1);
     lec.tasa_grad = TLR;
@@ -353,21 +428,31 @@ int main(int argc, char **argv) {
     lec.adagrad = ADA != 0;
     if (lec.adagrad) lec.ac.assign((size_t)lec.C * lec.F, 0.0);
 
+    Lector lec2;   // solo contexto directo
+    if (dos) {
+        lec2.init(CC * 256, clases, LAM, P0, METODO == 1);
+        lec2.tasa_grad = TLR;
+        lec2.decae = DECAE;
+    }
+    Mezcla mez;
+    mez.tasa = 0.02;
+
     Reservorio res;
     // grado ANTES de init: init dimensiona las listas de vecinos con el.
     if (N > 0) res.init(N, 256, SEED, AL, RH, GRADO);
     if (N > 0) res.beta = BETA;
+    if (N > 0) res.escalas(ESC);
 
     std::printf("adagrad %d | ", lec.adagrad);
     std::printf("train %d | test %d | alfabeto %d | rasgos %d (reservorio %d + contexto %d)"
-                " | alfa %.2f rho %.2f | metodo %s tasa %.3f seed %u\n",
-                NTR, NTE, A, F, N, CC, AL, RH,
+                " | alfa %.2f rho %.2f escalas %.1f | metodo %s tasa %.3f seed %u\n",
+                NTR, NTE, A, F, N, CC, AL, RH, ESC,
                 METODO == 1 ? "RLS/FORCE" : "error local", TLR, SEED);
 
     // z: estado del reservorio (normalizado) + contexto directo one-hot
     std::vector<double> zc(CC * 256, 0.0);
     auto lee = [&](const std::vector<unsigned char> &txt, int n, bool aprender) {
-        double bits = 0.0;
+        double bits = 0.0, bits1 = 0.0, bits2 = 0.0;
         int m = 0;
         if (N > 0) res.reset();
         std::fill(zc.begin(), zc.end(), 0.0);
@@ -377,20 +462,48 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < N; ++i) lec.z[i] = res.x[i];
             }
             // contexto directo: ultimos CC simbolos (el actual incluido)
-            for (int c = 0; c < CC; ++c) {
-                const int k = t - c;
-                if (k < 0) continue;
-                lec.z[N + c * 256 + txt[k]] = 1.0;
+            if (dos && N > 0) {
+                for (int c = 0; c < CC; ++c) {
+                    const int k = t - c;
+                    if (k < 0) continue;
+                    lec2.z[c * 256 + txt[k]] = 1.0;
+                }
+                const int y = txt[t + 1];
+                // probabilidad de la clase correcta en cada escala, ANTES de
+                // moverse (las dos usan el mismo estado actual).
+                const double q1 = N > 0 ? lec.prob(y) : 0.0;
+                const double q2 = lec2.prob(y);
+                if (!aprender) { bits1 += -std::log2(q1); bits2 += -std::log2(q2); }
+                bits += mez.bits_y_ajusta(N > 0 ? q1 : 0.0, q2, aprender, 1.0);
+                if (aprender) { if (N > 0) lec.paso(y); lec2.paso(y); }
+                for (int c = 0; c < CC; ++c) {
+                    const int k = t - c;
+                    if (k < 0) continue;
+                    lec2.z[c * 256 + txt[k]] = 0.0;
+                }
+            } else {
+                Lector &L = (N == 0 && dos) ? lec2 : lec;
+                const int base = (N == 0 && dos) ? 0 : N;
+                for (int c = 0; c < CC; ++c) {
+                    const int k = t - c;
+                    if (k < 0) continue;
+                    L.z[base + c * 256 + txt[k]] = 1.0;
+                }
+                if (aprender) bits += L.paso(txt[t + 1]);
+                else          bits += L.evaluar(txt[t + 1], 1.0);
+                // limpiar solo lo que se encendio
+                for (int c = 0; c < CC; ++c) {
+                    const int k = t - c;
+                    if (k < 0) continue;
+                    L.z[base + c * 256 + txt[k]] = 0.0;
+                }
             }
-            if (aprender) bits += lec.paso(txt[t + 1]);
-            else          bits += lec.evaluar(txt[t + 1], 1.0);
             ++m;
-            // limpiar solo lo que se encendio
-            for (int c = 0; c < CC; ++c) {
-                const int k = t - c;
-                if (k < 0) continue;
-                lec.z[N + c * 256 + txt[k]] = 0.0;
-            }
+        }
+        if (m > 0 && bits1 > 0.0) {
+            std::printf("    [escalas] solo reservorio %.3f | solo contexto %.3f"
+                        " | peso contexto %.3f\n",
+                        bits1 / m, bits2 / m, mez.peso());
         }
         return std::make_pair(bits / std::max(1, m), m);
     };
