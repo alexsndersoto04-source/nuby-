@@ -43,6 +43,7 @@ MOTOR = [
     "cortex-lm/engine/cortex_lm.hpp",
     "cortex-lm/engine/cortex_lm_main.cpp",
     "cortex-lm/tools/bench_rls.cpp",
+    "cortex-lm/tools/bench_res.cpp",
 ]
 
 # Commit fijo de reserva: si la rama da una copia cacheada o falla, se

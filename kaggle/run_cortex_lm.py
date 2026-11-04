@@ -286,6 +286,7 @@ FICHEROS = [
     "cortex-lm/engine/cortex_lm.hpp",
     "cortex-lm/engine/cortex_lm_main.cpp",
     "cortex-lm/tools/bench_rls.cpp",
+    "cortex-lm/tools/bench_res.cpp",
 ]
 
 
@@ -516,6 +517,19 @@ def run_bench(proj, args):
     return sh(cmd, cwd=proj, check=False)
 
 
+def parse_res(out):
+    """Lee la salida de bench_res (reservorio)."""
+    v = re.search(r"lector local\s*:\s*([\d.]+)\s*bpc", out)
+    b = re.search(r"referencia 1 caracter\s*:\s*([\d.]+)\s*bpc", out)
+    r2 = re.search(r"referencia 2 caracteres\s*:\s*([\d.]+)\s*bpc", out)
+    if not v:
+        return None
+    return {"bpc": float(v.group(1)),
+            "bigram": float(b.group(1)) if b else float("nan"),
+            "ref2": float(r2.group(1)) if r2 else float("nan"),
+            "acc": 0.0}
+
+
 def parse(out):
     m = re.search(r"TEST[^:]*:\s*([\d.]+)\s*bpc\s*\|\s*acierto\s*([\d.]+)", out)
     b = re.search(r"bigrama[^:]*:\s*([\d.]+)\s*bpc", out)
@@ -673,8 +687,39 @@ def main():
         pool = ((cap_sin["desv"] ** 2 + cap_con["desv"] ** 2) / 2) ** 0.5
         veredicto = "EMPATE" if abs(d) < 2 * pool else "EFECTO"
         print(f"plasticidad en la capa sola:        {d:+.3f} bpc -> {veredicto}")
-    if ref_bigram == ref_bigram:
-        print(f"bigrama de referencia: {ref_bigram:.3f} bpc")
+    # -------------------------------------------------------------------
+    # Opcion 2: reservorio recurrente (estado que se actualiza, no ventana).
+    # Aqui se usan TODOS los caracteres disponibles, que es donde el banco
+    # anterior no podia llegar por memoria.
+    # -------------------------------------------------------------------
+    print("\n" + SEP)
+    print("RESERVORIO RECURRENTE + lector local (sin ventana congelada)")
+    print(SEP)
+    N_RES = 1500
+    res_vals, res_bigram, res_ref2 = [], float("nan"), float("nan")
+    for sem in SEMILLAS:
+        parte(f"reservorio semilla {sem} arrancando")
+        out = run_bench(proj, {"src": "bench_res.cpp", "tag": f"res_{sem}",
+                               "argv": [N, HOLDOUT_CHARS, N_RES, 0.35, 0.9, sem,
+                                        1.0, 10, 0, 0, 0.05, 4, 0, 8, 0, 0]})
+        r = parse_res(out)
+        if r:
+            res_vals.append(r["bpc"])
+            res_bigram = r["bigram"]
+            res_ref2 = r["ref2"]
+            parte(f"reservorio semilla {sem}: {r['bpc']:.3f} bpc "
+                  f"(bigrama {r['bigram']:.3f})")
+    if res_vals:
+        m = sum(res_vals) / len(res_vals)
+        var = sum((v - m) ** 2 for v in res_vals) / max(1, len(res_vals) - 1)
+        d = var ** 0.5
+        print(f"{'Reservorio + lector local':<34}{m:>8.3f}{d:>8.3f}"
+              f"  {min(res_vals):>7.3f}{max(res_vals):>7.3f}")
+        print(f"bigrama de referencia: {res_bigram:.3f} | "
+              f"referencia 2 car.: {res_ref2:.3f}")
+        print(f"frente al bigrama: {m - res_bigram:+.3f} bpc "
+              f"({'GANA' if m < res_bigram else 'PIERDE'})")
+        parte(f"RESERVORIO: {m:.3f} bpc frente a bigrama {res_bigram:.3f}")
     print(SEP)
     print(f"auditoría del motor: {'TODO OK' if audit_ok else 'FALLÓ'}")
     print("Copia esta tabla y pégala en el chat.")
