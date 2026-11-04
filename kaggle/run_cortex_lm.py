@@ -28,13 +28,42 @@ WORK = os.environ.get("CORTEX_REPO_DIR", "/kaggle/working/nuby-")
 # En local (pruebas) se salta la descarga y se usa el corpus de juguete.
 LOCAL = os.environ.get("CORTEX_LOCAL", "") == "1"
 
-# Cuánto texto usar para entrenar. 60k símbolos ya dan una medida estable y
-# mantienen cada corrida en minutos, no horas.
-TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "60000"))
-HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "12000"))
-EPOCHS_B = int(os.environ.get("CORTEX_EPOCHS_B", "8"))
+# Tamano de la corrida. Estas cifras NO son un capricho: estan medidas en
+# local con el motor real, porque la corrida anterior (60.000 caracteres y 8
+# epocas) se paso de los 90 minutos y Kaggle ni siquiera llego a publicar el
+# registro. Medido con un solo nucleo lento (parecido al de Kaggle):
+#     banco A, train 60.000 y 10 epocas ...... 176 s por prueba
+#     banco B, train 20.000 y 2 epocas ....... 18 s
+#     banco B, train 40.000 y 2 epocas ....... 33 s
+# Con las cifras de aqui, la corrida entera cabe en ~25 min.
+TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "40000"))
+HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "8000"))
+EPOCHS_A = int(os.environ.get("CORTEX_EPOCHS_A", "4"))
+EPOCHS_B = int(os.environ.get("CORTEX_EPOCHS_B", "2"))
 
 SEP = "=" * 70
+
+# Kaggle no publica la salida estandar del kernel mientras corre: solo publica
+# los ficheros que van apareciendo en /kaggle/working. Para que el usuario vea
+# por donde va, cada etapa apunta su marca en este fichero, que el lanzador lee
+# desde el telefono. Si falla al escribirse, se sigue: nunca puede tumbar la
+# corrida.
+PARTE = "/kaggle/working/avance.txt" if os.path.isdir("/kaggle/working") \
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "avance.txt")
+
+
+def parte(msg):
+    """Apunta una linea de avance (hora + mensaje) y la publica."""
+    import time as _t
+    linea = f"[{_t.strftime('%H:%M:%S')}] {msg}"
+    print(f">>> {linea}", flush=True)
+    try:
+        with open(PARTE, "a", encoding="utf-8") as f:
+            f.write(linea + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def sh(cmd, cwd=None, check=True, env=None):
@@ -418,12 +447,14 @@ def build(proj):
             "Avisa de esto: significa que hay que compilar en otro sitio.")
 
     print(f"    compilador: {compilador}")
+    parte(f"compilando el motor con {compilador}")
     cmd = [compilador, "-O2", "-std=c++17", "-Iengine",
            "engine/cortex_lm.cpp", "engine/cortex_lm_main.cpp", "-o", salida]
     sh(cmd, cwd=proj)
 
     if not os.path.exists(salida):
         raise SystemExit("la compilacion no produjo el binario")
+    parte("motor compilado")
     return salida
 
 
@@ -454,14 +485,17 @@ def main():
     print("CORTEX-LM — banco de medida sobre texto español real")
     print(SEP)
 
+    parte("arranca el cuaderno")
     comprobar_internet()
     text = get_corpus()
     text = strip_gutenberg(text)
     text = text.replace("\r\n", "\n")
     print(f"\ntexto obtenido: {len(text):,} caracteres")
+    parte(f"texto conseguido: {len(text):,} caracteres")
     audit_corpus(text, "todo")
 
     proj = get_repo()
+    parte("motor localizado en el dataset")
     binary = build(proj)
 
     # --- particiones: el test sale del FINAL del texto, nunca visto ---
@@ -485,22 +519,28 @@ def main():
 
     # --- auditoría estructural del motor ---
     print("\n--- auditoría estructural ---")
+    parte(f"particiones: train {len(train):,} / test {len(holdout):,}; auditoria en curso")
     audit_out = sh([binary, "audit"], cwd=proj, check=False)
     audit_ok = "TODO OK" in audit_out
     print(f"auditoría: {'TODO OK' if audit_ok else 'FALLÓ'}")
+    parte(f"auditoria del motor: {'TODO OK' if audit_ok else 'FALLO'}")
 
     # --- bancos ---
     N = min(TRAIN_CHARS, len(train) - 2)
     runs = []
     print("\n--- banco A: lector entrenado sobre features congeladas ---")
     for tag, argv in (
-        ("A_sin", [N, 10, 64, 8, 0, 0, 0.30, 0]),
-        ("A_con", [N, 10, 64, 8, 1, 1e-3, 0.30, 0]),
+        ("A_sin", [N, EPOCHS_A, 64, 8, 0, 0, 0.30, 0]),
+        ("A_con", [N, EPOCHS_A, 64, 8, 1, 1e-3, 0.30, 0]),
     ):
+        parte(f"banco A [{tag}] arrancando (mide el lector)")
         out = run_bench(proj, {"src": "bench.cpp", "tag": tag, "argv": argv})
         r = parse(out)
         if r:
             runs.append((f"A {tag.split('_')[1]}", r))
+            parte(f"banco A [{tag}] hecho: {r['bpc']:.3f} bpc, acierto {r['acc']:.1f}%")
+        else:
+            parte(f"banco A [{tag}] no dio un resultado legible")
 
     print("\n--- banco B: entrenamiento conjunto en línea, símbolo siguiente ---")
     for tag, argv in (
@@ -509,12 +549,17 @@ def main():
         ("B_con_medio",[EPOCHS_B, 64, 8, 1, 1e-2, 0.30, 1, N]),
         ("B_con_alto",[EPOCHS_B, 64, 8, 1, 3e-2, 0.30, 1, N]),
     ):
+        parte(f"banco B [{tag}] arrancando (aprendizaje en linea)")
         out = run_bench(proj, {"src": "bench_joint.cpp", "tag": tag, "argv": argv})
         r = parse(out)
         if r:
             runs.append((f"B {tag.split('_', 1)[1]}", r))
+            parte(f"banco B [{tag}] hecho: {r['bpc']:.3f} bpc, acierto {r['acc']:.1f}%")
+        else:
+            parte(f"banco B [{tag}] no dio un resultado legible")
 
     # --- resumen ---
+    parte("TODO TERMINADO: tabla lista")
     print("\n" + SEP)
     print("RESUMEN (bpc menor es mejor; 'bigrama' es la referencia a batir)")
     print(SEP)

@@ -219,8 +219,11 @@ def lanzar(user, dataset=None):
 
 def esperar(kid):
     say(f"Esperando a que Kaggle lo ejecute (maximo {TIMEOUT_MIN} minutos)")
+    print("    Kaggle no deja ver la salida del kernel en vivo; si se ve el")
+    print("    parte de avance que el cuaderno va dejando escrito.")
     t0 = time.time()
     visto_running = False
+    ultimo_parte_min = -1
     while True:
         rc, out = kaggle(["kernels", "status", kid], check=False)
         estado = out.strip().splitlines()[-1] if out.strip() else "?"
@@ -243,12 +246,15 @@ def esperar(kid):
             # Cada 5 minutos se intenta enseñar el avance. Kaggle no publica la
             # salida hasta el final, asi que muchas veces no habra nada; por eso
             # no se avisa de nada si viene vacio.
-            if int(mins * 2) % 10 == 0 and int(mins) >= 5:
-                avance = lineas_del_registro(kid)
+            if int(mins) != ultimo_parte_min:
+                ultimo_parte_min = int(mins)
+                avance = leer_parte(kid)
                 if avance:
-                    print("     ultimo del registro:")
-                    for ln in cocinar("\n".join(avance))[-5:]:
+                    print("     por donde va:")
+                    for ln in avance[-4:]:
                         print("       " + ln[:160])
+                else:
+                    print("     (todavia sin parte de avance de ESTA corrida)")
         if mins > TIMEOUT_MIN:
             print(f"\nSe acabo el tiempo de espera ({TIMEOUT_MIN} min).")
             print("No pasa nada: la corrida sigue en Kaggle. Para recogerla:")
@@ -257,6 +263,70 @@ def esperar(kid):
         time.sleep(30)
 
 
+
+
+# --------------------------------------------------------------------------
+#  Avance en vivo
+# --------------------------------------------------------------------------
+# Kaggle NO publica, mientras el kernel corre, lo que este escribe en su salida
+# estandar. Lo unico que publica en vivo son los ficheros de /kaggle/working.
+# Por eso el cuaderno deja ahi "avance.txt" con una linea por etapa y aqui se
+# lee ese fichero. Antes esta funcion leia el registro completo y, si habia
+# restos de una corrida anterior, los ensenaba como si fueran el avance de
+# ahora: eso fue lo que le mostro al usuario un trozo de novela.
+PARTE_NOMBRE = "avance.txt"
+
+
+def _marcas(posibles):
+    """Se queda con las lineas que parecen un parte de avance del cuaderno."""
+    buenas = []
+    for ln in posibles:
+        ln = ln.strip().strip(",").strip('"').strip()
+        if not ln:
+            continue
+        if ln.startswith(("[", ">>>", "==>")) or "bpc" in ln \
+                or "caracteres" in ln or "banco" in ln:
+            buenas.append(ln[:200])
+    return buenas
+
+
+def leer_parte(kid):
+    """Baja /kaggle/working/avance.txt del kernel en marcha. None si no hay."""
+    import shutil
+    d = os.path.expanduser("~/cortex_kaggle/log")
+    os.makedirs(d, exist_ok=True)
+    # Limpiar el parte anterior: si no, se ensena el de la corrida pasada.
+    for root, _dirs, files in os.walk(d):
+        for n in files:
+            if n.startswith(PARTE_NOMBRE):
+                try:
+                    os.remove(os.path.join(root, n))
+                except OSError:
+                    pass
+    kaggle(["kernels", "output", kid, "-p", d, "-f", PARTE_NOMBRE], check=False)
+    texto = ""
+    for root, _dirs, files in os.walk(d):
+        for n in files:
+            if not n.startswith(PARTE_NOMBRE):
+                continue
+            p = os.path.join(root, n)
+            try:
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    c = f.read()
+            except OSError:
+                continue
+            if len(c) > len(texto):
+                texto = c
+    if not texto.strip():
+        return None
+    # Puede llegar tal cual (una linea por marca) o envuelto por Kaggle en la
+    # lista JSON de objetos {"data": ...}. Ojo: una marca empieza por "[" y NO
+    # es JSON, por eso se mira si detras viene una llave.
+    pelado = texto.lstrip()
+    es_json = pelado.startswith("[{") or pelado.startswith('{"') \
+        or pelado.startswith("[\n")
+    crudo = cocinar(texto) if es_json else texto.splitlines()
+    return _marcas(crudo) or None
 
 
 def lineas_del_registro(kid, solo_ultimas=40):
@@ -274,6 +344,8 @@ def lineas_del_registro(kid, solo_ultimas=40):
     texto = ""
     for root, _dirs, files in os.walk(d):
         for n in files:
+            if not n.endswith(".log"):
+                continue
             p = os.path.join(root, n)
             try:
                 with open(p, encoding="utf-8", errors="ignore") as f:
@@ -496,12 +568,23 @@ def main():
         rc, out = kaggle(["kernels", "status", kid], check=False)
         print(out.strip())
         if "running" in out.lower():
+            avance = leer_parte(kid)
+            if avance:
+                print("\nPor donde va:")
+                for ln in avance[-12:]:
+                    print("   " + ln[:200])
             print("\nEsta corriendo. Kaggle no publica el registro hasta el final.")
             print("Para verlo en vivo, abre en el navegador:")
             print(f"  https://www.kaggle.com/code/{kid}/log")
         return 0
 
     if a.log:
+        _rc, est = kaggle(["kernels", "status", kid], check=False)
+        if "running" in est.lower():
+            print("OJO: ese kernel esta corriendo AHORA MISMO, asi que lo que")
+            print("sigue es el registro de una ejecucion ANTERIOR, no de esta.")
+            print("Para ver por donde va la de ahora:  bash run.sh --estado")
+            print()
         mostrar_registro(kid, lineas=80)
         return 0
 
