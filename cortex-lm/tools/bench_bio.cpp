@@ -40,6 +40,16 @@ static int g_feat = 2;   // 0 = fatiga, 1 = estado, 2 = estado + fatiga
 // Ganancia del marcapasos a probar (0 = no probar). Ver tools/diag_estado.cpp:
 // a 0,35 el oscilador mete 5x mas corriente que el propio texto.
 static float g_pace_gain = 0.0f;
+// Cuantos estados pasados ve el lector (0 = solo el actual). Ver
+// Engine::tap_features: el estado no se acuerda del caracter anterior, asi que
+// con una sola foto el techo es el bigrama.
+static int g_taps = 1;
+// Parametros del reservorio que se pueden mover por CLI (0 = dejar el default).
+static float g_w_scale = 0.0f;
+static float g_inh = 0.0f;
+// Normalizacion del lector: 1 = por dimension (compara configuraciones del
+// reservorio en igualdad de condiciones), 0 = como siempre (serie historica).
+static int g_norm = 0;
 
 static std::vector<unsigned char> carga(const char *p) {
     std::ifstream in(p, std::ios::binary);
@@ -58,6 +68,15 @@ struct Lector {
     std::vector<double> W, b, lg, pr, z;
     std::vector<int> voc, pos;
     double tasa = 0.05;
+    // NORMALIZACION POR DIMENSION, CALIBRADA UNA VEZ Y CONGELADA.
+    // Sin esto el lector no puede comparar dos configuraciones del reservorio
+    // (con INH 0,005 la membrana se pega al techo y salen 6,54 bits con 70
+    // clases, imposible). Normalizar EN LINEA tampoco vale: amplifica el ruido
+    // de las dimensiones casi muertas y se midieron 24,9 bits. Se calibra sobre
+    // un trozo de texto, se congela, y las dimensiones con desviacion
+    // despreciable se dejan a cero en vez de amplificarlas.
+    std::vector<double> mu, sd, escala;
+    bool calibrado = false;   // solo si g_norm
 
     void init(int nf, const std::vector<int> &clases, double t) {
         F = nf; C = (int)clases.size(); voc = clases; tasa = t;
@@ -68,6 +87,44 @@ struct Lector {
         lg.assign(C, 0.0);
         pr.assign(C, 0.0);
         z.assign(F, 0.0);
+        mu.assign(F, 0.0);
+        sd.assign(F, 0.0);
+        escala.assign(F, 1.0);
+    }
+
+    // paso de calibracion: acumula media y desviacion, no aprende
+    void calibra(const std::vector<float> &f, double n) {
+        for (int k = 0; k < F && k < (int)f.size(); ++k) {
+            const double d = f[k] - mu[k];
+            mu[k] += d / n;
+            sd[k] += d * (f[k] - mu[k]);
+        }
+    }
+
+    void congela(double n) {
+        double mx = 0.0;
+        std::vector<double> s(F, 0.0);
+        for (int k = 0; k < F; ++k) {
+            s[k] = std::sqrt(std::max(0.0, sd[k]) / std::max(1.0, n));
+            mx = std::max(mx, s[k]);
+        }
+        const double piso = 0.05 * mx;        // por debajo, la dimension es ruido
+        for (int k = 0; k < F; ++k) escala[k] = s[k] >= piso && s[k] > 1e-9 ? 1.0 / s[k] : 0.0;
+        calibrado = true;
+    }
+
+    void fija(const std::vector<float> &f) {
+        // /sqrt(F): con la normalizacion la entrada deja de ser diminuta (antes
+        // z ~ 0,06), asi que sin este factor la tasa 0,05 queda miles de veces
+        // demasiado grande y los logits se van a 24 bits/caracter. Dividir por
+        // sqrt(F) devuelve el producto interno a la misma escala de antes y la
+        // tasa sigue valiendo.
+        const bool act = calibrado && g_norm != 0;
+        const double inv = act ? 1.0 / std::sqrt((double)std::max(1, F)) : 1.0;
+        for (int k = 0; k < F; ++k) {
+            const float x = k < (int)f.size() ? f[k] : 0.0f;
+            z[k] = act ? inv * escala[k] * (x - mu[k]) : (double)x;
+        }
     }
 
     // `mod` es el TERCER FACTOR: un escalar global (la dopamina) que decide
@@ -110,6 +167,18 @@ struct Config {
     float pace_gain = 0.35f; // corriente del marcapasos (se mide, no se fija)
 };
 
+// Rellena `f` con lo que ve el lector: los `g_taps` ultimos estados (y la
+// fatiga si FEAT=2, solo del caracter actual: la fatiga ya lleva su propia cola).
+static void features(const Engine &e, std::vector<float> &f, std::vector<float> &aux) {
+    if (g_feat == 0) e.theta_features(f);
+    else if (g_feat == 1) e.tap_features(f, g_taps);
+    else {
+        e.tap_features(f, g_taps);
+        e.theta_features(aux);
+        f.insert(f.end(), aux.begin(), aux.end());
+    }
+}
+
 // Genera texto. Devuelve el texto, los bits/caracter y las palabras producidas.
 static std::string genera(const Params &base, const Config &cfg,
                           const std::vector<unsigned char> &train,
@@ -123,6 +192,8 @@ static std::string genera(const Params &base, const Config &cfg,
     p.n_pace      = cfg.oscilador ? 4 : 0;
     p.pace_lock   = (cfg.oscilador && cfg.anclado) ? 1 : 0;
     p.pace_gain   = cfg.pace_gain;
+    if (g_w_scale > 0.0f) p.w_scale = g_w_scale;
+    if (g_inh > 0.0f)     p.inh_gain = g_inh;
 
     Engine e(p);
     e.build_random(seed);
@@ -133,12 +204,28 @@ static std::string genera(const Params &base, const Config &cfg,
 
     Lector lec;
 
-    std::vector<float> f;
+    std::vector<float> f, aux;
+    e.tap_hist_reserve(std::max(1, g_taps));
     const int EP = cfg.epocas;
     // dimension de las features segun lo que se le de al lector
-    const int FD = (g_feat == 0) ? p.layer_size
-                 : (g_feat == 1) ? p.layer_size : 2 * p.layer_size;
+    const int FD0 = (g_feat == 0) ? p.layer_size
+                  : (g_feat == 1) ? p.layer_size : 2 * p.layer_size;
+    const int FD = FD0 * std::max(1, g_taps);
     lec.init(FD, clases, 0.05);
+    // --- calibracion de la normalizacion ---
+    // Se pasa el primer trozo de texto y se congela. No es entrenamiento: no
+    // toca ni el motor ni los pesos del lector, solo mide escala de cada
+    // dimension para que dos configuraciones se puedan comparar.
+    {
+        const int NCAL = std::min<int>(1500, (int)train.size());
+        for (int i = 0; i < NCAL; ++i) {
+            e.feed(train[i]);
+            features(e, f, aux);
+            lec.calibra(f, i + 1.0);
+        }
+        if (g_norm) lec.congela((double)NCAL);
+        e.reset_state();
+    }
     double bits = 0.0;
     int m = 0;
     // ------------------------------------------------------------------
@@ -160,10 +247,8 @@ static std::string genera(const Params &base, const Config &cfg,
         e.reset_state();
         for (size_t t = 0; t + 1 < train.size(); ++t) {
             e.feed(train[t]);
-            if (g_feat == 1) e.state_features(f);
-            else if (g_feat == 2) e.full_features(f);
-            else e.theta_features(f);
-            for (int i = 0; i < (int)f.size(); ++i) lec.z[i] = f[i];
+            features(e, f, aux);
+            lec.fija(f);
             // el lector tambien recibe el tercer factor: aprende mas cuando la
             // dopamina esta alta y se frena (o se invierte) cuando esta baja.
             const double mod = cfg.dopamina ? (1.0 + e.dopamina()) : 1.0;
@@ -177,10 +262,8 @@ static std::string genera(const Params &base, const Config &cfg,
             int ultimo = train.back();
             for (int n = 0; n < NB; ++n) {
                 e.feed(ultimo);
-                if (g_feat == 1) e.state_features(f);
-                else if (g_feat == 2) e.full_features(f);
-                else e.theta_features(f);
-                for (int i = 0; i < (int)f.size(); ++i) lec.z[i] = f[i];
+                features(e, f, aux);
+                lec.fija(f);
                 lec.paso(0, false);
                 double suma = 0.0;
                 for (int c = 0; c < lec.C; ++c) suma += lec.pr[c];
@@ -222,10 +305,8 @@ static std::string genera(const Params &base, const Config &cfg,
     std::string palabra;
     for (int n = 0; n < ngen; ++n) {
         e.feed(ultimo);
-        if (g_feat == 1) e.state_features(f);
-        else if (g_feat == 2) e.full_features(f);
-        else e.theta_features(f);
-        for (int i = 0; i < (int)f.size(); ++i) lec.z[i] = f[i];
+        features(e, f, aux);
+        lec.fija(f);
         lec.paso(0, false);
         // muestreo con temperatura 1
         double suma = 0.0;
@@ -280,6 +361,10 @@ int main(int argc, char **argv) {
     g_feat = argc > 7 ? std::atoi(argv[7]) : 2;   // 0 fatiga, 1 estado, 2 ambas
     if (argc > 6) mostrar = std::atoi(argv[6]);
     if (argc > 8) g_pace_gain = (float)std::atof(argv[8]);   // ganancia del marcapasos
+    g_taps = argc > 9 ? std::max(1, std::atoi(argv[9])) : 1;  // estados pasados
+    if (argc > 10) g_w_scale = (float)std::atof(argv[10]);    // recurrencia
+    if (argc > 11) g_inh = (float)std::atof(argv[11]);        // inhibicion
+    if (argc > 12) g_norm = std::atoi(argv[12]);               // 1 = normalizar lector
 
     auto corpus = carga(argv[1]);
     std::printf("corpus: %zu caracteres\n", corpus.size());
@@ -328,7 +413,7 @@ int main(int argc, char **argv) {
     if (usar_jer && usar_dop) cfgs.push_back(C("JER+DOPA", true, true, false));
     if (usar_jer && usar_dop && usar_osc) cfgs.push_back(C("TODO", true, true, true));
     // refuerzo sobre lo que el propio sistema escribe
-    cfgs.push_back(C("DOPA+REFUERZO", false, true, false, true));
+    if (usar_dop) cfgs.push_back(C("DOPA+REFUERZO", false, true, false, true));
     // oscilador ANCLADO al simbolo (fase reiniciada cada 8 ticks)
     if (usar_osc) {
         Config ca{"OSCIL+ANCLADO", false, false, true, false, EP, true, 0.35f};

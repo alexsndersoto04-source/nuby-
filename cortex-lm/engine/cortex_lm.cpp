@@ -272,6 +272,7 @@ void Engine::reset_state() {
     std::fill(ctx_hist_.begin(), ctx_hist_.end(), 0.0f);
     std::fill(feedback_.begin(), feedback_.end(), 0.0f);
     std::fill(fb_prev_.begin(), fb_prev_.end(), 0.0f);
+    for (auto& h : tap_hist_) std::fill(h.begin(), h.end(), 0.0f);
     inh_prev_ = 0.0f;
     t_ = 0;
 }
@@ -465,6 +466,22 @@ void Engine::end_symbol() {
             L.rate[j] = 0.0f;
         }
     }
+    // memoria de lectura: empujar la foto del simbolo que se acaba de cerrar.
+    // Debe hacerse AQUI (despues de los ticks, antes de que el lector pregunte)
+    // para que tap 0 sea el caracter actual y tap 1 el anterior.
+    {
+        const int F = p_.n_layers * p_.layer_size;
+        if (!tap_hist_.empty() && (int)tap_hist_[0].size() == F) {
+            for (size_t k = tap_hist_.size() - 1; k > 0; --k)
+                tap_hist_[k] = tap_hist_[k - 1];
+        }
+        if (!tap_hist_.empty()) {
+            int idx = 0;
+            const float inv = 1.0f / std::max(1e-3f, p_.v_th);
+            for (const auto& L : layers_)
+                for (int j = 0; j < L.n; ++j) tap_hist_[0][idx++] = L.v[j] * inv;
+        }
+    }
     // oscilador anclado: la fase vuelve al mismo punto en cada frontera de
     // simbolo. Cada marcapasos arranca desplazado, para que sus pulsos no
     // coincidan. Ver Params::pace_lock.
@@ -586,6 +603,23 @@ void Engine::full_features(std::vector<float>& out) const {
     out.assign((size_t)2 * N, 0.0f);
     for (int i = 0; i < N; ++i) out[i] = a[i];
     for (int i = 0; i < N; ++i) out[N + i] = b[i];
+}
+
+void Engine::tap_features(std::vector<float>& out, int n_tap) const {
+    // Un vector de estados pasados, del mas reciente al mas viejo. Se guarda el
+    // ULTIMO estado de cada simbolo (no el de cada tick): un caracter, una foto.
+    if (tap_hist_.empty() || (int)tap_hist_.size() != std::max(1, n_tap) ||
+        (int)tap_hist_[0].size() != p_.n_layers * p_.layer_size) {
+        tap_hist_.assign(std::max(1, n_tap),
+                         std::vector<float>(p_.n_layers * p_.layer_size, 0.0f));
+    }
+    // rellenar el historial si esta vacio: se hace aqui porque tap_features es
+    // const y el historial lo mantiene update_taps() desde feed().
+    const int n = std::max(1, n_tap);
+    out.assign((size_t)n * tap_hist_[0].size(), 0.0f);
+    for (int k = 0; k < n; ++k)
+        for (size_t i = 0; i < tap_hist_[0].size(); ++i)
+            out[(size_t)k * tap_hist_[0].size() + i] = tap_hist_[(size_t)k][i];
 }
 
 // Normalizacion por dimension: quita la media y escala a varianza unitaria.

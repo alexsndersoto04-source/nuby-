@@ -366,6 +366,19 @@ public:
     // Las dos cosas juntas: estado + fatiga. Es lo que usa el banco bueno.
     void full_features(std::vector<float>& out) const;
 
+    // MEMORIA DE LECTURA: la misma informacion que full_features, pero
+    // repetida `n_tap` veces con retardo de un caracter cada vez (el actual, el
+    // del caracter anterior, el de dos antes...). Medido con diag_var: el estado
+    // de la red NO se acuerda del caracter anterior (correlacion -0,03), asi que
+    // con una sola foto el lector solo puede aprender "que letra es esta" y su
+    // techo es el bigrama. Con los taps ve la foto de antes y de antes de antes.
+    void tap_features(std::vector<float>& out, int n_tap) const;
+    // Prepara el historial con `n` fotos. Llamar antes de empezar a alimentar.
+    void tap_hist_reserve(int n) {
+        tap_hist_.assign(std::max(1, n),
+                         std::vector<float>(p_.n_layers * p_.layer_size, 0.0f));
+    }
+
     void readout(const std::vector<float>& f, float* logits) const;
     void normalize(const std::vector<float>& in, std::vector<float>& out) const;
     void update_norm(const std::vector<float>& f);
@@ -448,6 +461,10 @@ private:
     std::vector<float> slow_w_;
     std::vector<std::vector<float>> slow_buf_;
     int slow_buf_len_ = 0;
+
+    // --- memoria de lectura (ver tap_features) ---
+    // tap_hist_[0] = estado al cerrar el simbolo actual, [1] = el anterior...
+    mutable std::vector<std::vector<float>> tap_hist_;
 
     // --- oscilador ---
     std::vector<float> pace_phase_;    // fase de cada marcapasos
