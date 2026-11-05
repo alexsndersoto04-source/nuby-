@@ -346,6 +346,15 @@ public:
     void last_features(std::vector<float>& out) const;
     // Features de memoria: fatiga (theta), que codifica lo que acaba de pasar.
     void theta_features(std::vector<float>& out) const;
+    // Features del ESTADO: potencial de membrana de cada neurona, normalizado.
+    // Por que existe: theta_features solo expone la FATIGA. Con eso el lector
+    // ve cuanto disparo cada neurona hace poco, pero no en que estado esta
+    // ahora. Medido: el mismo lector llega a 2,94 bits/caracter cuando lee el
+    // estado de un reservorio (bench_res) y se queda en 3,56 leyendo solo la
+    // fatiga del motor. La diferencia no es la red: es lo que se le ensena.
+    void state_features(std::vector<float>& out) const;
+    // Las dos cosas juntas: estado + fatiga. Es lo que usa el banco bueno.
+    void full_features(std::vector<float>& out) const;
 
     void readout(const std::vector<float>& f, float* logits) const;
     void normalize(const std::vector<float>& in, std::vector<float>& out) const;

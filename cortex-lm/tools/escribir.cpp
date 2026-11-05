@@ -139,6 +139,7 @@ int main(int argc, char **argv) {
     std::printf("entrenando (%zu caracteres, %zu clases)...\n", train.size(),
                 clases.size());
     std::fflush(stdout);
+    double frasco = 0.0, fmedia = 0.0;
     for (int ep = 0; ep < EPOCAS; ++ep) {
         double bits = 0.0;
         int m = 0;
@@ -147,9 +148,17 @@ int main(int argc, char **argv) {
             res.paso(train[t]);
             for (int i = 0; i < NN; ++i) lec.z[i] = res.x[i];
             bits += lec.paso(lec.pos[train[t + 1]], true);
+            // ¿el estado esta vivo o congelado? (suma de |x| normalizada)
+            if ((t % 977) == 0) {
+                double acc = 0.0;
+                for (int i = 0; i < NN; ++i) acc += std::fabs(res.x[i]);
+                frasco += acc / NN;
+                fmedia += 1.0;
+            }
             ++m;
         }
-        std::printf("  pasada %d: %.2f bits/caracter\n", ep + 1, bits / m);
+        std::printf("  pasada %d: %.2f bits/caracter | estado medio %.3f (0 = muerto, 1 = saturado)\n",
+                    ep + 1, bits / m, fmedia > 0 ? frasco / fmedia : 0.0);
         std::fflush(stdout);
     }
 

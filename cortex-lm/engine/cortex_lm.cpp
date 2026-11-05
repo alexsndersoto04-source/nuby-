@@ -554,6 +554,29 @@ void Engine::theta_features(std::vector<float>& out) const {
     }
 }
 
+
+void Engine::state_features(std::vector<float>& out) const {
+    // Potencial de membrana normalizado por el umbral. Es el estado real de la
+    // red; la fatiga sola no lo es.
+    const int F = p_.n_layers * p_.layer_size;
+    out.assign(F, 0.0f);
+    int idx = 0;
+    const float inv = 1.0f / std::max(1e-3f, p_.v_th);
+    for (const auto& L : layers_)
+        for (int j = 0; j < L.n; ++j) out[idx++] = L.v[j] * inv;
+}
+
+void Engine::full_features(std::vector<float>& out) const {
+    // estado (n_layer*N) + fatiga (n_layer*N), normalizados cada uno.
+    const int N = p_.n_layers * p_.layer_size;
+    std::vector<float> a, b;
+    state_features(a);
+    theta_features(b);
+    out.assign((size_t)2 * N, 0.0f);
+    for (int i = 0; i < N; ++i) out[i] = a[i];
+    for (int i = 0; i < N; ++i) out[N + i] = b[i];
+}
+
 // Normalizacion por dimension: quita la media y escala a varianza unitaria.
 // Sin esto el readout no puede ver dimensiones pequenas: al normalizar el
 // vector completo, 1022 dimensiones a cero y 2 a 0.7 dejan a esas dos con

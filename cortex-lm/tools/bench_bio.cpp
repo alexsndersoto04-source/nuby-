@@ -33,6 +33,11 @@
 
 using namespace cortex;
 
+// POR DEFECTO estado + fatiga: medido 3,14-3,16 frente a 3,74 con solo fatiga.
+// Con el estado delante, la dopamina ya no ayuda (3,30): ver
+// ACTA-ESTADO-DEL-MOTOR.md.
+static int g_feat = 2;   // 0 = fatiga, 1 = estado, 2 = estado + fatiga
+
 static std::vector<unsigned char> carga(const char *p) {
     std::ifstream in(p, std::ios::binary);
     if (!in) { std::fprintf(stderr, "no se puede abrir %s\n", p); std::exit(1); }
@@ -96,6 +101,7 @@ struct Config {
     bool jerarquia;
     bool dopamina;
     bool oscilador;
+    bool refuerzo = false;   // juzgar lo que el propio sistema escribe
     int  epocas = 3;
 };
 
@@ -119,24 +125,70 @@ static std::string genera(const Params &base, const Config &cfg,
     }
 
     Lector lec;
-    lec.init(p.layer_size, clases, 0.05);
 
     std::vector<float> f;
     const int EP = cfg.epocas;
+    // dimension de las features segun lo que se le de al lector
+    const int FD = (g_feat == 0) ? p.layer_size
+                 : (g_feat == 1) ? p.layer_size : 2 * p.layer_size;
+    lec.init(FD, clases, 0.05);
     double bits = 0.0;
     int m = 0;
+    // ------------------------------------------------------------------
+    // BUCLE DE REFUERZO
+    // ------------------------------------------------------------------
+    // El problema de la primera version: durante el entrenamiento TODO lo que
+    // lee es texto real, asi que el juez dice "bien" casi siempre (7.359
+    // refuerzos frente a 108 castigos). Una senal que siempre vale lo mismo no
+    // informa de nada: la dopamina era una constante disfrazada.
+    //
+    // Lo que se hace ahora, si el refuerzo esta activado: al final de cada
+    // pasada, el sistema ESCRIBE un bloque con lo aprendido, y ese texto
+    // inventado se le vuelve a presentar para que el juez lo juzgue. Ahi si hay
+    // castigo: sus propias palabras inventadas no estan en el diccionario. Es
+    // el ciclo recompensa -> aprende -> escribe -> se juzga -> recompensa.
+    std::mt19937 rng_ref(seed * 13u + 5u);
+    std::uniform_real_distribution<double> ud_ref(0.0, 1.0);
     for (int ep = 0; ep < EP; ++ep) {
         e.reset_state();
         for (size_t t = 0; t + 1 < train.size(); ++t) {
             e.feed(train[t]);
-            e.theta_features(f);
-            for (int i = 0; i < p.layer_size && i < (int)f.size(); ++i)
-                lec.z[i] = f[i];
+            if (g_feat == 1) e.state_features(f);
+            else if (g_feat == 2) e.full_features(f);
+            else e.theta_features(f);
+            for (int i = 0; i < (int)f.size(); ++i) lec.z[i] = f[i];
             // el lector tambien recibe el tercer factor: aprende mas cuando la
             // dopamina esta alta y se frena (o se invierte) cuando esta baja.
             const double mod = cfg.dopamina ? (1.0 + e.dopamina()) : 1.0;
             bits += lec.paso(lec.pos[train[t + 1]], true, mod);
             ++m;
+        }
+
+        if (cfg.dopamina && cfg.refuerzo) {
+            // --- el sistema escribe, y lo que escribe se juzga ---
+            const int NB = 120;
+            int ultimo = train.back();
+            for (int n = 0; n < NB; ++n) {
+                e.feed(ultimo);
+                if (g_feat == 1) e.state_features(f);
+                else if (g_feat == 2) e.full_features(f);
+                else e.theta_features(f);
+                for (int i = 0; i < (int)f.size(); ++i) lec.z[i] = f[i];
+                lec.paso(0, false);
+                double suma = 0.0;
+                for (int c = 0; c < lec.C; ++c) suma += lec.pr[c];
+                double r = ud_ref(rng_ref) * suma, acc = 0.0;
+                int elegido = lec.C - 1;
+                for (int c = 0; c < lec.C; ++c) {
+                    acc += lec.pr[c];
+                    if (r <= acc) { elegido = c; break; }
+                }
+                ultimo = lec.voc[elegido];
+                // AHORA se aprende de verdad: la dopamina viene de juzgar lo
+                // que el propio sistema acaba de inventar.
+                const double mod = 1.0 + e.dopamina();
+                if (e.dopamina() != 0.0) lec.paso(elegido, true, mod);
+            }
         }
         std::printf("    [%s] pasada %d: %.2f bits/caracter (train)\n",
                     cfg.nombre, ep + 1, bits / std::max(1, m));
@@ -163,9 +215,10 @@ static std::string genera(const Params &base, const Config &cfg,
     std::string palabra;
     for (int n = 0; n < ngen; ++n) {
         e.feed(ultimo);
-        e.theta_features(f);
-        for (int i = 0; i < p.layer_size && i < (int)f.size(); ++i)
-            lec.z[i] = f[i];
+        if (g_feat == 1) e.state_features(f);
+        else if (g_feat == 2) e.full_features(f);
+        else e.theta_features(f);
+        for (int i = 0; i < (int)f.size(); ++i) lec.z[i] = f[i];
         lec.paso(0, false);
         // muestreo con temperatura 1
         double suma = 0.0;
@@ -217,6 +270,7 @@ int main(int argc, char **argv) {
     if (argc > 5) {
         std::sscanf(argv[5], "%d,%d,%d,%d", &usar_jer, &usar_dop, &usar_osc, &EP);
     }
+    g_feat = argc > 7 ? std::atoi(argv[7]) : 2;   // 0 fatiga, 1 estado, 2 ambas
     if (argc > 6) mostrar = std::atoi(argv[6]);
 
     auto corpus = carga(argv[1]);
@@ -228,7 +282,7 @@ int main(int argc, char **argv) {
     std::vector<int> clases;
     for (int c = 0; c < 256; ++c) if (visto[c]) clases.push_back(c);
 
-    Params base;
+        Params base;
     base.seed = SEED;
     base.layer_size = 1024;
     base.ticks_per_char = 8;
@@ -254,8 +308,8 @@ int main(int argc, char **argv) {
     std::unordered_set<std::string> dic(base.diccionario.begin(),
                                         base.diccionario.end());
     std::vector<Config> cfgs;
-    auto C = [&](const char *n, bool j, bool d, bool o) {
-        Config c{n, j, d, o, EP};
+    auto C = [&](const char *n, bool j, bool d, bool o, bool r = false) {
+        Config c{n, j, d, o, r, EP};
         return c;
     };
     cfgs.push_back(C("BASE   (nada nuevo)", false, false, false));
@@ -265,6 +319,8 @@ int main(int argc, char **argv) {
     if (usar_jer && usar_osc) cfgs.push_back(C("JER+OSC", true, false, true));
     if (usar_jer && usar_dop) cfgs.push_back(C("JER+DOPA", true, true, false));
     if (usar_jer && usar_dop && usar_osc) cfgs.push_back(C("TODO", true, true, true));
+    // refuerzo sobre lo que el propio sistema escribe
+    cfgs.push_back(C("DOPA+REFUERZO", false, true, false, true));
 
     for (const auto &cfg : cfgs) {
         std::printf("\n===== %s =====\n", cfg.nombre);
