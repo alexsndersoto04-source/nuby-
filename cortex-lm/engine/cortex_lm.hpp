@@ -31,6 +31,8 @@
 #include <vector>
 #include <random>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace cortex {
 
@@ -168,6 +170,69 @@ struct Params {
     float readout_norm   = 0.0f;   // 0 = desactivado; recorte por fila opcional
     float gclip          = 1.0f;
 
+    // ======================================================================
+    // MODULACION DOPAMINERGICA (tercer factor)
+    // ======================================================================
+    // dw = eta * STDP * D(t).  D(t) es una senal GLOBAL de refuerzo que solo
+    // depende de lo que la red ACABA de escribir y de un diccionario estatico.
+    // No viene de ningun gradiente: es una senal difusa, como la dopamina.
+    //
+    //    +1  si la ultima palabra formada existe en el diccionario
+    //    -1  si no existe y ya es lo bastante larga como para ser una palabra
+    //     0  mientras la palabra esta a medias
+    //
+    // La dopamina tiene su propia dinamica (sube de golpe, baja despacio) para
+    // que el refuerzo alcance a las sinapsis que participaron, no solo a la
+    // ultima que disparo. Sin esa cola, D(t) llegaria tarde a todas.
+    // ACTIVADA por defecto: es la unica de las tres piezas con efecto medido
+    // (3,67 frente a 3,74 bits/caracter en 3 semillas). Ver ACTA-TRES-PIEZAS.md.
+    float dop_gain       = 1.0f;   // cuanto pesa D(t) en la regla
+    float dop_rise       = 0.6f;   // subida por evento (0..1)
+    float dop_tau        = 40.0f;  // ticks de caida (lento a proposito)
+    int   dop_min_len    = 3;      // longitud a partir de la cual se juzga palabra
+    std::vector<std::string> diccionario;   // palabras validas (minusculas)
+    // Refuerzo tambien por estructura: una letra que casi nunca sigue a la
+    // anterior delata ruido. Se mide con un bigrama fijo cargado del corpus.
+
+    // ======================================================================
+    // JERARQUIA TEMPORAL: poblacion rapida + poblacion lenta
+    // ======================================================================
+    // La capa se parte en dos poblaciones con constantes de membrana distintas:
+    //   rapida (primeras n_fast): tau_m corto, sigue el ritmo de las letras
+    //   lenta  (resto)          : tau_m largo, retiene el contexto de la frase
+    // La lenta realimenta a la rapida por una matriz fija (no entrenada), con
+    // retraso axonal largo guardado en un buffer circular por neurona.
+    // DESACTIVADA por defecto: medido 3,76-3,77 frente a 3,73-3,74. Su estado se
+    // actualiza pero el lector no lo aprovecha con este tamano de texto.
+    int   n_fast         = 0;      // 0 = todo rapido (comportamiento anterior)
+    float tau_m_fast     = 8.0f;
+    float tau_m_slow     = 80.0f;
+    float slow_to_fast   = 0.15f;  // ganancia de la realimentacion lenta->rapida
+    int   slow_delay     = 24;     // ticks de retraso axonal de esa via
+    int   slow_fanout    = 6;      // destinos por neurona lenta
+    // Cuanto de la entrada sensorial llega tambien a la poblacion lenta. Sin
+    // esto la memoria de trabajo esta sorda y su estado no codifica nada.
+    float slow_in_gain    = 0.45f;
+
+    // ======================================================================
+    // OSCILADOR INTERNO DE CONTROL (estado de contexto)
+    // ======================================================================
+    // Un grupo pequeno de neuronas marcapasos dispara de forma ritmica y
+    // autonoma (no necesita entrada). Su corriente entra como bias en la capa y
+    // da a la red una "brujula" que cambia despacio dentro del bloque de texto.
+    // Dos marcapasos con frecuencias distintas y no multiplas: su fase relativa
+    // recorre muchos valores y codifica en que punto del bloque estamos.
+    // DESACTIVADO por defecto: implementado y medido, pero EMPEORA (4,45 frente
+    // a 3,74). La corriente periodica mete el reloj en la membrana y el lector
+    // acaba leyendo el tick en vez del texto. Se deja disponible para probarlo
+    // con otra dinamica, no porque funcione.
+    int   n_pace         = 0;      // numero de marcapasos (0 = desactivado)
+    float pace_gain      = 0.35f;  // corriente que inyecta cada marcapasos
+    float pace_period_a  = 11.0f;  // ticks del primer marcapasos
+    float pace_period_b  = 29.0f;  // ticks del segundo
+    float pace_bias_fast = 1.0f;   // peso del marcapasos sobre la poblacion rapida
+    float pace_bias_slow = 0.6f;   // peso sobre la poblacion lenta
+
     // --- entrenamiento ---
     int   seq_len        = 128;
     uint32_t seed        = 1234;
@@ -220,6 +285,10 @@ struct Layer {
     // para alinearla con la llegada: el peso solo crece si el disparo
     // presinaptico llego a tiempo de contribuir al disparo postsinaptico.
     std::vector<float> pre_trace;
+    // Traza presinaptica LENTA para la via jerarquica: constante de tiempo
+    // mucho mayor, de modo que la huella de una neurona lenta dure simbolos.
+    std::vector<float> pre_trace_slow;
+    float alpha_slow = 0.0f;
     // Traza postsinaptica (Paso 4): vale 1 en el tick en que la neurona de
     // destino disparo y decae con tau_post. Es el tercer factor de la regla.
     std::vector<float> post_trace;
@@ -289,6 +358,30 @@ public:
     // Estadisticas del error local: cuantas neuronas y cuanto.
     void stats_error_local(int capa, float& medio, float& maximo) const;
 
+    // ===================== MODULACION DOPAMINERGICA =====================
+    // Carga el diccionario (una linea por palabra) y los bigramas del corpus.
+    void cargar_diccionario(const std::string& ruta);
+    void cargar_bigramas(const std::string& ruta_corpus);
+    // Juzga la palabra en curso y emite el pulso de dopamina (+1 / -1 / 0).
+    // Devuelve el evento emitido. Se llama al cerrar cada simbolo.
+    float juzgar_palabra(int ultimo_simbolo);
+    float dopamina() const { return dop_; }
+    long  dopamina_positivos() const { return dop_pos_; }
+    long  dopamina_negativos() const { return dop_neg_; }
+    const std::string& palabra_actual() const { return palabra_; }
+
+    // ======================== JERARQUIA TEMPORAL ========================
+    // Cuantas neuronas son rapidas y cuantas lentas (0,0 si esta desactivada).
+    void poblaciones(int& rapidas, int& lentas) const {
+        rapidas = p_.n_fast > 0 ? p_.n_fast : (int)layers_.empty() ? 0 : layers_[0].n;
+        lentas  = p_.n_fast > 0 ? std::max(0, (int)layers_[0].n - p_.n_fast) : 0;
+    }
+
+    // ========================= OSCILADOR INTERNO =========================
+    float oscilador(int i) const {
+        return i < (int)pace_phase_.size() ? pace_phase_[i] : 0.0f;
+    }
+
     long   ticks() const { return t_; }
     long   spikes() const { return spikes_; }
     int    n_neurons() const { return n_neurons_; }
@@ -317,6 +410,29 @@ private:
     std::vector<float> logits_;
     long t_ = 0;
     int  ch_actual_ = -1;     // simbolo que se esta presentando (Paso 5)
+
+    // --- dopamina (tercer factor) ---
+    float dop_ = 0.0f;           // nivel actual de dopamina D(t)
+    float dop_evento_ = 0.0f;    // ultimo evento (+1 refuerzo, -1 castigo)
+    long  dop_pos_ = 0, dop_neg_ = 0;
+    std::string palabra_;        // palabra que se esta formando
+    std::unordered_set<std::string> dic_;   // diccionario en hash
+    // bigramas del corpus: refuerzo/castigo por estructura aunque la palabra
+    // sea nueva ("plabara" no esta en el diccionario pero sus bigramas si).
+    std::unordered_map<uint32_t, float> bigr_;
+    float bigr_umbral_ = 0.0f;
+
+    // --- jerarquia temporal ---
+    // Via lenta -> rapida: matriz fija dispersa y un buffer circular por
+    // neurona rapida con el retraso axonal.
+    std::vector<i32>   slow_src_;      // destinos rapidos x fanout
+    std::vector<float> slow_w_;
+    std::vector<std::vector<float>> slow_buf_;
+    int slow_buf_len_ = 0;
+
+    // --- oscilador ---
+    std::vector<float> pace_phase_;    // fase de cada marcapasos
+    std::vector<float> pace_period_;
     float inh_prev_ = 0.0f;   // actividad reciente que alimenta el freno
     long spikes_ = 0;
     long symbols_ = 0;

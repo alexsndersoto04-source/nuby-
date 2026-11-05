@@ -31,6 +31,9 @@
 #include <cstdio>
 #include <stdexcept>
 #include <cstdlib>
+#include <fstream>
+#include <cctype>
+#include <string>
 
 namespace cortex {
 
@@ -171,12 +174,64 @@ void Engine::build_random(unsigned seed) {
         // Paso 4: traza postsinaptica.
         Lr.post_trace.assign(N, 0.0f);
         Lr.alpha_post = std::exp(-1.0f / std::max(1.0f, p_.tau_post));
+        Lr.pre_trace_slow.assign(N, 0.0f);
+        Lr.alpha_slow = std::exp(-1.0f / std::max(1.0f, p_.tau_elig * 6.0f));
         // Paso 5: prediccion top-down por neurona.
         Lr.pred.assign(N, 0.0f);
         Lr.pred_err.assign(N, 0.0f);
 
         queues_[li].init(p_.d_max);
     }
+
+    // ------------------------------------------------------------------
+    // JERARQUIA TEMPORAL: via lenta -> rapida (conectividad FIJA, no se entrena)
+    // ------------------------------------------------------------------
+    if (p_.n_fast > 0 && p_.n_fast < N) {
+        const int nf = p_.n_fast;
+        const int nslow = N - nf;
+        const int fan = std::max(1, p_.slow_fanout);
+        slow_src_.assign((size_t)nf * fan, 0);
+        slow_w_.assign((size_t)nf * fan, 0.0f);
+        std::uniform_int_distribution<int> sd_(0, nslow - 1);
+        std::normal_distribution<float> gs(0.0f, 1.0f);
+        const float sc = p_.slow_to_fast / std::sqrt((float)fan);
+        for (int i = 0; i < nf; ++i)
+            for (int k = 0; k < fan; ++k) {
+                slow_src_[(size_t)i * fan + k] = nf + sd_(rng_);   // indice global
+                slow_w_[(size_t)i * fan + k] = sc * (0.5f + std::fabs(gs(rng_)));
+            }
+        // Buffer circular por neurona rapida: guarda el caudal lento de los
+        // ultimos `slow_delay` ticks. Es el retraso axonal largo.
+        slow_buf_len_ = std::max(1, p_.slow_delay);
+        slow_buf_.assign(nf, std::vector<float>(slow_buf_len_, 0.0f));
+    } else {
+        slow_buf_len_ = 0;
+        slow_src_.clear();
+        slow_w_.clear();
+        slow_buf_.clear();
+    }
+
+    // ------------------------------------------------------------------
+    // OSCILADOR INTERNO: marcapasos con periodo fijo y no multiplos
+    // ------------------------------------------------------------------
+    pace_phase_.assign(std::max(0, p_.n_pace), 0.0f);
+    pace_period_.assign(std::max(0, p_.n_pace), 1.0f);
+    if (p_.n_pace > 0) {
+        const float base[4] = {p_.pace_period_a, p_.pace_period_b,
+                               p_.pace_period_a * 2.7f, p_.pace_period_b * 1.7f};
+        for (int i = 0; i < p_.n_pace; ++i)
+            pace_period_[i] = std::max(2.0f, base[i % 4]);
+        // fases repartidas para que no arranquen todos a la vez
+        for (int i = 0; i < p_.n_pace; ++i)
+            pace_phase_[i] = (float)i / (float)std::max(1, p_.n_pace);
+    }
+
+    dic_.clear();
+    for (const auto& w : p_.diccionario) dic_.insert(w);
+    dop_ = 0.0f;
+    dop_evento_ = 0.0f;
+    dop_pos_ = dop_neg_ = 0;
+    palabra_.clear();
 
     const int F = p_.n_features_max();
     R_.assign((size_t)p_.n_chars * F, 0.0f);
@@ -234,6 +289,21 @@ void Engine::inject_only(int ch) {
         L0.v[j] += dw[i];
         if (!L0.active[j]) { L0.active[j] = 1; L0.active_list.push_back(j); }
     }
+    // JERARQUIA: la poblacion lenta tambien recibe la entrada, pero mas debil
+    // (slow_in_gain). Sin esto la memoria de trabajo se queda SORDA: sube su
+    // membrana por la via rapida pero nunca sabe QUE se esta escribiendo, y su
+    // estado no codifica nada. Medido: sin esta via la jerarquia no cambiaba el
+    // texto en absoluto.
+    if (p_.n_fast > 0 && p_.slow_in_gain > 0.0f) {
+        const int nf = p_.n_fast;
+        const int nslow = L0.n - nf;
+        if (nslow > 0) {
+            for (int i = 0; i < per; ++i) {
+                const int j = nf + (dst[i] % nslow);
+                L0.v[j] += p_.slow_in_gain * dw[i];
+            }
+        }
+    }
 }
 
 void Engine::inject_mem(int ch) {
@@ -253,6 +323,8 @@ int Engine::step() {
     for (auto& L : layers_) {
         for (auto& tr : L.pre_trace) tr *= L.alpha_elig;
         for (auto& tr : L.post_trace) tr *= L.alpha_post;   // Paso 4
+        // traza lenta (via jerarquica): dura simbolos, no ticks
+        for (auto& tr : L.pre_trace_slow) tr *= L.alpha_slow;
     }
 
     for (size_t li = 0; li < layers_.size(); ++li) {
@@ -281,13 +353,73 @@ int Engine::step() {
         // anterior y con decaimiento. Es lo que da un punto fijo al regimen.
         const float i_inh = p_.inh_gain * inh_prev_;
 
-        // 2. relajacion de la fatiga y de la membrana
+        // 2. relajacion de la fatiga y de la membrana.
+        //
+        //    JERARQUIA TEMPORAL: la fuga NO es la misma para todas las neuronas.
+        //    Las `n_fast` primeras usan exp(-1/tau_m_fast): olvidan en pocos
+        //    ticks y siguen el ritmo de las letras. El resto usa
+        //    exp(-1/tau_m_slow): su membrana apenas se descarga, asi que retiene
+        //    el contexto de la frase mientras se escriben los caracteres
+        //    siguientes. Es la memoria de trabajo que pide la pieza 2, y es
+        //    puramente local: solo cambia una constante de tiempo por neurona.
+        const float am_fast = p_.n_fast > 0
+                            ? std::exp(-p_.dt / std::max(0.5f, p_.tau_m_fast)) : am;
+        const float am_slow = p_.n_fast > 0
+                            ? std::exp(-p_.dt / std::max(0.5f, p_.tau_m_slow)) : am;
         for (int j = 0; j < L.n; ++j) {
             L.theta[j] *= p_.theta_decay;
             if (L.theta[j] < 1e-4f) L.theta[j] = 0.0f;
             if (L.refr[j] > 0) { L.refr[j]--; continue; }
-            L.v[j] = (L.v[j] - p_.v_reset) * am + p_.v_reset + L.bias[j] - i_inh;
+            const float amj = (p_.n_fast > 0 && j >= p_.n_fast) ? am_slow : am_fast;
+            // La poblacion lenta tiene ademas un sesgo tonicamente mas alto: sin
+            // el, con una fuga tan lenta nunca llega al umbral y se queda muda.
+            const float extra = (p_.n_fast > 0 && j >= p_.n_fast) ? 0.0f : 0.0f;
+            L.v[j] = (L.v[j] - p_.v_reset) * amj + p_.v_reset + L.bias[j] + extra
+                     - i_inh;
             if (L.v[j] < 1e-4f) L.v[j] = p_.v_reset;
+        }
+
+        // 2b. OSCILADOR INTERNO: los marcapasos laten solos y su corriente entra
+        //     como bias en la capa. Como su periodo no es multiplo del de otro,
+        //     la fase relativa recorre muchos valores dentro de un bloque: eso
+        //     es la "brujula" que le dice a la red en que punto va.
+        if (!pace_phase_.empty()) {
+            for (size_t i = 0; i < pace_phase_.size(); ++i) {
+                pace_phase_[i] += 1.0f / pace_period_[i];
+                if (pace_phase_[i] >= 1.0f) pace_phase_[i] -= 1.0f;
+                // pulso gaussiano estrecho: dispara una vez por ciclo
+                const float d = pace_phase_[i];
+                const float pulso = std::exp(-0.5f * (d - 0.5f) * (d - 0.5f) / 0.0025f);
+                const float amp = p_.pace_gain * pulso;
+                if (amp < 1e-4f) continue;
+                for (int j = 0; j < L.n; ++j) {
+                    L.v[j] += amp * (j < p_.n_fast || p_.n_fast == 0
+                                     ? p_.pace_bias_fast : p_.pace_bias_slow);
+                }
+            }
+        }
+
+        // 2c. VIA LENTA -> RAPIDA con retraso axonal largo.
+        //     Cada neurona rapida guarda en su buffer circular la corriente que
+        //     le manda la poblacion lenta; la lee `slow_delay` ticks despues.
+        //     Es la realimentacion de la pieza 2: el estado lento (la frase)
+        //     modula a la poblacion rapida mientras esta escribe las letras.
+        if (!slow_buf_.empty() && (int)slow_buf_.size() <= L.n) {
+            const int nf = (int)slow_buf_.size();
+            const int fan = std::max(1, p_.slow_fanout);
+            const int pos = (int)(t_ % slow_buf_len_);
+            // escribir el caudal actual de la poblacion lenta
+            for (int i = 0; i < nf; ++i) {
+                float acc = 0.0f;
+                for (int k = 0; k < fan; ++k) {
+                    const int src = slow_src_[(size_t)i * fan + k];
+                    if (src < L.n) acc += slow_w_[(size_t)i * fan + k] * L.v[src];
+                }
+                slow_buf_[i][pos] = acc;
+            }
+            // leer el que toca (retraso largo)
+            for (int i = 0; i < nf; ++i)
+                L.v[i] += slow_buf_[i][pos];
         }
 
         // 3. decision y disparo
@@ -301,6 +433,7 @@ int Engine::step() {
             L.spike_count[j]++;
             L.theta[j] = std::min(p_.theta_max, L.theta[j] + p_.theta_step);
             L.pre_trace[j] = 1.0f;      // marca temporal del disparo
+            L.pre_trace_slow[j] = 1.0f; // huella larga (via jerarquica)
             L.post_trace[j] = 1.0f;     // Paso 4: la de destino, en su capa
             fired++;
 
@@ -347,6 +480,32 @@ void Engine::feed(int ch) {
     inject_only(ch);
     for (int s = 0; s < p_.ticks_per_char; ++s) step();
     end_symbol();
+
+    // ---- tercer factor: ¿lo que acaba de escribir se sostiene? ----
+    // Se juzga con el diccionario y con los bigramas del corpus. El evento
+    // MUEVE el nivel de dopamina; no lo fija. Asi el refuerzo tiene cola y
+    // alcanza a las sinapsis que participaron en los ultimos ticks.
+    const float ev = juzgar_palabra(ch);
+    const float caida = std::exp(-(float)p_.ticks_per_char /
+                                 std::max(1.0f, p_.dop_tau));
+    dop_ *= caida;
+    if (ev > 0.0f) {
+        dop_ += p_.dop_rise * ev;
+        dop_pos_++;
+    } else if (ev < 0.0f) {
+        dop_ += p_.dop_rise * ev;     // el castigo tambien tiene cola
+        dop_neg_++;
+    }
+    if (dop_ > 1.0f) dop_ = 1.0f;
+    if (dop_ < -1.0f) dop_ = -1.0f;
+
+    // La dopamina tambien entra en la red como corriente moduladora: sube el
+    // sesgo de toda la capa de forma difusa. Es lo que hace que el refuerzo se
+    // note en el disparo y no solo en el peso.
+    if (p_.dop_gain > 0.0f && dop_ != 0.0f)
+        for (auto& L : layers_)
+            for (int j = 0; j < L.n; ++j)
+                L.v[j] += p_.dop_gain * 0.05f * dop_;
 }
 
 void Engine::ctx_features(std::vector<float>& out) const {
@@ -495,6 +654,89 @@ void Engine::stats_error_local(int capa, float& medio, float& maximo) const {
     medio = (float)(acc / (double)L.pred_err.size());
 }
 
+
+// ===========================================================================
+// 1. MODULACION DOPAMINERGICA
+// ===========================================================================
+// La dopamina NO es un gradiente. Es una senal global, escalar, que no sabe que
+// sinapsis tocaron ni que paso dentro de la red: solo "esto salio bien" o "esto
+// salio mal". Esa falta de informacion es justo lo que la hace biologica: al
+// llegar a todas las sinapsis a la vez, refuerza lo que ya estaba debilitandose
+// (la traza de elegibilidad) sin poder dirigir el credito.
+//
+// Por eso la regla es  dw = eta * STDP * D(t)  y no  dw = eta * gradiente.
+// La direccion la pone la STDP local; la dopamina solo decide SI se consolida.
+void Engine::cargar_diccionario(const std::string& ruta) {
+    std::ifstream in(ruta);
+    if (!in) throw std::runtime_error("no se puede abrir el diccionario: " + ruta);
+    std::string w;
+    dic_.clear();
+    p_.diccionario.clear();
+    while (std::getline(in, w)) {
+        while (!w.empty() && (w.back() == '\r' || w.back() == ' ')) w.pop_back();
+        if (w.size() < 2) continue;
+        for (auto& c : w) c = (char)std::tolower((unsigned char)c);
+        dic_.insert(w);
+        p_.diccionario.push_back(w);
+    }
+}
+
+void Engine::cargar_bigramas(const std::string& ruta) {
+    // Cuenta bigramas de letras del corpus y guarda solo los que aparecen lo
+    // bastante para ser "estructura" y no casualidad. Un castigo por letra
+    // imposible ("qzz") detecta ruido aunque la palabra entera sea nueva.
+    std::ifstream in(ruta, std::ios::binary);
+    if (!in) throw std::runtime_error("no se puede abrir el corpus: " + ruta);
+    std::unordered_map<uint32_t, int> cnt;
+    int prev = -1;
+    char c;
+    while (in.get(c)) {
+        const uint32_t a = (uint32_t)(unsigned char)c;
+        if (prev >= 0) cnt[((uint32_t)prev << 8) | a]++;
+        prev = (int)a;
+    }
+    bigr_.clear();
+    bigr_.reserve(cnt.size() * 2);
+    int total = 0;
+    for (auto& kv : cnt) total += kv.second;
+    for (auto& kv : cnt) {
+        // probabilidad del bigrama, suavizada
+        bigr_[kv.first] = (float)kv.second / (float)std::max(1, total);
+    }
+    bigr_umbral_ = 1.0f / (float)std::max(1000, total);
+}
+
+float Engine::juzgar_palabra(int ultimo) {
+    dop_evento_ = 0.0f;
+    const bool es_letra = (ultimo >= 0) && !std::isspace(ultimo) &&
+                          ultimo != '.' && ultimo != ',' && ultimo != ';' &&
+                          ultimo != ':' && ultimo != '!' && ultimo != '?' &&
+                          ultimo != '"' && ultimo != '(' && ultimo != ')';
+
+    if (es_letra) {
+        palabra_.push_back((char)std::tolower(ultimo));
+        // castigo inmediato por estructura imposible, sin esperar al final
+        if (!bigr_.empty() && palabra_.size() >= 2 && dop_evento_ == 0.0f) {
+            const uint32_t k = ((uint32_t)(unsigned char)palabra_[palabra_.size() - 2] << 8)
+                             | (uint32_t)(unsigned char)palabra_.back();
+            auto it = bigr_.find(k);
+            const float p = (it == bigr_.end()) ? 0.0f : it->second;
+            if (p < bigr_umbral_) dop_evento_ = -0.5f;   // letra que no sigue a la anterior
+        }
+        return dop_evento_;
+    }
+
+    // fin de palabra: se juzga
+    if ((int)palabra_.size() >= p_.dop_min_len) {
+        if (!dic_.empty() && dic_.count(palabra_) > 0)
+            dop_evento_ = +1.0f;                        // palabra valida
+        else
+            dop_evento_ = -1.0f;                        // ruido
+    }
+    palabra_.clear();
+    return dop_evento_;
+}
+
 void Engine::learn(const float* error, const std::vector<float>& f) {
     // 1. senal de aprendizaje por neurona (estilo e-prop).
     // Se difunde el error por la matriz de LECTURA, no por una matriz aleatoria.
@@ -564,7 +806,14 @@ void Engine::learn(const float* error, const std::vector<float>& f) {
                 const float sgn = usar_local ? s_local[post] : feedback_[L.offset + post];
                 if (sgn == 0.0f) continue;
                 const float e = tr * std::exp(-(float)L.g.delay[s] / std::max(1.0f, p_.tau_elig));
-                const float dw = -p_.eta * sgn * e * tp;
+                // --- TERCER FACTOR (dopamina) ---
+                // La Sinapsis no sabe si acerto. Solo sabe cuanto se movio
+                // (eligibilidad e * tp). La dopamina decide si ese movimiento
+                // se consolida: con D~0 no hay cambio de peso; con D=+1 se
+                // consolida tal cual; con D=-1 se invierte el signo, que es lo
+                // que hace un castigo (deshace lo que llevo al error).
+                const float dop_factor = 1.0f + p_.dop_gain * dop_;
+                const float dw = -p_.eta * sgn * e * tp * dop_factor;
                 const float w0 = L.g.w_init[s];
                 float w = L.g.weight[s] + dw;
                 const float lo = std::max(p_.w_min, w0 * (1.0f - p_.w_frac_max));
