@@ -37,6 +37,9 @@ using namespace cortex;
 // Con el estado delante, la dopamina ya no ayuda (3,30): ver
 // ACTA-ESTADO-DEL-MOTOR.md.
 static int g_feat = 2;   // 0 = fatiga, 1 = estado, 2 = estado + fatiga
+// Ganancia del marcapasos a probar (0 = no probar). Ver tools/diag_estado.cpp:
+// a 0,35 el oscilador mete 5x mas corriente que el propio texto.
+static float g_pace_gain = 0.0f;
 
 static std::vector<unsigned char> carga(const char *p) {
     std::ifstream in(p, std::ios::binary);
@@ -103,6 +106,8 @@ struct Config {
     bool oscilador;
     bool refuerzo = false;   // juzgar lo que el propio sistema escribe
     int  epocas = 3;
+    bool anclado = false;    // oscilador con fase reiniciada por simbolo
+    float pace_gain = 0.35f; // corriente del marcapasos (se mide, no se fija)
 };
 
 // Genera texto. Devuelve el texto, los bits/caracter y las palabras producidas.
@@ -116,6 +121,8 @@ static std::string genera(const Params &base, const Config &cfg,
     p.n_fast      = cfg.jerarquia ? (int)(p.layer_size * 0.70f) : 0;
     p.dop_gain    = cfg.dopamina ? 1.0f : 0.0f;
     p.n_pace      = cfg.oscilador ? 4 : 0;
+    p.pace_lock   = (cfg.oscilador && cfg.anclado) ? 1 : 0;
+    p.pace_gain   = cfg.pace_gain;
 
     Engine e(p);
     e.build_random(seed);
@@ -260,7 +267,7 @@ static std::string genera(const Params &base, const Config &cfg,
 int main(int argc, char **argv) {
     if (argc < 3) {
         std::fprintf(stderr,
-                     "uso: bench_bio CORPUS DICCIONARIO [CARACTERES] [SEMILLA]\n");
+                     "uso: bench_bio CORPUS DICC [NGEN] [SEED] [\"JER,DOP,OSC,EP\"] [mostrar] [FEAT] [PACE_GAIN]\n");
         return 1;
     }
     const int NGEN = argc > 3 ? std::atoi(argv[3]) : 300;
@@ -272,6 +279,7 @@ int main(int argc, char **argv) {
     }
     g_feat = argc > 7 ? std::atoi(argv[7]) : 2;   // 0 fatiga, 1 estado, 2 ambas
     if (argc > 6) mostrar = std::atoi(argv[6]);
+    if (argc > 8) g_pace_gain = (float)std::atof(argv[8]);   // ganancia del marcapasos
 
     auto corpus = carga(argv[1]);
     std::printf("corpus: %zu caracteres\n", corpus.size());
@@ -309,7 +317,7 @@ int main(int argc, char **argv) {
                                         base.diccionario.end());
     std::vector<Config> cfgs;
     auto C = [&](const char *n, bool j, bool d, bool o, bool r = false) {
-        Config c{n, j, d, o, r, EP};
+        Config c{n, j, d, o, r, EP, false, 0.35f};
         return c;
     };
     cfgs.push_back(C("BASE   (nada nuevo)", false, false, false));
@@ -321,6 +329,19 @@ int main(int argc, char **argv) {
     if (usar_jer && usar_dop && usar_osc) cfgs.push_back(C("TODO", true, true, true));
     // refuerzo sobre lo que el propio sistema escribe
     cfgs.push_back(C("DOPA+REFUERZO", false, true, false, true));
+    // oscilador ANCLADO al simbolo (fase reiniciada cada 8 ticks)
+    if (usar_osc) {
+        Config ca{"OSCIL+ANCLADO", false, false, true, false, EP, true, 0.35f};
+        cfgs.push_back(ca);
+        if (g_pace_gain > 0.0f) {
+            Config cg{"OSCIL+ANCLADO gain", false, false, true, false, EP, true, g_pace_gain};
+            cfgs.push_back(cg);
+        }
+        if (usar_jer) {
+            Config cj{"JER+OSC+ANCLADO", true, false, true, false, EP, true, 0.35f};
+            cfgs.push_back(cj);
+        }
+    }
 
     for (const auto &cfg : cfgs) {
         std::printf("\n===== %s =====\n", cfg.nombre);

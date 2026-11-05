@@ -222,16 +222,26 @@ struct Params {
     // da a la red una "brujula" que cambia despacio dentro del bloque de texto.
     // Dos marcapasos con frecuencias distintas y no multiplas: su fase relativa
     // recorre muchos valores y codifica en que punto del bloque estamos.
-    // DESACTIVADO por defecto: implementado y medido, pero EMPEORA (4,45 frente
-    // a 3,74). La corriente periodica mete el reloj en la membrana y el lector
-    // acaba leyendo el tick en vez del texto. Se deja disponible para probarlo
-    // con otra dinamica, no porque funcione.
+    // DESACTIVADO por defecto: implementado y medido, pero EMPEORA. Con el motor
+    // arreglado (el lector ya ve el estado) da 4,45 frente a 3,01-3,03. Anclar
+    // la fase al simbolo lo empeora mas (6,04-6,16) y bajar la ganancia lo deja
+    // en 3,49-3,54: nunca gana. Medido el mecanismo (tools/diag_estado.cpp): la
+    // corriente sube la carga media de 0,065 a 0,335 SIN subir la varianza del
+    // estado, o sea mas señal y cero informacion. Ver ACTA-TRES-PIEZAS-V2.md.
+    // Se deja disponible para probar otra dinamica, no porque funcione.
     int   n_pace         = 0;      // numero de marcapasos (0 = desactivado)
     float pace_gain      = 0.35f;  // corriente que inyecta cada marcapasos
     float pace_period_a  = 11.0f;  // ticks del primer marcapasos
     float pace_period_b  = 29.0f;  // ticks del segundo
     float pace_bias_fast = 1.0f;   // peso del marcapasos sobre la poblacion rapida
     float pace_bias_slow = 0.6f;   // peso sobre la poblacion lenta
+    // ANCLAJE AL SIMBOLO (medido y descartado tambien): con pace_lock las fases
+    // vuelven a un punto fijo al cerrar cada simbolo, para que la corriente diga
+    // "por aqui va el caracter" en vez de ser un reloj libre. Resultado: 6,04-6,16
+    // frente a 3,01-3,03, o sea PEOR que el oscilador libre. Se conserva el
+    // parametro para no repetir el experimento a ciegas.
+    int   pace_lock        = 0;    // 1 = fases reiniciadas en cada simbolo
+    float pace_phase_reset = 0.0f; // fase a la que vuelven (0 = principio)
 
     // --- entrenamiento ---
     int   seq_len        = 128;

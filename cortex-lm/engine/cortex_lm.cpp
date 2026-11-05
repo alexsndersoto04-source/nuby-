@@ -465,6 +465,17 @@ void Engine::end_symbol() {
             L.rate[j] = 0.0f;
         }
     }
+    // oscilador anclado: la fase vuelve al mismo punto en cada frontera de
+    // simbolo. Cada marcapasos arranca desplazado, para que sus pulsos no
+    // coincidan. Ver Params::pace_lock.
+    if (p_.pace_lock && !pace_phase_.empty()) {
+        const int np = (int)pace_phase_.size();
+        for (int i = 0; i < np; ++i) {
+            float f = p_.pace_phase_reset + (float)i / (float)np;
+            if (f >= 1.0f) f -= 1.0f;
+            pace_phase_[(size_t)i] = f;
+        }
+    }
     // desplazar historial sensorial
     if (p_.n_ctx > 1)
         std::memmove(&ctx_hist_[p_.n_chars], &ctx_hist_[0],
