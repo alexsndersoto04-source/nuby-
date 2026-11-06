@@ -58,21 +58,23 @@ say "2. Banco normalizado (bench_bio, EP=10, holdout 80/20 secuencial)"
 # Cada config: "JER,DOP,OSC,EP" + args. El order esta en tools/bench_bio.cpp:
 #   mostrar g_feat g_pace g_taps g_wscale g_inh g_norm
 #   g_nfast g_tf g_ts g_sig g_hidden g_fscale g_ncal g_tpc
-bench() { # $1=nombre  $2=cfg  $3=g_taps  $4=extra tail
-  local nombre="$1" cfg="$2" taps="$3" extra="$4"
+bench() { # $1=nombre  $2=cfg  $3=g_taps  $4=extra tail  $5=filtro (nombre del config)
+  local nombre="$1" cfg="$2" taps="$3" extra="$4" filtro="$5"
   local -a rows=()
   for s in "${SEEDS[@]}"; do
+    # bench_bio corre BASE siempre como referencia, así que con "1,0,0,10"
+    # imprime DOS lineas de holdout (BASE y JERARQ). Se filtra por nombre.
     v=$("$BBIO" data/corpus.txt data/dic.txt 200 "$s" "$cfg" \
       0 2 0.0 "$taps" 0 0 1 $extra 2>/dev/null \
-      | awk -F': ' '/holdout/{print $2}' | awk '{print $1}')
+      | awk -v f="$filtro" -F': ' 'index($0,f) && /holdout/{print $2}' | awk '{print $1}')
     rows+=("$(printf '%s seed %-6s %s' "$nombre" "$s" "$v")")
   done
   printf '%s\n' "${rows[@]}"
 }
 TAIL="0 0 0 0 0 1.0 1500 8"
-BO=$(bench "BASE      " "0,0,0,10" 1 "$TAIL")
-B2=$(bench "BASE t2   " "0,0,0,10" 2 "$TAIL")
-JO=$(bench "JER300    " "1,0,0,10" 1 "300 6 200 0.8 0 1.0 1500 8")
+BO=$(bench "BASE      " "0,0,0,10" 1 "$TAIL" "BASE")
+B2=$(bench "BASE t2   " "0,0,0,10" 2 "$TAIL" "BASE")
+JO=$(bench "JER300    " "1,0,0,10" 1 "300 6 200 0.8 0 1.0 1500 8" "JERARQ")
 printf '%s\n%s\n%s\n' "$BO" "$B2" "$JO"
 
 say "3. Veredicto"

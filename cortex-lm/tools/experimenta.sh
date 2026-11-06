@@ -43,19 +43,21 @@ say "1. Memoria (diag_mem)"
 "$DMEM" "$CORPUS" "$N" 1234 "$NF" "$TMF" "$TMS" "$SI" || die "diag_mem falló"
 
 say "2. Banco (bench_bio, EP=10)"
-bench() { # $1=nombre  $2=cfg  $3=extra tail
-  local nombre="$1" cfg="$2" extra="$3"
+bench() { # $1=nombre  $2=cfg  $3=extra tail  $4=filtro
+  local nombre="$1" cfg="$2" extra="$3" filtro="$4"
   local -a rows=()
   for s in "${SEEDS[@]}"; do
+    # bench_bio corre BASE siempre como referencia; con "1,0,0,10" imprime
+    # BASE y JERARQ. Se filtra por nombre para sacar la linea que toca.
     v=$("$BBIO" "$CORPUS" data/dic.txt 200 "$s" "$cfg" \
       0 2 0.0 "$TAPS" 0 0 1 $extra 1.0 1500 8 2>/dev/null \
-      | awk -F': ' '/holdout/{print $2}' | awk '{print $1}')
+      | awk -v f="$filtro" -F': ' 'index($0,f) && /holdout/{print $2}' | awk '{print $1}')
     rows+=("$(printf '%s seed %-6s %s' "$nombre" "$s" "$v")")
   done
   printf '%s\n' "${rows[@]}"
 }
-bench "BASE    " "0,0,0,10" "0 0 0 0 0"
-bench "TU CONFIG" "1,0,0,10" "$NF $TMF $TMS $SI 0"
+bench "BASE    " "0,0,0,10" "0 0 0 0 0" "BASE"
+bench "TU CONFIG" "1,0,0,10" "$NF $TMF $TMS $SI 0" "JERARQ"
 
 say "3. Veredicto"
 printf 'mira arriba: lag1 de TU CONFIG debe ser >= 35%% y lag0 >= 95%%\n'
