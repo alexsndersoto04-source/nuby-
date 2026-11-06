@@ -250,10 +250,15 @@ static std::string genera(const Params &base, const Config &cfg,
     std::vector<float> f, aux;
     e.tap_hist_reserve(std::max(1, g_taps));
     const int EP = cfg.epocas;
-    // dimension de las features segun lo que se le de al lector
-    const int FD0 = (g_feat == 0) ? p.layer_size
-                  : (g_feat == 1) ? p.layer_size : 2 * p.layer_size;
-    const int FD = FD0 * std::max(1, g_taps);
+    // dimension de las features segun lo que se le de al lector.
+    // features() produces: g_feat==0 -> theta (N); g_feat==1 -> g_taps*N;
+    // g_feat==2 -> g_taps*N + theta (N). El FD tiene que coincidir con eso,
+    // o el lector recibe un vector de otra longitud y las dimensiones extra
+    // se caen (con g_taps=1 daba 2N y coincidía; con g_taps>=2 estaba roto).
+    const int Nlayer = p.layer_size;
+    const int FD = (g_feat == 0) ? Nlayer
+                 : (g_feat == 1) ? Nlayer * std::max(1, g_taps)
+                                 : Nlayer * std::max(1, g_taps) + Nlayer;
     lec.init(FD, clases, 0.05, g_hidden, seed);
     // --- calibracion de la normalizacion ---
     // Solo cuando g_norm esta activado. Sin normalizacion, no hay calibracion
