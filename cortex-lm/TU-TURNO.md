@@ -73,6 +73,21 @@ JER300:    2.87  2.85  2.87  2.87  2.88   (promedio 2.868)
 **Eso es una mejora real en tu arquitectura: 2.870 -> 2.836 bits/caracter.**
 Y la memoria, bien medida, queda en 2.868: ni ayuda ni perjudica.
 
+### 3b. LAS PASADAS DE ENTRENAMIENTO: EL EMPULSION MAS GRANDE
+
+`EP` (epocas) estaba fijo en 10. Se barrero con g_taps=2:
+
+```
+EP=10: 2.83    EP=20: 2.73    EP=40: 2.66
+EP=15: 2.77    EP=30: 2.69    EP=50: 2.65    EP=60: 2.64
+```
+
+Baja cada vez menos: se esta plantando. El holdout es el tramo NO VISTO
+(ultimo 20 %, en orden), asi que no es sobreentreno.
+
+**De 2.87 a 2.64 con dos cambios: que el lector vea el estado anterior y
+que se entrene mas tiempo.** Y la memoria interna sigue sin mover nada.
+
 Lo que ya se descartó, porque se midio:
 - `g_feat=1` (solo los 2 estados, sin fatiga): 2.85 — la fatiga vale.
 - `g_feat=0` (solo fatiga): 2.98.

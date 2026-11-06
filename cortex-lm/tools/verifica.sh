@@ -72,16 +72,17 @@ bench() { # $1=nombre  $2=cfg  $3=g_taps  $4=extra tail  $5=filtro (nombre del c
   printf '%s\n' "${rows[@]}"
 }
 TAIL="0 0 0 0 0 1.0 1500 8"
-BO=$(bench "BASE      " "0,0,0,10" 1 "$TAIL" "BASE")
-B2=$(bench "BASE t2   " "0,0,0,10" 2 "$TAIL" "BASE")
-JO=$(bench "JER300    " "1,0,0,10" 1 "300 6 200 0.8 0 1.0 1500 8" "JERARQ")
-printf '%s\n%s\n%s\n' "$BO" "$B2" "$JO"
+BO=$(bench "BASE        " "0,0,0,10" 1 "$TAIL" "BASE")
+B2=$(bench "BASE t2     " "0,0,0,10" 2 "$TAIL" "BASE")
+B40=$(bench "BASE t2 EP40" "0,0,0,40" 2 "$TAIL" "BASE")
+JO=$(bench "JER300      " "1,0,0,10" 1 "300 6 200 0.8 0 1.0 1500 8" "JERARQ")
+printf '%s\n%s\n%s\n%s\n' "$BO" "$B2" "$B40" "$JO"
 
 say "3. Veredicto"
 B0=$(lag_of "BASE" 0); B1=$(lag_of "BASE" 1)
 J0=$(lag_of "JER 300" 0); J1=$(lag_of "JER 300" 1)
 avg() { printf '%s\n' "$1" | awk '{s+=$NF; n++} END{printf "%.3f", s/n}'; }
-HB=$(avg "$BO"); H2=$(avg "$B2"); HJ=$(avg "$JO")
+HB=$(avg "$BO"); H2=$(avg "$B2"); H40=$(avg "$B40"); HJ=$(avg "$JO")
 
 printf 'criterio de MEMORIA: lag1 >= 35%%  |  lag0 >= 95%%  |  holdout <= BASE\n'
 printf '  BASE     lag0 %s%%  lag1 %s%%\n' "$B0" "$B1"
@@ -98,10 +99,11 @@ awk -v a="$HJ" -v b="$HB" 'BEGIN{exit !(a+0 <= b+0 + 0.005)}' \
   || { printf '  [FAIL]   holdout JER300 %s > BASE %s\n' "$HJ" "$HB"; ok=0; }
 
 printf '\ncriterio FUNCIONAL: el lector con 2 estados pasados <= BASE\n'
-printf '  promedio holdout:  BASE %s   BASE t2 %s   JER300 %s\n' "$HB" "$H2" "$HJ"
-awk -v a="$H2" -v b="$HB" 'BEGIN{exit !(a+0 <= b+0 + 0.005)}' \
-  && printf '  [ok]     BASE t2 %s <= BASE %s\n' "$H2" "$HB" \
-  || { printf '  [FAIL]   BASE t2 %s > BASE %s\n' "$H2" "$HB"; ok=0; }
+printf '  promedio holdout:  BASE %s   BASE t2 %s   BASE t2 EP40 %s   JER300 %s\n' \
+       "$HB" "$H2" "$H40" "$HJ"
+awk -v a="$H40" -v b="$HB" 'BEGIN{exit !(a+0 <= b+0 + 0.005)}' \
+  && printf '  [ok]     BASE t2 EP40 %s <= BASE %s\n' "$H40" "$HB" \
+  || { printf '  [FAIL]   BASE t2 EP40 %s > BASE %s\n' "$H40" "$HB"; ok=0; }
 
 printf '\n'
 [ "$ok" = 1 ] && printf '\033[32mRESULTADO: PASA.\033[0m\n' \
