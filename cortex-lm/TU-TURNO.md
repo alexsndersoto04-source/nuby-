@@ -1,112 +1,105 @@
-# TU TURNO — lo que tú vas a hacer
+# TU TURNO — estado real del proyecto
 
-No te expliquen cosas. Te dejan una máquina. Esta es la máquina.
+No es una lista de tareas. Es dónde estamos, qué se provó y qué queda.
 
 ---
 
-## 1. Lo que tienes que hacer (tres comandos, en orden)
+## 1. EL PROBLEMA QUE TU TRAJISTE: RESUELTO
 
-En la carpeta `cortex-lm/`:
+Tú dijiste: el estado ve el presente al 100 % pero olvida la letra anterior.
+
+Lo que se hizo: una poblacion lenta de neuronas dentro de tu red (sin cambiar
+la arquitectura, sin gradientes). Es la que conserva el pasado.
+
+Lo que mide `diag_mem`, en el corpus grande:
+
+```
+BASE     lag 0: 100.0%   lag 1:  22.8%    <- olvida la anterior el 77%
+JER 300  lag 0: 100.0%   lag 1:  44.0%    <- olvida la anterior el 56%
+```
+
+**Criterio pactado: PASA.** lag1 >= 35 % (44 %), lag0 >= 95 % (100 %), y el
+texto que escribe no se empeora (2.87 = 2.87 en BASE). Eso esta hecho.
+
+---
+
+## 2. LA SORPRESA: ESA MEMORIA NO SIRVE PARA ESCRIBIR
+
+Se metio tres veces, igualito:
+
+```
+con memoria  (slow_in 0.8):  2.87 bits/caracter
+sin memoria  (slow_in 0.0):  2.87 bits/caracter
+BASE:                        2.87 bits/caracter
+```
+
+Quitar la memoria del todo no cambia NI UNA CENTESIMA. Y se comprobo que la
+memoria llega al lector: la poblacion lenta tiene 722/724 dimensiones vivas
+tras la normalizacion (99.7 %), asi que no la mata nadie.
+
+Conclusión: la memoria esta en el estado, se mide, llega al lector, y el motor
+no la consume para escribir. Es informacion que se almacena y nadie la lee.
+
+---
+
+## 3. LO QUE SÍ FUNCIONA: EL ESTADO ANTERIOR
+
+Tu lector (`tap_features`) puede recibir varias fotos del estado pasado.
+Antes se le daba solo una. Se metio a dar dos:
+
+```
+g_taps=1 (lo que se usaba):  BASE 2.87   JER300 2.87
+g_taps=2 (ve el anterior):   BASE 2.83   JER300 2.83
+g_taps=3:                    BASE 2.83   JER300 2.85
+g_taps=4:                    BASE 2.85
+g_taps=5:                    BASE 2.87
+g_taps=6:                    BASE 2.89   <- ya peor que la base
+```
+
+Hay un plato en 2 y 3. Se confirmo en **5 semillas**:
+
+```
+BASE:      2.87  2.86  2.87  2.87  2.88   (promedio 2.870)
+g_taps=2:  2.83  2.83  2.83  2.84  2.85   (promedio 2.836)
+g_taps=3:  2.83  2.83  2.83  2.84  2.85   (promedio 2.836)
+```
+
+**Eso es una mejora real en tu arquitectura: 2.87 -> 2.83 bits/caracter.**
+Y con eso, la memoria interna se vuelve redundante.
+
+Lo que ya se descartó, porque se midio:
+- `g_feat=1` (solo los 2 estados, sin fatiga): 2.85 — la fatiga vale.
+- `g_feat=0` (solo fatiga): 2.98.
+- `g_hidden=8` / `16` (lector no lineal): 4.45 / 4.40 — lo destroza.
+- La longitud de calibracion (1500 a 8000): 2.83 siempre, no mueve nada.
+
+---
+
+## 4. QUÉ HICEMOS AHORA
+
+Se esta barrendo `ticks_por_caracter` con `g_taps=2` (8 ya da 2.83; se prueban
+12, 16 y 24). Porque `ticks_per_char` era la palanca mas fuerte que ya se
+habia encontrado, y ahora el lector ve mas, asi que puede valer mas.
+
+## 5. TU COMPRO BUENO, EN UN SOLO COMANDO
 
 ```bash
-# A. La prueba completa: compila, mide memoria, mide el banco en 5 semillas.
-#    tarda ~20 min. Lanzala y espera.
+cd cortex-lm
+
+# La prueba completa: memoria + banco en 5 semillas + veredicto calculado.
 ./tools/verifica.sh
 
-# B. Tu palanca: metes tus números y te devuelve la memoria y el bits.
-#    Los 4 números son la poblacion lenta, la que guarda el pasado.
+# Tu palanca: metes los 4 numeros de la poblacion lenta y cuantas fotos
+# del pasado le das al lector.
 ./tools/experimenta.sh 300 6 200 0.8
-
-# C. Cualquier otro numero que se te ocurra, igual de facil:
-./tools/experimenta.sh 288 6 200 0.8
-./tools/experimenta.sh 320 6 190 0.75
-./tools/experimenta.sh 256 6 220 0.85
+./tools/experimenta.sh 300 6 200 0.8 data/corpus.txt 2400 "1234 7 99" 2
 ```
 
-Si quieres una prueba mas corta: `./tools/verifica.sh 2400 "1234 7"` (2 semillas, ~8 min).
+## 6. QUE NO HACER
 
-Nada de eso es teoria. Los numeros que te devuelve son los mismos que yo he medido.
-
----
-
-## 2. Como lees lo que te devuelve
-
-Hay dos cosas distintas, y no se confunden:
-
-**A. Memoria del estado** (`diag_mem`, seccion 1 y el bloque de `experimenta.sh`):
-
-```
-BASE     lag 0: 100.0%   lag 1: 22.8%
-JER 300  lag 0: 100.0%   lag 1: 44.0%
-```
-
-- `lag 0` = ¿el estado sabe que letra hay **ahora**? Siempre ~100 %. Es el presente.
-- `lag 1` = ¿el estado sabe que letra havia **justo antes**? Esa es la memoria.
-- BASE marca 22.8 %. JER 300 marca 44.0 %. El estado ve el presente al 100 % y, sin memoria, **olvida** la letra anterior. Con memoria, la recuerda el doble de veces.
-
-**B. Banco normalizado** (`bench_bio`, seccion 2):
-
-```
-seed 1234  BASE 2.87   JER300 2.87
-seed 7     BASE 2.86   JER300 2.85
-...
-```
-
-Es **bits por caracter** en texto que el motor **nunca vi**. Mas abajo = mejor. Es la unica medida que importa al final.
-
----
-
-## 3. El criterio (lo pactado, sin torcerlo)
-
-Tres cosas, todas a la vez:
-
-| Regla | Lo que significa |
-|---|---|
-| `lag1 >= 35 %` | La memoria existe y es real |
-| `lag0 >= 95 %` | El presente no se sacrifica por ella |
-| `holdout <= BASE` | Esa memoria **paga su alquiler**: no sube el bits/caracter |
-
-**JER 300 PASA las tres.** Eso esta hecho y verificado, en el corpus grande (45.7 k chars) y en 5 semillas.
-
----
-
-## 4. El problema que si esta abierto (este es el que te queda)
-
-Mira los numeros de arriba juntos:
-
-- JER 300 tiene **1,7x mas memoria** que BASE (lag1 44 % vs 23 %).
-- Pero en holdout son **identicos** (2.87 vs 2.87).
-
-Es decir: **el motor recuerda la letra anterior el doble de veces y no gana ni un milesimo de bits.** La memoria esta ahi, mide muchisimo, y el banco no se entera.
-
-Eso tiene una causa hipotetica y una manera de comprobarla sin specular. Yo ya medi la palanca, no la estoy suponiendo: `slow_in_gain` es la corriente que entra al canal lento, y al variarla la memoria se mueve **continuamente**, sin saltos:
-
-```
-slow_in  0.8   -> lag1 44.0 %     (la memoria, como en JER 300)
-slow_in  0.4   -> lag1 27.2 %
-slow_in  0.2   -> lag1 23.1 %
-slow_in  0.0   -> lag1 22.4 %     (se fue; BASE es 22.8 %)
-```
-
-Con `slow_in = 0` la memoria desaparece y el estado vuelve a ser BASE. Entonces puedes hacer la prueba **exacta**: misma red, mismo aprendizaje, unica diferencia la memoria.
-
-```bash
-./tools/experimenta.sh 300 6 200 0.8 data/corpus.txt 2400 "1234"   # con memoria
-./tools/experimenta.sh 300 6 200 0.0 data/corpus.txt 2400 "1234"   # sin memoria
-```
-
-Compara los dos bits de holdout con BASE (2.87 a esa semilla):
-
-- **si el bits sin memoria sube** -> la memoria estorba. Esta pisando el presente.
-- **si no se mueve un milesimo** -> la memoria no entra por ningun lado que el banco mire. Esta en el estado, mide muchisimo, y nadie la lee para predecir.
-
-En ambos casos no se trata de "faltan datos" ni de "otro alfabeto": se trata de **un cable que no llega**. Esa es la siguiente medida. Dos comandos, un numero, una conclusión.
-
----
-
-## 5. Que no hacer
-
-- No cambies los numeros del criterio porque el resultado no te gusta. El criterio esta pactado.
-- No mezcles las particiones. El holdout es el último 20 % del texto, **en orden**, siempre.
-- No digas "funciona" o "no funciona" sin el banco. El `diag_mem` es un termometro; el bits es la enfermedad.
-- No subas corpus a GitHub (viene en `.gitignore`). Para tenerlo otra vez: `python3 data/build_corpus_large.py`.
+- No cambies el criterio porque el resultado no te gusta. Está pactado.
+- No mezcles particiones: el holdout es el último 20 % del texto, en orden.
+- No digas "funciona" sin el banco. `diag_mem` es un termometro; el bits es
+  la enfermedad.
+- No subas corpus a GitHub. Para tenerlo otra vez:
+  `python3 data/build_corpus_large.py`

@@ -7,12 +7,15 @@
 #   SEMILLAS  1234 7 99 2024 555 por defecto (5 semillas = protocolo completo)
 #
 # Lo que hace, sin preguntar:
-#   0. compila diag_mem y bench_bio
+#   0. compila diag_mem, bench_bio
 #   1. memoria del estado (diag_mem): BASE vs JER 300, lag0 y lag1
-#   2. banco normalizado (bench_bio, EP=10, holdout 80/20 secuencial)
-#   3. veredicto calculado: PASA / NO PASA
+#   2. banco normalizado (bench_bio, EP=10, holdout 80/20 secuencial),
+#      tres configs: BASE, BASE con 2 estados pasados, y JER 300
+#   3. veredicto calculado
 #
-# Criterio pactado: lag1 >= 35%, lag0 >= 95%, holdout <= BASE.
+# Criterio pactado (memoria): lag1 >= 35%, lag0 >= 95%, holdout <= BASE.
+# Criterio funcional (reciente): el lector con 2 estados pasados debe estar
+#   <= BASE en holdout. Esa es la mejora que se encontro.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -44,7 +47,6 @@ say "1. Memoria del estado (diag_mem, N=$N, seed 1234)"
 DOUT=$("$DMEM" data/corpus.txt "$N" 1234) || die "diag_mem falló"
 printf '%s\n' "$DOUT"
 
-# extrae lag0/lag1 de un bloque dado. Formato: "   lag 1: acierto  22.8%"
 lag_of() { # $1=nombre del bloque  $2=lag
   printf '%s\n' "$DOUT" | awk -v b="$1" -v L="$2" '
     $0 ~ /estados:/ { inb = (index($0, b) > 0) }
@@ -53,59 +55,52 @@ lag_of() { # $1=nombre del bloque  $2=lag
 }
 
 say "2. Banco normalizado (bench_bio, EP=10, holdout 80/20 secuencial)"
-bench() { # $1=nombre  $2=cfg string  $3=extra tail
-  local nombre="$1" cfg="$2" extra="$3"
+# Cada config: "JER,DOP,OSC,EP" + args. El order esta en tools/bench_bio.cpp:
+#   mostrar g_feat g_pace g_taps g_wscale g_inh g_norm
+#   g_nfast g_tf g_ts g_sig g_hidden g_fscale g_ncal g_tpc
+bench() { # $1=nombre  $2=cfg  $3=g_taps  $4=extra tail
+  local nombre="$1" cfg="$2" taps="$3" extra="$4"
   local -a rows=()
   for s in "${SEEDS[@]}"; do
     v=$("$BBIO" data/corpus.txt data/dic.txt 200 "$s" "$cfg" \
-      0 2 0.0 1 0 0 1 $extra 1.0 2>/dev/null \
+      0 2 0.0 "$taps" 0 0 1 $extra 2>/dev/null \
       | awk -F': ' '/holdout/{print $2}' | awk '{print $1}')
     rows+=("$(printf '%s seed %-6s %s' "$nombre" "$s" "$v")")
   done
   printf '%s\n' "${rows[@]}"
 }
-BO=$(bench "BASE  " "0,0,0,10" "0 0 0 0 0")
-JO=$(bench "JER300" "1,0,0,10" "300 6 200 0.8 0")
-printf '%s\n%s\n' "$BO" "$JO"
+TAIL="0 0 0 0 0 1.0 1500 8"
+BO=$(bench "BASE      " "0,0,0,10" 1 "$TAIL")
+B2=$(bench "BASE t2   " "0,0,0,10" 2 "$TAIL")
+JO=$(bench "JER300    " "1,0,0,10" 1 "300 6 200 0.8 0 1.0 1500 8")
+printf '%s\n%s\n%s\n' "$BO" "$B2" "$JO"
 
 say "3. Veredicto"
 B0=$(lag_of "BASE" 0); B1=$(lag_of "BASE" 1)
 J0=$(lag_of "JER 300" 0); J1=$(lag_of "JER 300" 1)
-printf 'criterio: lag1 >= 35%%  |  lag0 >= 95%%  |  holdout <= BASE\n'
-printf '  BASE    lag0 %s%%  lag1 %s%%\n' "$B0" "$B1"
-printf '  JER 300 lag0 %s%%  lag1 %s%%\n' "$J0" "$J1"
+avg() { printf '%s\n' "$1" | awk '{s+=$NF; n++} END{printf "%.3f", s/n}'; }
+HB=$(avg "$BO"); H2=$(avg "$B2"); HJ=$(avg "$JO")
 
+printf 'criterio de MEMORIA: lag1 >= 35%%  |  lag0 >= 95%%  |  holdout <= BASE\n'
+printf '  BASE     lag0 %s%%  lag1 %s%%\n' "$B0" "$B1"
+printf '  JER 300  lag0 %s%%  lag1 %s%%\n' "$J0" "$J1"
 ok=1
-[ -n "$J0" ] || die "no saqué lag0 de JER 300 — mirá la seccion 1"
-[ -n "$J1" ] || die "no saqué lag1 de JER 300 — mirá la seccion 1"
+awk -v a="$J1" 'BEGIN{exit !(a+0 >= 35.0)}' \
+  && printf '  [ok]     lag1 %s%% >= 35%%\n' "$J1" \
+  || { printf '  [FAIL]   lag1 %s%% < 35%%\n' "$J1"; ok=0; }
+awk -v a="$J0" 'BEGIN{exit !(a+0 >= 95.0)}' \
+  && printf '  [ok]     lag0 %s%% >= 95%%\n' "$J0" \
+  || { printf '  [FAIL]   lag0 %s%% < 95%%\n' "$J0"; ok=0; }
+awk -v a="$HJ" -v b="$HB" 'BEGIN{exit !(a+0 <= b+0 + 0.005)}' \
+  && printf '  [ok]     holdout JER300 %s <= BASE %s\n' "$HJ" "$HB" \
+  || { printf '  [FAIL]   holdout JER300 %s > BASE %s\n' "$HJ" "$HB"; ok=0; }
 
-# holdout: promediar lo que salió. Se re-lee de la seccion 2 pidiendo de nuevo
-# los valores (es lo mismo que ya corrió; solo se imprime de nuevo si hace falta).
-printf '\n'
-if awk -v a="$J1" 'BEGIN{exit !(a+0 >= 35.0)}'; then
-  printf '  [ok]     lag1 %s%% >= 35%%\n' "$J1"
-else
-  printf '  [FAIL]   lag1 %s%% < 35%%\n' "$J1"; ok=0
-fi
-if awk -v a="$J0" 'BEGIN{exit !(a+0 >= 95.0)}'; then
-  printf '  [ok]     lag0 %s%% >= 95%%\n' "$J0"
-else
-  printf '  [FAIL]   lag0 %s%% < 95%%\n' "$J0"; ok=0
-fi
-
-# holdout: promedio de los valores ya capturados en $BO y $JO.
-HJ=$(printf '%s\n' "$JO" | awk '{s+=$NF; n++} END{printf "%.3f", s/n}')
-HB=$(printf '%s\n' "$BO" | awk '{s+=$NF; n++} END{printf "%.3f", s/n}')
-printf '  promedio holdout: BASE %s  |  JER 300 %s\n' "$HB" "$HJ"
-if awk -v a="$HJ" -v b="$HB" 'BEGIN{exit !(a+0 <= b+0 + 0.005)}'; then
-  printf '  [ok]     holdout %s <= BASE %s\n' "$HJ" "$HB"
-else
-  printf '  [FAIL]   holdout %s > BASE %s\n' "$HJ" "$HB"; ok=0
-fi
+printf '\ncriterio FUNCIONAL: el lector con 2 estados pasados <= BASE\n'
+printf '  promedio holdout:  BASE %s   BASE t2 %s   JER300 %s\n' "$HB" "$H2" "$HJ"
+awk -v a="$H2" -v b="$HB" 'BEGIN{exit !(a+0 <= b+0 + 0.005)}' \
+  && printf '  [ok]     BASE t2 %s <= BASE %s\n' "$H2" "$HB" \
+  || { printf '  [FAIL]   BASE t2 %s > BASE %s\n' "$H2" "$HB"; ok=0; }
 
 printf '\n'
-if [ "$ok" = 1 ]; then
-  printf '\033[32mRESULTADO: PASA — las tres reglas.\033[0m\n'
-else
-  printf '\033[31mRESULTADO: NO PASA — mirá las lineas [FAIL].\033[0m\n'
-fi
+[ "$ok" = 1 ] && printf '\033[32mRESULTADO: PASA.\033[0m\n' \
+               || printf '\033[31mRESULTADO: NO PASA — mirá las [FAIL].\033[0m\n'

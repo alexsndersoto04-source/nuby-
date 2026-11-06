@@ -55,6 +55,8 @@ static int g_norm = 1;   // normalizacion calibrada: ESSENCIAL. Sin ella el lect
                          // chars, se congela y se usa para todos los configs.
 static int g_hidden = 0;     // 0 = lector lineal, >0 = expansión aleatoria
 static float g_fscale = 1.0f; // escala de las features (1.0 = sin escalar)
+static int g_ncal = 1500;      // caracteres con que se calibra la normalizacion
+static int g_tpc = 8;          // ticks por simbolo (palanca de memoria mas fuerte)
 // Jerarquia: cuántas neuronas son rápidas (0 = no jerarquia).
 static int g_nfast = 0;
 static float g_tf = 0.0f, g_ts = 0.0f, g_sig = 0.0f;
@@ -264,7 +266,7 @@ static std::string genera(const Params &base, const Config &cfg,
     // Solo cuando g_norm esta activado. Sin normalizacion, no hay calibracion
     // y el lector recibe las features tal cual.
     if (g_norm) {
-        const int NCAL = std::min<int>(1500, (int)train.size());
+        const int NCAL = std::min<int>(g_ncal, (int)train.size());
         for (int i = 0; i < NCAL; ++i) {
             e.feed(train[i]);
             features(e, f, aux);
@@ -434,8 +436,11 @@ int main(int argc, char **argv) {
     if (argc > 16) g_sig = (float)std::atof(argv[16]);            // slow_in_gain
     if (argc > 17) g_hidden = std::atoi(argv[17]);                // hidden layer size
     if (argc > 18) g_fscale = (float)std::atof(argv[18]);           // feature scale
-    if (argc > 17) g_hidden = std::atoi(argv[17]);                // hidden layer size
-    if (argc > 18) g_fscale = (float)std::atof(argv[18]);           // feature scale
+    // Cantidad de caracteres con los que se CALIBRA la normalizacion del
+    // lector. Estuvo fijo a 1500; con g_taps>=2 el lector tiene 3*N
+    // dimensiones y 1500 muestras es poco, así que se puede mover.
+    if (argc > 19) g_ncal = std::atoi(argv[19]);                     // calibracion
+    if (argc > 20) g_tpc = std::atoi(argv[20]);                      // ticks/simbolo
 
     auto corpus = carga(argv[1]);
     std::printf("corpus: %zu caracteres\n", corpus.size());
@@ -449,7 +454,7 @@ int main(int argc, char **argv) {
         Params base;
     base.seed = SEED;
     base.layer_size = 1024;
-    base.ticks_per_char = 8;
+    base.ticks_per_char = g_tpc > 0 ? g_tpc : 8;
 
     // diccionario: el que venga. El motor lo necesita en Params porque
     // build_random() construye la tabla hash.
