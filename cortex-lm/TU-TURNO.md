@@ -56,16 +56,22 @@ g_taps=5:                    BASE 2.87
 g_taps=6:                    BASE 2.89   <- ya peor que la base
 ```
 
-Hay un plato en 2 y 3. Se confirmo en **5 semillas**:
+Hay un plato en 2 y 3. Se confirmo en **5 semillas**, con el extraction corregido (bench_bio corre
+BASE siempre como referencia, y antes se tomaban las dos lineas de holdout
+juntas; ya se filtra por nombre de config):
 
 ```
 BASE:      2.87  2.86  2.87  2.87  2.88   (promedio 2.870)
-g_taps=2:  2.83  2.83  2.83  2.84  2.85   (promedio 2.836)
-g_taps=3:  2.83  2.83  2.83  2.84  2.85   (promedio 2.836)
+BASE t2:   2.83  2.83  2.83  2.84  2.85   (promedio 2.836)
+JER300:    2.87  2.85  2.87  2.87  2.88   (promedio 2.868)
 ```
 
-**Eso es una mejora real en tu arquitectura: 2.87 -> 2.83 bits/caracter.**
-Y con eso, la memoria interna se vuelve redundante.
+**RESULTADO: PASA** en los dos criterios:
+- memoria: lag1 44 % >= 35 %, lag0 100 % >= 95 %, holdout JER300 2.868 <= BASE 2.870.
+- funcional: BASE t2 2.836 <= BASE 2.870.
+
+**Eso es una mejora real en tu arquitectura: 2.870 -> 2.836 bits/caracter.**
+Y la memoria, bien medida, queda en 2.868: ni ayuda ni perjudica.
 
 Lo que ya se descartó, porque se midio:
 - `g_feat=1` (solo los 2 estados, sin fatiga): 2.85 — la fatiga vale.
