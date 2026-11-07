@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Reconstruye el corpus real (novela Don Quijote, epub 2000) y el diccionario.
+
+El texto se obtuvo de Project Gutenberg via fetch_page (no hay red en el
+sandbox). Se toma el tramo de la novela (se skipea la portada, el índice y el
+prólogo) y se limpia. Luego se generan:
+  corpus.txt  -> el texto de entrenamiento (real, no repetitivo)
+  dic.txt     -> palabras únicas del corpus (para el juez de dopamina)
+"""
+import re
+
+TEXT = """En un lugar de la Mancha, de cuyo nombre no quiero acordarme, no ha mucho
+tiempo que vivía un hidalgo de los de lanza en astillero, adarga antigua,
+rocín flaco y galgo corredor. Una olla de algo más vaca que carnero,
+salpicón las más noches, duelos y quebrantos los sábados, lantejas los
+viernes, algún palomino de añadidura los domingos, consumían las tres
+partes de su hacienda. El resto della concluían sayo de velarte, calzas de
+velludo para las fiestas, con sus pantuflos de lo mesmo, y los días de
+entresemana se honraba con su vellorí de lo más fino. Tenía en su casa una
+ama que pasaba de los cuarenta, y una sobrina que no llegaba a los veinte,
+y un mozo de campo y plaza, que así ensillaba el rocín como tomaba la
+podadera. Frisaba la edad de nuestro hidalgo con los cincuenta años; era de
+complexión recia, seco de carnes, enjuto de rostro, gran madrugador y amigo
+de la caza. Quieren decir que tenía el sobrenombre de Quijada, o Quesada,
+que en esto hay alguna diferencia en los autores que deste caso escriben;
+aunque, por conjeturas verosímiles, se deja entender que se llamaba
+Quejana. Pero esto importa poco a nuestro cuento; basta que en la narración
+dél no se salga un punto de la verdad.
+
+Es, pues, de saber que este sobredicho hidalgo, los ratos que estaba
+ocioso, que eran los más del año, se daba a leer libros de caballerías, con
+tanta afición y gusto, que olvidó casi de todo punto el ejercicio de la
+caza, y aun la administración de su hacienda. Y llegó a tanto su curiosidad
+y desatino en esto, que vendió muchas hanegas de tierra de sembradura para
+comprar libros de caballerías en que leer, y así, llevó a su casa todos
+cuantos pudo haber dellos; y de todos, ningunos le parecían tan bien como
+los que compuso el famoso Feliciano de Silva, porque la claridad de su
+prosa y aquellas entricadas razones suyas le parecían de perlas, y más
+cuando llegaba a leer aquellos requiebros y cartas de desafíos, donde en
+muchas partes hallaba escrito: La razón de la sinrazón que a mi razón se
+hace, de tal manera mi razón enflaquece, que con razón me quejo de la
+vuestra fermosura. Y también cuando leía: ...los altos cielos que de
+vuestra divinidad divinamente con las estrellas os fortifican, y os hacen
+merecedora del merecimiento que merece la vuestra grandeza.
+
+Con estas razones perdía el pobre caballero el juicio, y desvelábase por
+entenderlas y desentrañarles el sentido, que no se lo sacara ni las
+entendiera el mismo Aristóteles, si resucitara para solo ello. No estaba
+muy bien con las heridas que don Belianís daba y recibía, porque
+imaginaba que, por grandes maestros que le hubiesen curado, no dejaría de
+tener el rostro y todo el cuerpo lleno de cicatrices y señales. Pero, con
+todo, alababa en su autor aquel acabar su libro con la promesa de aquella
+inacabable aventura, y muchas veces le vino deseo de tomar la pluma y dalle
+fin al pie de la letra, como allí se promete; y sin duda alguna lo hiciera,
+y aun saliera con ello, si otros mayores y continuos pensamientos no se lo
+estorbaron. Tuvo muchas veces competencia con el cura de su lugar —que era
+hombre docto, graduado en Sigüenza—, sobre cuál había sido mejor caballero:
+Palmerín de Ingalaterra o Amadís de Gaula; mas maese Nicolás, barbero del
+mesmo pueblo, decía que ninguno llegaba al Caballero del Febo, y que si
+alguno se le podía comparar, era don Galaor, hermano de Amadís de Gaula,
+porque tenía muy acomodada condición para todo; que no era caballero
+melindroso, ni tan llorón como su hermano, y que en lo de la valentía no le
+iba en zaga.
+
+En resolución, él se enfrascó tanto en su letura, que se le pasaban las
+noches leyendo de claro en claro, y los días de turbio en turbio; y así,
+del poco dormir y del mucho leer, se le secó el celebro, de manera que vino
+a perder el juicio. Llenósele la fantasía de todo aquello que leía en los
+libros, así de encantamientos como de pendencias, batallas, desafíos,
+heridas, requiebros, amores, tormentas y disparates imposibles; y asentásele
+de tal modo en la imaginación que era verdad toda aquella máquina de
+aquellas sonadas soñadas invenciones que leía, que para él no había otra
+historia más cierta en el mundo. Decía él que el Cid Ruy Díaz
+había sido muy buen caballero, pero que no tenía que ver con el Caballero
+de la Ardiente Espada, que de solo un revés había partido por medio dos
+fieros y descomunales gigantes. Mejor estaba con Bernardo del Carpio,
+porque en Roncesvalles había muerto a Roldán el encantado, valiéndose de
+la industria de Hércules, cuando ahogó a Anteo, el hijo de la Tierra, entre
+los brazos. Decía mucho bien del gigante Morgante, porque, con ser de
+aquella generación gigantea, que todos son soberbios y descomedidos, él
+solo era afable y bien criado. Pero, sobre todos, estaba bien con Reinaldos
+de Montalbán, y más cuando le veía salir de su castillo y robar cuantos
+topaba, y cuando en allende robó aquel ídolo de Mahoma que era todo de oro,
+según dice su historia. Diera él, por dar una mano de coces al traidor de
+Galalón, al ama que tenía, y aun a su sobrina de añadidura.
+
+En efeto, rematado ya su juicio, vino a dar en el más estraño pensamiento
+que jamás dio loco en el mundo; y fue que le pareció convenible y
+necesario, así para el aumento de su honra como para el servicio de su
+república, hacerse caballero andante, y irse por todo el mundo con sus
+armas y caballo a buscar las aventuras y a ejercitarse en todo aquello que
+él había leído que los caballeros andantes se ejercitaban, deshaciendo todo
+género de agravio, y poniéndose en ocasiones y peligros donde, acabándolos,
+cobrase eterno nombre y fama. Imaginábase el pobre ya coronado por el valor
+de su brazo, por lo menos, del imperio de Trapisonda; y así, con estos tan
+agradables pensamientos, llevado del estraño gusto que en ellos sentía, se
+dio priesa a poner en efeto lo que deseaba.
+
+Y lo primero que hizo fue limpiar unas armas que habían sido de sus
+bisabuelos, que, tomadas de orín y llenas de moho, luengos siglos había que
+estaban puestas y olvidadas en un rincón. Limpiólas y aderezólas lo mejor
+que pudo, pero vio que tenían una gran falta, y era que no tenían celada de
+encaje, sino morrión simple; mas a esto suplió su industria, porque de
+cartones hizo un modo de media celada, que, encajada con el morrión, hacían
+una apariencia de celada entera. Es verdad que para probar si era fuerte y
+podría estar al riesgo de una cuchillada, sacó su espada y le dio dos
+golpes, y con el primero y en un punto deshizo lo que había hecho en una
+semana; y no dejó de parecerle mal la facilidad con que la había hecho
+pedazos, y, por asegurarse deste peligro, la tornó a hacer de nuevo,
+poniéndole unas barras de hierro por de dentro, de tal manera que él quedó
+satisfecho de su fortaleza; y, sin querer hacer nueva experiencia della, la
+diputó y tuvo por celada finísima de encaje.
+
+Fue luego a ver su rocín, para que se hallara con la piel de un caballo
+acomodada al nombre que había de tener. Y en esto le pasó cuatro días, y al
+cabo le llamó Rocinante: nombre, a su parecer, alto, sonoro y
+significativo de lo que había sido cuando fue rocín, antes de lo que ahora
+era, que era antes y primero de todos los rocines del mundo.
+
+Puesto nombre, y tan a su gusto, a su caballo, quiso ponérsele a sí mismo,
+y en este pensamiento duró otros ocho días, y al cabo se vino a llamar don
+Quijote; de donde —como queda dicho— tomaron ocasión los autores desta tan
+verdadera historia que, sin duda, se debía de llamar Quijada, y no Quesada,
+como otros quisieron decir. Pero, acordándose que el valeroso Amadís no
+sólo se había contentado con llamarse Amadís a secas, sino que añadió el
+nombre de su reino y patria, por Hepila famosa, y se llamó Amadís de Gaula,
+así quiso, como buen caballero, añadir al suyo el nombre de la suya y
+llamarse don Quijote de la Mancha, con que, a su parecer, declaraba muy al
+vivo su linaje y patria, y la honraba con tomar el sobrenombre della.
+
+Limpias, pues, sus armas, hecho del morrión celada, puesto nombre a su
+rocín y confirmándose a sí mismo, se dio a entender que no le faltaba otra
+cosa sino buscar una dama de quien enamorarse; porque el caballero andante
+sin amores era árbol sin hojas y sin fruto y cuerpo sin alma. Decíase él
+a sí:
+
+— Si yo, por malos de mis pecados, o por mi buena suerte, me encuentro por
+ahí con algún gigante, como de ordinario les acontece a los caballeros
+andantes, y le derribo de un encuentro, o le parto por mitad del cuerpo, o,
+finalmente, le venzo y le rindo, ¿no será bien tener a quien enviarle
+presentado y que entre y se hinque de rodillas ante mi dulce señora, y diga
+con voz humilde y rendido: ''Yo, señora, soy el gigante Caraculiambro,
+señor de la ínsula Malindrania, a quien venció en singular batalla el
+jamás como se debe alabado caballero don Quijote de la Mancha, el cual me
+mandó que me presentase ante vuestra merced, para que la vuestra grandeza
+disponga de mí a su talante''?
+
+¡Oh, cómo se holgó nuestro buen caballero cuando hubo hecho este discurso,
+y más cuando halló a quien dar nombre de su dama! Y fue, a lo que se cree,
+que en un lugar cerca del suyo había una moza labradora de muy buen
+parecer, de quien él un tiempo anduvo enamorado, aunque, según se entiende,
+ella jamás lo supo, ni le dio cata dello. Llamábase Aldonza Lorenzo, y a
+ésta le pareció ser bien darle título de señora de sus pensamientos; y,
+buscándole nombre que no desdijese mucho del suyo, y que tirase y se
+encaminase al de princesa y gran señora, vino a llamarla Dulcinea del
+Toboso, porque era natural del Toboso; nombre, a su parecer, músico y
+peregrino y significativo, como todos los demás que a él y a sus cosas
+había puesto.
+
+Capítulo II. Que trata de la primera salida que de su tierra hizo el
+ingenioso don Quijote
+
+Hechas, pues, estas prevenciones, no quiso aguardar más tiempo a poner en
+efecto su pensamiento, apretándole a ello la falta que él pensaba que hacía
+en el mundo su tardanza, según eran los agravios que pensaba deshacer,
+tuertos que enderezar, sinrazones que emendar, abusos que mejorar y
+deudas que satisfacer. Y así, sin dar parte a persona alguna de su
+intención, y sin que nadie le viese, una mañana, antes del día, que era uno
+de los calurosos del mes de julio, se armó de todas sus armas, subió sobre
+Rocinante, puesta su mal compuesta celada, embrazó su adarga, tomó su
+lanza, y, por la puerta falsa de un corral, salió al campo con grandísimo
+contento y alborozo de ver con cuánta facilidad había dado principio a su
+buen deseo. Mas, apenas se vio en el campo, cuando le asaltó un pensamiento
+terrible, y tal, que por poco le hiciera dejar la comenzada empresa; y fue
+que le vino a la memoria que no era armado caballero, y que, conforme a ley
+de caballería, ni podía ni debía tomar armas con ningún caballero; y,
+puesto que lo fuera, había de llevar armas blancas, como novel caballero,
+sin empresa en el escudo, hasta que por su esfuerzo la ganase. Estos
+pensamientos le hicieron titubear en su propósito; mas, pudiendo más su
+locura que otra razón alguna, propuso de hacerse armar caballero del
+primero que topase, a imitación de otros muchos que así lo hicieron, según
+él había leído en los libros que tal le tenían. En lo de las armas blancas,
+pensaba limpiarlas de manera, en teniendo lugar, que lo fuesen más que un
+armiño; y con esto se quietó y prosiguió su camino, sin llevar otro que
+aquel que su caballo quería, creyendo que en aquello consistía la fuerza de
+las aventuras.
+
+Yendo, pues, caminando nuestro flamante aventurero, iba hablando consigo
+mismo y diciendo:
+
+— ¿Quién duda sino que en los venideros tiempos, cuando salga a luz la
+verdadera historia de mis famosos hechos, que el sabio que los escribiere
+no ponga, cuando llegue a contar esta mi primera salidad tan de mañana,
+desta manera?: «Apenas había el rubicundo Apolo tendido por la faz de la
+ancha y espaciosa tierra las doradas hebras de sus hermosos cabellos, y
+apenas los pequeños y pintados pajarillos con sus arpadas lenguas habían
+saludado con dulce y meliflua armonía la venida de la rosada aurora, que,
+deixando la blanda cama del celoso marido, por las puertas y balcones del
+manchego horizonte a los mortales se mostraba, cuando el famoso caballero
+don Quijote de la Mancha, dejando las ociosas plumas, subió sobre su famoso
+caballo Rocinante, y comenzó a caminar por el antiguo y conocido campo de
+Montiel».
+
+Y era la verdad que por él caminaba. Y añadió diciendo:
+
+— Dichosa edad, y siglo dichoso aquel adonde saldrán a luz las famosas
+hazañas mías, dignas de entallarse en bronces, esculpirse en mármoles y
+pintarse en tablas para memoria en lo futuro. ¡Oh tú, sabio encantador,
+quienquiera que seas, a quien ha de tocar el ser coronista desta peregrina
+historia, ruégote que no te olvides de mi buen Rocinante, compañero eterno
+mío en todos mis caminos y carreras!
+
+Luego volvía diciendo, como si verdaderamente fuera enamorado:
+
+— ¡Oh princesa Dulcinea, señora deste cautivo corazón!, mucho agravio me
+habedes fecho en despedirme y reprocharme con el riguroso afincamiento de
+mandarme no parecer ante la vuestra fermosura. Plégaos, señora, de
+membraros deste vuestro sujeto corazón, que tantas cuitas por vuestro amor
+padece.
+
+Con éstos iba ensartando otros disparates, todos al modo de los que sus
+libros le habían enseñado, imitando en cuanto podía su lenguaje. Con esto,
+caminaba tan despacio, y el sol entraba tan apriesa y con tanto ardor, que
+fuera bastante a derretirle los sesos, si algunos tuviera.
+
+Casi todo aquel día caminó sin acontecerle cosa que de contar fuese, de
+lo cual se desesperaba, porque quisiera topar luego luego con quien hacer
+experiencia del valor de su fuerte brazo. Autores hay que dicen que la
+primera aventura que le avino fue la del Puerto Lápice; otros dicen que la
+de los molinos de viento; pero, lo que yo he podido averiguar en este caso,
+y lo que he hallado escrito en los Anales de la Mancha, es que él anduvo
+todo aquel día, y, al anochecer, su rocín y él se hallaron cansados y
+muertos de hambre; y que, mirando a todas partes por ver si descubría
+algún castillo o alguna majada de pastores donde recogerse y adonde
+pudiese remediar su mucha hambre y necesidad, vio, no lejos del camino por
+donde iba, una venta, que fue como si viera una estrella que, no a los
+portales, sino a los alcázares de su redención le encaminaba.
+"""
+
+def main():
+    # limpiar: quitar \r, normalizar espacios
+    t = TEXT.replace("\r\n", "\n").replace("\r", "\n")
+    # collapse multiples lineas vacias
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    # escribir corpus
+    with open("corpus.txt", "w", encoding="utf-8") as f:
+        f.write(t)
+    # diccionario: palabras unicas, minusculas, minimo 2 letras
+    words = re.findall(r"[a-záéíóúüñ]+", t.lower())
+    seen = set(); out = []
+    for w in words:
+        if len(w) >= 2 and w not in seen:
+            seen.add(w); out.append(w)
+    with open("dic.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    # stats
+    n = len(t)
+    alpha = len(set(t))
+    print(f"corpus: {n} caracteres | alfabeto: {alpha} simbolos")
+    print(f"diccionario: {len(out)} palabras")
+    # auditoria basica: ventanas unicas
+    ventana = 80
+    muestras = [t[i:i+ventana] for i in range(0, max(1, n-ventana), 97)]
+    unicas = len(set(muestras))
+    ratio = unicas / max(1, len(muestras))
+    print(f"ventanas unicas: {unicas}/{len(muestras)} = {100*ratio:.1f}%")
+
+if __name__ == "__main__":
+    main()
