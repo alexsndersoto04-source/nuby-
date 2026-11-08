@@ -10,7 +10,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "=== [1/4] Compilacion y auditoria estructural ==="
-make
+if command -v pkg >/dev/null 2>&1 || [ "$(uname -m)" != "x86_64" ]; then
+    make portable
+else
+    make || make portable
+fi
 ./bin/cortex_lm audit
 
 echo "=== [2/4] Preparacion de corpus amplio y episodios de alineacion ==="
@@ -41,13 +45,16 @@ PY
 
 echo "=== [3/4] Entrenamiento Fase 1 + Aprendizaje Continuo Fase 2 + Alineacion Deliberativa Fase 3 ==="
 ./bin/cerebro entrenar data/cerebro_es.bin data/train_moderno.txt \
-    --capas 1024,10240,10240,8192 --grado 48 --epocas 3 --lr 0.45 --stdp 1 --holdout 0.0 --seed 1234
+    --capas 1024,10240,10240,8192 --grado 48 --epocas 3 --lr 0.42 --stdp 1 --holdout 0.0 --seed 1234
 
 ./bin/cerebro entrenar data/cerebro_es.bin data/train_continuo.txt \
-    --continuo --epocas 3 --lr 0.30 --ancla 0.025 --holdout 0.0
+    --continuo --epocas 3 --lr 0.30 --ancla 0.030 --holdout 0.0
 
 ./bin/cerebro alinear data/cerebro_es.bin data/alineacion_es.txt \
-    --epocas 28 --lr 0.50 --ancla 0.001
+    --epocas 16 --lr 0.58 --ancla 0.0005
+
+./bin/cerebro alinear data/cerebro_es.bin data/alineacion_es.txt \
+    --continuo --epocas 14 --lr 0.44 --ancla 0.0001
 
 echo "=== [4/4] Verificacion sobre holdouts no vistos, razonamiento y dialogo multi-turno ==="
 ./bin/cerebro evaluar data/cerebro_es.bin data/holdout_galdos_contiguo.txt data/dic_amplio.txt
