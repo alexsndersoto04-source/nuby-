@@ -867,7 +867,7 @@ static int cmd_entrenar(int argc, char** argv) {
         p.layer_sizes = parsear_capas(capas_str);
         p.cortical_hierarchy = (p.layer_sizes.size() >= 2);
         p.max_out_degree = grado;
-        p.ticks_per_char = 8;
+        p.ticks_per_char = (p.total_neurons() >= 100000) ? 6 : 8;
         p.n_macro_cols = macro_cols;
         p.trn_top_k = trn_top_k;
         if (p.total_neurons() >= 40000) p.assoc_fan_in_slot = 4;

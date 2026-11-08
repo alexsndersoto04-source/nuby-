@@ -1106,14 +1106,21 @@ int Engine::step() {
             flush_assoc_decay(L, L.pending_ticks + 1);
             L.pending_ticks = 0;
             const int n_assoc = L.n_assoc;
+            const bool use_trn = (!L.col_gain.empty() && p_.n_macro_cols > 1 && n_assoc > 0);
+            const int M_cols = use_trn ? p_.n_macro_cols : 1;
 
-            // 2. Drenar llegadas axonales: ramas basales (0..3) + penacho apical (4)
-            //    en neuronas piramidales (< n_assoc) e integracion directa en lentas.
+            // 2. Drenar llegadas axonales con inhibicion de derivacion (shunting) del TRN:
+            //    las macro-columnas silenciadas por el Nucleo Reticular Talamico (< 0.5)
+            //    filtran las aferencias antes de despertar compartimentos dendriticos.
             L.dend_list.clear();
             for (const auto& ev : arrived) {
                 const int post = ev.post_slot >> 3;
                 const int slot = ev.post_slot & 7;
                 if (post < n_assoc) {
+                    if (use_trn) {
+                        const int mc = (int)(((int64_t)post * M_cols) / n_assoc);
+                        if (L.col_gain[(size_t)mc] < 0.50f) continue;
+                    }
                     if (!L.dend_touched[(size_t)post]) {
                         L.dend_touched[(size_t)post] = 1;
                         L.dend_list.push_back(post);
@@ -1133,8 +1140,6 @@ int Engine::step() {
             //    + ganancia del Nucleo Reticular Talamico (TRN) por macro-columna + OpenMP:
             cand_.clear();
             const float ap_cap = 0.14f * p_.v_th;
-            const bool use_trn = (!L.col_gain.empty() && p_.n_macro_cols > 1 && n_assoc > 0);
-            const int M_cols = use_trn ? p_.n_macro_cols : 1;
             const size_t nd = L.dend_list.size();
 
             if (nd >= 32768 && max_cpu_threads() >= 4) {

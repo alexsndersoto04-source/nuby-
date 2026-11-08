@@ -1,5 +1,8 @@
 bin/
 *.bin
+*.registro.json
+entrenamiento_noche.log
+entrenamiento_noche.pid
 data/*.txt
 data/bloques_continuos/
 data/bloques_usuario/

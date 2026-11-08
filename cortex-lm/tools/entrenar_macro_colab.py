@@ -32,7 +32,8 @@ import urllib.request
 from pathlib import Path
 
 PERFILES = {
-    "equilibrio-165k": ("1536,16384,32768,65536,49152", 32, 16, 4),
+    "agil-82k":        ("1024,10240,16384,32768,20480", 28, 16, 4),
+    "equilibrio-165k": ("1536,16384,32768,65536,49152", 28, 16, 4),
     "macro-526k":      ("2048,32768,65536,262144,163840", 32, 32, 4),
     "macro-1m":        ("2048,65536,131072,524288,294912", 32, 32, 4),
 }
@@ -269,7 +270,6 @@ def main():
                             str(bin_cerebro), "alimentar", str(ruta_modelo), lote_path,
                             "--bloque", str(args.bytes_lote), "--epocas", "1",
                             "--lr", "0.24", "--ancla", "0.022",
-                            "--alinear", ruta_ali, "--epocas-ali", "8",
                         ],
                         cwd=str(raiz),
                     )
@@ -297,8 +297,7 @@ def main():
                         str(bin_cerebro), "alimentar", str(ruta_modelo), tmp_lote,
                         "--bloque", str(args.bytes_lote), "--epocas", "1",
                         "--lr", "0.24", "--ancla", "0.022",
-                        "--semantica", "--max-pasajes", "24",
-                        "--alinear", ruta_ali, "--epocas-ali", "8",
+                        "--semantica", "--max-pasajes", "20",
                     ],
                     cwd=str(raiz),
                 )
