@@ -2,7 +2,17 @@
 
 Acta de auditoría e historial técnico del motor.
 
-> **Actualización actual (`CORTICAL-CSR-ACTA.md`, 2026-11-07):**
+> **Actualización actual (`CORTICAL-CSR-ACTA.md`, 2026-11-07 — Fase Macro «Corteza Viva»):**
+> - **Escalado verificado a `> 1,000,000` de neuronas LIF puras (`./bin/bench_cortical macro`)**:
+>   - **5 Regiones Corticales (`L0 -> L1 -> L2 Léxica -> L3 Talamocortical <-> L4 Prefrontal`)** con cascada apical Larkum (`L4 -> L3 -> L2`), **32 Macro-Columnas Talamocorticales (`TRN` `k-WTA`)**, paralelismo **OpenMP** y **`CompactCorticalReadout` (`CXK1`)** en `FP16` con asignación perezosa de filas y **redondeo estocástico insesgado (`fp32_to_fp16_sr`)**.
+>   - **`526,336` neuronas LIF puras (`49,866,377` sinapsis CSR)**: inicializa en `2.81 s`, lectores V+D = `31.8 MB` (`923.4 MB` RAM total), **`452 chars/s`** en 2 hilos CPU.
+>   - **`1,017,856` neuronas LIF puras (`96,891,043` sinapsis CSR — casi 100 millones)**: inicializa en `6.01 s`, lectores V+D = `37.8 MB` (**`1.74 GB` RAM total**, cabiendo más de `7x` en los `12.7 GB` gratuitos de Google Colab), **`458 chars/s`** en 2 hilos CPU, manteniendo `./bin/cortex_lm audit` en `5/5 TODO OK` y retrocompatibilidad `100 %` con `probar_termux.sh` (`NUBY`/`CXE2`).
+> - **Órganos cognitivos vivos (`engine/corteza_viva.{hpp,cpp}`, `tools/cerebro.cpp`)**:
+>   - **«Leer = Saber» (`CortezaSemanticaCSR` + `cerebro asimilar` / `alimentar --semantica`)**: índice sináptico invertido `O(activos)` sobre huellas SDR NMDA (`L2` léxica invariante + `L3/L4`) con **inhibición lateral (`0.70`)** para recuperar múltiples premisas complementarias y sintetizarlas en deliberación recurrente (`[SINTESIS_A] + [SINTESIS_B]` -> proyección neocortical `rd_sem`).
+>   - **Fisiología neuromoduladora viva**: **Acetilcolina (`ACh`)** que mide sorpresa cortical y consolida automáticamente enunciados declarativos nuevos en `CA3` durante el diálogo (`--vivo`, sin `/recordar`), **Ganglios Basales (`Go / No-Go`, `--honesto`)** que frenan alucinaciones ante entidades desconocidas de alta entropía/sorpresa, y **Sueño Cortical de Ondas Lentas (`cerebro sonar`)**.
+>   - **Fábrica en Streaming Google Colab -> Google Drive (`tools/entrenar_macro_colab.py`, `colab/CORTEX_LM_Macro_Colab.ipynb`) + Observatorio Cortical Web (`tools/servidor_vivo.py`, `cerebro tubo`)**: entrenamiento continuo `--continuo` por lotes eliminando archivos temporales (`0 MB` en el teléfono) y panel web en vivo 24/7.
+
+> **Resultados base de 4 regiones (`CORTICAL-CSR-ACTA.md`, 2026-11-07):**
 > - **Jerarquía cortical spiking LIF pura de 4+ regiones + penacho apical Larkum + hipocampo `CA3-CA1`** (`engine/cortex_lm.{hpp,cpp}`, `tools/cerebro.cpp`): dendritas piramidales de 5 compartimentos (`4` basales saturantes $K=2,3,4$ + `1` penacho apical descendente `L3 -> L2` con compuerta de calcio Larkum), inhibición `k-WTA` por columna funcional, período crítico `STDP` local `O(1)`, decaimiento exacto dirigido por eventos (`pending_ticks`), trazas lentas NMDA multi-región con bloqueo $\text{Mg}^{2+}$ (`>= 0.28`) y depresión Tsodyks-Markram, manteniendo `./bin/cortex_lm audit` en `5/5 TODO OK` y cero backpropagation.
 > - **Escalabilidad real `CSR` + arreglos planos `SoA` (`./bin/bench_cortical scale`)**: probado hasta **`299,008` neuronas LIF puras en 4 regiones (`21,492,888` sinapsis CSR)** en `392.8 MB` de RAM (`455 chars/s`) con **`+0 KB` de deriva RSS** en secuencias largas.
 > - **Salto verificado en comprensión, razonamiento deliberativo y memoria (5 semillas: `1234, 7, 99, 2024, 555`)**:

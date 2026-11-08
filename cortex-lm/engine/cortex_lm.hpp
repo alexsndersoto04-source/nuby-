@@ -159,6 +159,12 @@ struct Params {
     float slow_ctx_tau_m       = 56.0f;  // constante de membrana lenta (~7 simbolos)
     float slow_ctx_gain        = 0.75f;  // ganancia selectiva desde asambleas de palabras
 
+    // Enrutamiento talamocortical (Nucleo Reticular Talamico, TRN) para macro-escala (>100k..1M+ LIF):
+    // cuando `n_macro_cols > 1`, cada region asociativa (li >= 2) se divide en M macro-columnas
+    // especializadas; el TRN selecciona las `trn_top_k` mas resonantes e inhibe lateralmente el resto.
+    int   n_macro_cols         = 0;
+    int   trn_top_k            = 4;
+
     // --- entrenamiento ---
     int   seq_len        = 128;
     uint32_t seed        = 1234;
@@ -262,6 +268,11 @@ struct Layer {
     std::vector<uint8_t> nmda_active;
     std::vector<i32>     nmda_list;
     std::vector<i32>     nmda_last_sym;
+
+    // Estado talamocortical por macro-columna (activo si p_.n_macro_cols > 1 en li >= 2):
+    std::vector<float>   col_energy;
+    std::vector<float>   col_gain;
+    std::vector<float>   col_habituation;
 
     // Trazas clasicas de Capa 0:
     std::vector<float> pre_trace;
@@ -388,6 +399,9 @@ public:
     Layer& layer_mut(int i) { return layers_[(size_t)i]; }
     const std::vector<InterGraph>& inter_graphs() const { return inter_; }
     const Params& params() const { return p_; }
+    static int max_cpu_threads();
+    // Devuelve las macro-columnas talamocorticales mas activas en la region indicada (-1 = superior):
+    std::vector<std::pair<int, float>> active_macro_columns(int layer_idx = -1) const;
 
 private:
     Params p_;
@@ -554,6 +568,75 @@ private:
     std::vector<std::vector<std::pair<i32, float>>> syn_from_concept_;
     mutable std::vector<float> exc_buf_;
     mutable std::vector<i32>   touched_engrams_;
+};
+
+// Proyeccion motora compacta y dispersa por filas bajo demanda en FP16 (CXK1):
+// Disenada para escalar de 100,000 a >1,000,000+ neuronas LIF sin explotar RAM ni disco.
+// Solo reserva filas sinapticas para las neuronas que realmente han disparado durante el
+// aprendizaje y almacena pesos + anclas consolidadas en punto flotante IEEE-754 de 16 bits.
+class CompactCorticalReadout {
+public:
+    static constexpr int kDefaultSlots = 128;
+    static constexpr int kMaxVocab     = 256;
+
+    void init(int n_features, float lr = 0.08f, int init_slots = kDefaultSlots);
+    void set_lr(float lr) { lr_ = lr; }
+    float lr() const { return lr_; }
+    int   n_features() const { return F_; }
+    int   slot_capacity() const { return cap_slots_; }
+    size_t active_rows() const { return n_rows_; }
+    size_t memory_bytes() const;
+
+    void calibrate_step(const std::vector<std::pair<i32, float>>& feats);
+    void freeze_calibration();
+    bool calibrated() const { return calibrated_; }
+
+    double step(int target_byte,
+                const std::vector<std::pair<i32, float>>& feats,
+                bool learn,
+                float mod = 1.0f);
+
+    void predict(const std::vector<std::pair<i32, float>>& feats,
+                 double* probs,
+                 double temperature = 1.0) const;
+
+    void consolidate(float strength = 0.02f);
+    void scale_weights(float factor);
+    int  ensure_byte_slot(int byte_val);
+    int  active_vocab_size() const { return n_active_; }
+
+    void save(std::ostream& os) const;
+    void load(std::istream& is);
+
+private:
+    int    F_ = 0;
+    int    cap_slots_ = kDefaultSlots;
+    int    n_active_ = 0;
+    size_t n_rows_ = 0;
+    float  lr_ = 0.08f;
+    float  consol_pull_ = 0.0f;
+    long   cal_steps_ = 0;
+    bool   calibrated_ = false;
+    uint32_t sr_rng_ = 0x9E3779B9u;
+
+    std::vector<int>      byte_to_slot_; // 256
+    std::vector<int>      slot_to_byte_; // n_active_
+    std::vector<i32>      row_id_;       // F_ (-1 si la neurona jamas ha disparado)
+    std::vector<i32>      row_to_feat_;  // n_rows_ -> indice de feature original
+    std::vector<uint16_t> W_fp16_;       // n_rows_ * cap_slots_ (pesos FP16)
+    std::vector<uint16_t> W_anc_fp16_;   // n_rows_ * cap_slots_ (anclas FP16 bajo demanda)
+    std::vector<float>    imp_;          // n_rows_ (importancia por fila activa)
+    std::vector<float>    scale_;        // F_ (escala congelada)
+    std::vector<float>    sq_sum_;       // F_ (acumulador compacto de calibracion)
+    std::vector<float>    b_;            // 256
+
+    mutable std::vector<float>  logits_;
+    mutable std::vector<double> probs_;
+    mutable std::vector<float>  err_;
+    mutable std::vector<std::pair<i32, float>> scaled_feats_;
+
+    i32  ensure_row(i32 feat);
+    void expand_slots_to_256();
 };
 
 // Guardar y cargar el cerebro completo (Engine + CorticalReadout) en un archivo.

@@ -371,13 +371,93 @@ static int modo_scale(const char* capas_csv, int max_deg, size_t chars_prueba) {
     return 0;
 }
 
+static int modo_macro(const char* capas_csv, int macro_cols, int top_k_cols, size_t chars_prueba) {
+    Params p;
+    p.cortical_hierarchy = true;
+    p.layer_sizes.clear();
+    {
+        std::stringstream ss(capas_csv);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            if (!item.empty()) p.layer_sizes.push_back(std::stoi(item));
+        }
+    }
+    if (p.layer_sizes.empty()) p.layer_sizes = {2048, 32768, 65536, 262144, 163840};
+    p.max_out_degree = 32;
+    p.assoc_fan_in_slot = 4;
+    p.ticks_per_char = 8;
+    p.n_macro_cols = macro_cols;
+    p.trn_top_k = top_k_cols;
+
+    const size_t rss_before = current_rss_kb();
+    auto t0 = std::chrono::steady_clock::now();
+    Engine eng(p);
+    eng.build_random(2026);
+    CompactCorticalReadout rd_v, rd_d;
+    rd_v.init(eng.cortical_feature_dim(2), 0.15f);
+    rd_d.init(eng.cortical_feature_dim(2), 0.25f);
+    auto t1 = std::chrono::steady_clock::now();
+
+    const char* texto =
+        "La corteza cerebral integra columnas talamocorticales y dendritas apicales para razonar "
+        "mediante espigas reales en C++ sin retropropagacion ni atajos artificiales. ";
+    const size_t tlen = std::strlen(texto);
+
+    std::vector<std::pair<i32, float>> feats;
+    const size_t half = chars_prueba / 2;
+    auto tf0 = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < half; ++i) {
+        const uint8_t ch = (uint8_t)texto[i % tlen];
+        eng.feed(ch);
+        if (i >= 16) {
+            eng.cortical_sparse_features(feats, 2);
+            rd_v.step((uint8_t)texto[(i + 1) % tlen], feats, true, 1.0f);
+        }
+    }
+    const size_t rss_mid = current_rss_kb();
+    for (size_t i = half; i < chars_prueba; ++i) {
+        const uint8_t ch = (uint8_t)texto[i % tlen];
+        eng.feed(ch);
+        eng.cortical_sparse_features(feats, 2);
+        rd_v.step((uint8_t)texto[(i + 1) % tlen], feats, true, 1.0f);
+    }
+    auto tf1 = std::chrono::steady_clock::now();
+    const size_t rss_end = current_rss_kb();
+
+    const double build_s = std::chrono::duration<double>(t1 - t0).count();
+    const double run_s   = std::chrono::duration<double>(tf1 - tf0).count();
+    const double cps     = chars_prueba / std::max(1e-9, run_s);
+    const double ram_mb  = (double)(rss_end > rss_before ? rss_end - rss_before : rss_end) / 1024.0;
+    const double rd_mb   = (double)(rd_v.memory_bytes() + rd_d.memory_bytes()) / (1024.0 * 1024.0);
+    const long drift_kb  = (long)rss_end - (long)rss_mid;
+    auto cols = eng.active_macro_columns(-1);
+
+    std::printf("MACRO-CORTEZA %s (%d regiones, TRN %d/%d cols, %d hilos CPU)\n"
+                "  Neuronas LIF puras : %d\n"
+                "  Sinapsis CSR reales: %zu\n"
+                "  Filas FP16 activas : %zu (lectores V+D = %.1f MB | RAM total = %.1f MB)\n"
+                "  Inicializacion     : %.2f s | Velocidad train+LIF: %.0f chars/s | Deriva RSS: %+ld KB\n"
+                "  Columnas TRN ganadoras: ",
+                capas_csv, eng.num_layers(), top_k_cols, macro_cols, Engine::max_cpu_threads(),
+                eng.n_neurons(), eng.n_synapses(),
+                rd_v.active_rows(), rd_mb, ram_mb,
+                build_s, cps, drift_kb);
+    for (size_t k = 0; k < cols.size(); ++k) {
+        std::printf("%s#%d(%.2f)", k ? ", " : "", cols[k].first, cols[k].second);
+    }
+    std::printf("\n");
+    std::fflush(stdout);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "Uso:\n"
             "  %s mem   <L1> <L2> <seed>\n"
             "  %s bpc   <corpus> <dic> <L1> <L2> <epocas> <lr> <stdp> <seed>\n"
-            "  %s scale <capas_csv> <max_deg> <chars_prueba>\n",
-            argv[0], argv[0], argv[0]);
+            "  %s scale <capas_csv> <max_deg> <chars_prueba>\n"
+            "  %s macro <capas_csv> <macro_cols> <trn_top_k> <chars_prueba>\n",
+            argv[0], argv[0], argv[0], argv[0]);
         return 1;
     }
     std::string modo = argv[1];
@@ -391,6 +471,10 @@ int main(int argc, char** argv) {
     }
     if (modo == "scale" && argc >= 5) {
         return modo_scale(argv[2], std::atoi(argv[3]), std::strtoull(argv[4], nullptr, 10));
+    }
+    if (modo == "macro" && argc >= 6) {
+        return modo_macro(argv[2], std::atoi(argv[3]), std::atoi(argv[4]),
+                          std::strtoull(argv[5], nullptr, 10));
     }
     std::fprintf(stderr, "Argumentos invalidos para modo '%s'\n", modo.c_str());
     return 1;

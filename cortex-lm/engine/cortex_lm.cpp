@@ -14,10 +14,89 @@
 #include <iostream>
 #include <cctype>
 #include <string>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace cortex {
 
 namespace {
+
+// Conversion portable IEEE-754 float32 <-> float16 sin depender de instrucciones especificas de CPU.
+inline uint16_t fp32_to_fp16(float f) {
+    uint32_t x = 0;
+    std::memcpy(&x, &f, sizeof(uint32_t));
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    uint32_t abs_x = x & 0x7FFFFFFFu;
+    if (abs_x >= 0x477FE000u) return (uint16_t)(sign | 0x7BFFu);
+    if (abs_x < 0x33000000u) return (uint16_t)sign;
+    abs_x += 0x00001000u;
+    int32_t exp = (int32_t)((abs_x >> 23) & 0xFFu) - 127 + 15;
+    uint32_t mant = abs_x & 0x007FFFFFu;
+    if (exp <= 0) {
+        uint32_t full_m = ((x & 0x007FFFFFu) | 0x00800000u);
+        int sh = 14 - ((int32_t)((x >> 23) & 0xFFu) - 127 + 15);
+        if (sh > 24) return (uint16_t)sign;
+        return (uint16_t)(sign | ((full_m + (1u << (sh - 1))) >> sh));
+    }
+    if (exp >= 31) return (uint16_t)(sign | 0x7BFFu);
+    return (uint16_t)(sign | ((uint32_t)exp << 10) | (mant >> 13));
+}
+
+// Redondeo estocastico insesgado FP32 -> FP16 para aprendizaje sinaptico local sin swamping:
+inline uint16_t fp32_to_fp16_sr(float f, uint32_t& rng) {
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    uint32_t x = 0;
+    std::memcpy(&x, &f, sizeof(uint32_t));
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    uint32_t abs_x = x & 0x7FFFFFFFu;
+    if (abs_x >= 0x477FE000u) return (uint16_t)(sign | 0x7BFFu);
+    if (abs_x < 0x33800000u) {
+        const float mag = std::fabs(f) * 16777216.0f; // / 2^-24
+        if (mag * 4294967296.0f > (float)rng) return (uint16_t)(sign | 0x0001u);
+        return (uint16_t)sign;
+    }
+    int32_t exp0 = (int32_t)((abs_x >> 23) & 0xFFu) - 127 + 15;
+    if (exp0 <= 0) {
+        uint32_t full_m = (abs_x & 0x007FFFFFu) | 0x00800000u;
+        int sh = 14 - exp0;
+        uint32_t mask = (1u << sh) - 1u;
+        return (uint16_t)(sign | ((full_m + (rng & mask)) >> sh));
+    }
+    abs_x += (rng & 0x00001FFFu);
+    int32_t exp = (int32_t)((abs_x >> 23) & 0xFFu) - 127 + 15;
+    if (exp >= 31) return (uint16_t)(sign | 0x7BFFu);
+    return (uint16_t)(sign | ((uint32_t)exp << 10) | ((abs_x & 0x007FFFFFu) >> 13));
+}
+
+inline float fp16_to_fp32(uint16_t h) {
+    const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1Fu;
+    uint32_t mant = h & 0x03FFu;
+    uint32_t out = 0;
+    if (exp == 0) {
+        if (mant == 0) {
+            out = sign;
+        } else {
+            exp = 1;
+            while ((mant & 0x0400u) == 0) {
+                mant <<= 1;
+                exp--;
+            }
+            mant &= 0x03FFu;
+            out = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        out = sign | 0x7F800000u | (mant << 13);
+    } else {
+        out = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+    }
+    float f = 0.0f;
+    std::memcpy(&f, &out, sizeof(float));
+    return f;
+}
 
 inline float branch_cap_for_order(uint8_t ord, float v_th) {
     if (ord <= 2) return 0.622f * v_th;   // 1 rama = 0.622 < 1; 2 ramas = 1.244 >= 1
@@ -203,6 +282,12 @@ void Engine::build_random(unsigned seed) {
                 Lr.nmda_last_sym.assign((size_t)Lr.n_assoc, -10000);
                 Lr.nmda_list.clear();
                 Lr.nmda_list.reserve(1024);
+                if (p_.n_macro_cols > 1) {
+                    const size_t mc = (size_t)p_.n_macro_cols;
+                    Lr.col_energy.assign(mc, 0.0f);
+                    Lr.col_gain.assign(mc, 1.0f);
+                    Lr.col_habituation.assign(mc, 0.0f);
+                }
             }
 
             // Las capas asociativas superiores reciben su recurrencia / contexto
@@ -533,21 +618,20 @@ void Engine::build_cortical_pathways() {
         in_inter_by_layer_[(size_t)li].push_back(ig_idx);
     }
 
-    // Proyeccion predictiva descendente (penacho apical Larkum, slot = 4):
-    // cuando existen >= 4 regiones (ej. L0->L1->L2->L3 prefrontal), L_{top} proyecta
-    // de vuelta hacia L_{top-1} con retardo (tpc - 1) ticks para coincidir exactamente
-    // en el tick de evaluacion basal del simbolo siguiente y amplificar las asambleas
-    // de palabras coherentes con el contexto relacional activo, sin alucinar en vacio.
+    // Proyeccion predictiva descendente en cascada (penacho apical Larkum, slot = 4):
+    // En 4 regiones conecta L3 -> L2; en >=5 regiones conecta en cascada L4 -> L3 y L3 -> L2,
+    // cerrando el bucle talamocortical-prefrontal sin alucinar en vacio.
     if (L >= 4) {
-        const int src_li = L - 1;
-        const int dst_li = L - 2;
-        const Layer& srcL = layers_[(size_t)src_li];
-        const Layer& dstL = layers_[(size_t)dst_li];
-        const int N_src = srcL.n;
-        const int N_dst = dstL.n;
-        const int src_pool = std::max(1, srcL.n_assoc);
-        const int dst_pool = dstL.n_assoc;
-        if (dst_pool > 0) {
+        for (int src_li = L - 1; src_li >= 3; --src_li) {
+            const int dst_li = src_li - 1;
+            const Layer& srcL = layers_[(size_t)src_li];
+            const Layer& dstL = layers_[(size_t)dst_li];
+            const int N_src = srcL.n;
+            const int N_dst = dstL.n;
+            const int src_pool = std::max(1, srcL.n_assoc);
+            const int dst_pool = dstL.n_assoc;
+            if (dst_pool <= 0) continue;
+
             const int m_apical = 10;
             const uint8_t d_ap = (uint8_t)std::max(1, tpc - 1);
             const float w_ap = 0.065f * p_.v_th;
@@ -642,6 +726,8 @@ void Engine::reset_state() {
         if (!L.nmda_active.empty()) std::fill(L.nmda_active.begin(), L.nmda_active.end(), 0);
         if (!L.nmda_last_sym.empty()) std::fill(L.nmda_last_sym.begin(), L.nmda_last_sym.end(), -10000);
         L.nmda_list.clear();
+        if (!L.col_energy.empty()) std::fill(L.col_energy.begin(), L.col_energy.end(), 0.0f);
+        if (!L.col_gain.empty()) std::fill(L.col_gain.begin(), L.col_gain.end(), 1.0f);
     }
     for (auto& q : queues_) {
         for (auto& b : q.buckets) b.clear();
@@ -1043,42 +1129,106 @@ int Engine::step() {
             }
             arrived.clear();
 
-            // 3. Coincidencia basal + amplificacion de calcio apical tipo Larkum (slot 4):
-            //    el penacho apical solo amplifica si las ramas basales muestran evidencia
-            //    sensorial genuina (> 0.50 * v_th), evitando alucinaciones sin entrada.
+            // 3. Coincidencia basal + amplificacion de calcio apical tipo Larkum (slot 4)
+            //    + ganancia del Nucleo Reticular Talamico (TRN) por macro-columna + OpenMP:
             cand_.clear();
             const float ap_cap = 0.14f * p_.v_th;
-            for (i32 post : L.dend_list) {
-                L.dend_touched[(size_t)post] = 0;
-                float* dv = &L.dend_v[(size_t)post * 5];
-                const uint8_t K = L.dend_order[(size_t)post];
-                const float bcap = branch_cap_for_order(K, p_.v_th);
+            const bool use_trn = (!L.col_gain.empty() && p_.n_macro_cols > 1 && n_assoc > 0);
+            const int M_cols = use_trn ? p_.n_macro_cols : 1;
+            const size_t nd = L.dend_list.size();
 
-                float raw_sum = 0.0f;
-                float sat_sum = 0.0f;
-                for (int sl = 0; sl < 4; ++sl) {
-                    const float x = dv[sl];
-                    dv[sl] = 0.0f;
-                    raw_sum += x;
-                    sat_sum += (x > bcap ? bcap : x);
+            if (nd >= 32768 && max_cpu_threads() >= 4) {
+                std::vector<float> exc_tmp(nd, -1.0f);
+                #ifdef _OPENMP
+                #pragma omp parallel for schedule(static)
+                #endif
+                for (size_t di = 0; di < nd; ++di) {
+                    const i32 post = L.dend_list[di];
+                    L.dend_touched[(size_t)post] = 0;
+                    float* dv = &L.dend_v[(size_t)post * 5];
+                    const uint8_t K = L.dend_order[(size_t)post];
+                    const float bcap = branch_cap_for_order(K, p_.v_th);
+
+                    float raw_sum = 0.0f;
+                    float sat_sum = 0.0f;
+                    for (int sl = 0; sl < 4; ++sl) {
+                        const float x = dv[sl];
+                        dv[sl] = 0.0f;
+                        raw_sum += x;
+                        sat_sum += (x > bcap ? bcap : x);
+                    }
+                    const float ap_raw = dv[4];
+                    dv[4] = 0.0f;
+                    if (L.refr[(size_t)post] > 0) continue;
+
+                    float apical_boost = 0.0f;
+                    if (ap_raw > 0.0f && sat_sum > 0.50f * p_.v_th) {
+                        apical_boost = (ap_raw > ap_cap ? ap_cap : ap_raw);
+                    }
+                    const float trn_g = use_trn
+                                      ? L.col_gain[(size_t)(((int64_t)post * M_cols) / n_assoc)]
+                                      : 1.0f;
+                    const float bonus = std::min(0.022f * p_.v_th, 0.008f * raw_sum);
+                    const float v_cand = L.v[(size_t)post] + (sat_sum + apical_boost + bonus) * trn_g;
+                    const float eff_th = p_.v_th + L.theta[(size_t)post] + L.homeo_thr[(size_t)post];
+                    if (v_cand >= eff_th) {
+                        L.v[(size_t)post] = v_cand;
+                        exc_tmp[di] = v_cand - eff_th;
+                    } else {
+                        L.v[(size_t)post] = p_.v_reset;
+                    }
                 }
-                const float ap_raw = dv[4];
-                dv[4] = 0.0f;
-                if (L.refr[(size_t)post] > 0) continue;
-
-                float apical_boost = 0.0f;
-                if (ap_raw > 0.0f && sat_sum > 0.50f * p_.v_th) {
-                    apical_boost = (ap_raw > ap_cap ? ap_cap : ap_raw);
+                for (size_t di = 0; di < nd; ++di) {
+                    if (exc_tmp[di] >= 0.0f) {
+                        const i32 post = L.dend_list[di];
+                        cand_.push_back({exc_tmp[di], post});
+                        if (use_trn) {
+                            const int mc = (int)(((int64_t)post * M_cols) / n_assoc);
+                            L.col_energy[(size_t)mc] += (1.0f + exc_tmp[di]);
+                        }
+                    }
                 }
+            } else {
+                for (i32 post : L.dend_list) {
+                    L.dend_touched[(size_t)post] = 0;
+                    float* dv = &L.dend_v[(size_t)post * 5];
+                    const uint8_t K = L.dend_order[(size_t)post];
+                    const float bcap = branch_cap_for_order(K, p_.v_th);
 
-                const float bonus = std::min(0.022f * p_.v_th, 0.008f * raw_sum);
-                const float v_cand = L.v[(size_t)post] + sat_sum + apical_boost + bonus;
-                const float eff_th = p_.v_th + L.theta[(size_t)post] + L.homeo_thr[(size_t)post];
-                if (v_cand >= eff_th) {
-                    L.v[(size_t)post] = v_cand;
-                    cand_.push_back({v_cand - eff_th, post});
-                } else {
-                    L.v[(size_t)post] = p_.v_reset;
+                    float raw_sum = 0.0f;
+                    float sat_sum = 0.0f;
+                    for (int sl = 0; sl < 4; ++sl) {
+                        const float x = dv[sl];
+                        dv[sl] = 0.0f;
+                        raw_sum += x;
+                        sat_sum += (x > bcap ? bcap : x);
+                    }
+                    const float ap_raw = dv[4];
+                    dv[4] = 0.0f;
+                    if (L.refr[(size_t)post] > 0) continue;
+
+                    if (use_trn && sat_sum > 0.35f * p_.v_th) {
+                        const int mc = (int)(((int64_t)post * M_cols) / n_assoc);
+                        L.col_energy[(size_t)mc] += sat_sum;
+                    }
+
+                    float apical_boost = 0.0f;
+                    if (ap_raw > 0.0f && sat_sum > 0.50f * p_.v_th) {
+                        apical_boost = (ap_raw > ap_cap ? ap_cap : ap_raw);
+                    }
+
+                    const float trn_g = use_trn
+                                      ? L.col_gain[(size_t)(((int64_t)post * M_cols) / n_assoc)]
+                                      : 1.0f;
+                    const float bonus = std::min(0.022f * p_.v_th, 0.008f * raw_sum);
+                    const float v_cand = L.v[(size_t)post] + (sat_sum + apical_boost + bonus) * trn_g;
+                    const float eff_th = p_.v_th + L.theta[(size_t)post] + L.homeo_thr[(size_t)post];
+                    if (v_cand >= eff_th) {
+                        L.v[(size_t)post] = v_cand;
+                        cand_.push_back({v_cand - eff_th, post});
+                    } else {
+                        L.v[(size_t)post] = p_.v_reset;
+                    }
                 }
             }
 
@@ -1240,6 +1390,39 @@ void Engine::end_symbol() {
                 const float step_down = p_.homeo_thr_down * 64.0f;
                 for (int j = 0; j < L.n_assoc; ++j) {
                     L.homeo_thr[(size_t)j] = std::max(-0.035f, L.homeo_thr[(size_t)j] - step_down);
+                }
+            }
+
+            // Enrutamiento del Nucleo Reticular Talamico (TRN) entre macro-columnas:
+            // selecciona las `trn_top_k` columnas con mayor resonancia neta (energia + NMDA - fatiga)
+            // para amplificar el dominio activo e inhibir lateralmente columnas no pertinentes.
+            if (!L.col_gain.empty() && p_.n_macro_cols > 1 && L.n_assoc > 0) {
+                const int M = p_.n_macro_cols;
+                const int top_c = std::max(1, std::min(M, p_.trn_top_k));
+                for (i32 j : L.nmda_list) {
+                    const int mc = (int)(((int64_t)j * M) / L.n_assoc);
+                    L.col_energy[(size_t)mc] += 0.35f * L.nmda_trace[(size_t)j];
+                }
+                std::vector<std::pair<float, int>> order_mc((size_t)M);
+                float max_e = 0.0f;
+                for (int mc = 0; mc < M; ++mc) {
+                    L.col_energy[(size_t)mc] *= 0.72f;
+                    L.col_habituation[(size_t)mc] *= 0.996f;
+                    const float score = L.col_energy[(size_t)mc] - 0.18f * L.col_habituation[(size_t)mc];
+                    order_mc[(size_t)mc] = {score, mc};
+                    if (L.col_energy[(size_t)mc] > max_e) max_e = L.col_energy[(size_t)mc];
+                }
+                if (max_e > 0.05f) {
+                    std::partial_sort(order_mc.begin(), order_mc.begin() + top_c, order_mc.end(),
+                                      [](const auto& a, const auto& b) { return a.first > b.first; });
+                    std::fill(L.col_gain.begin(), L.col_gain.end(), 0.34f);
+                    for (int k = 0; k < top_c; ++k) {
+                        const int win_mc = order_mc[(size_t)k].second;
+                        L.col_gain[(size_t)win_mc] = 1.06f;
+                        if (stdp_enabled_) L.col_habituation[(size_t)win_mc] += 0.015f;
+                    }
+                } else {
+                    std::fill(L.col_gain.begin(), L.col_gain.end(), 1.0f);
                 }
             }
         }
@@ -1467,11 +1650,14 @@ void Engine::accumulate_episodic_sdr(std::vector<float>& acc_buf) const {
     for (size_t li = 2; li < layers_.size(); ++li) {
         const Layer& L = layers_[li];
         if (L.n_assoc <= 0) continue;
-        const float w_reg = (li >= 3) ? 1.25f : 1.0f;
+        // L2 (corteza lexica/entorrinal, invariante a habituacion TRN) actua como ancla
+        // de raices y palabras clave; regiones superiores aportan contexto talamocortical:
+        const float w_reg = (li == 2) ? 1.35f : 1.10f;
         for (i32 j : L.last_spiked) {
             if (j < L.n_assoc) {
                 float& slot = acc_buf[(size_t)(base + j)];
-                if (w_reg > slot) slot = w_reg;
+                if (slot <= 0.0f) slot = w_reg;
+                else slot = std::min(2.40f, slot + 0.18f * w_reg);
             }
         }
         base += L.n_assoc;
@@ -1820,11 +2006,38 @@ void Engine::learn(const float* error, const std::vector<float>& f) {
     }
 }
 
+int Engine::max_cpu_threads() {
+#ifdef _OPENMP
+    return std::max(1, omp_get_max_threads());
+#else
+    return 1;
+#endif
+}
+
+std::vector<std::pair<int, float>> Engine::active_macro_columns(int layer_idx) const {
+    std::vector<std::pair<int, float>> res;
+    if (layers_.empty() || p_.n_macro_cols <= 1) return res;
+    int li = layer_idx;
+    if (li < 0 || li >= (int)layers_.size()) li = (int)layers_.size() - 1;
+    const Layer& L = layers_[(size_t)li];
+    if (L.col_energy.empty()) return res;
+    for (int mc = 0; mc < (int)L.col_energy.size(); ++mc) {
+        if (L.col_energy[(size_t)mc] > 0.01f) {
+            res.push_back({mc, L.col_energy[(size_t)mc]});
+        }
+    }
+    std::sort(res.begin(), res.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    if ((int)res.size() > std::max(1, p_.trn_top_k)) res.resize((size_t)std::max(1, p_.trn_top_k));
+    return res;
+}
+
 // ===========================================================================
 // PERSISTENCIA BINARIA DEL MOTOR
 // ===========================================================================
 void Engine::save_engine(std::ostream& os) const {
-    const uint32_t magic = 0x43584532u; // "CXE2" (5-comp apical + multi-NMDA)
+    const bool has_trn = (p_.n_macro_cols > 1);
+    const uint32_t magic = has_trn ? 0x43584533u : 0x43584532u; // CXE3 si TRN activo, CXE2 compatible
     write_pod(os, magic);
     write_pod(os, p_.n_layers);
     write_pod(os, p_.layer_size);
@@ -1864,6 +2077,10 @@ void Engine::save_engine(std::ostream& os) const {
     write_pod(os, p_.slow_ctx_tau_m);
     write_pod(os, p_.slow_ctx_gain);
     write_pod(os, p_.seed);
+    if (has_trn) {
+        write_pod(os, p_.n_macro_cols);
+        write_pod(os, p_.trn_top_k);
+    }
 
     const uint32_t nl = (uint32_t)layers_.size();
     write_pod(os, nl);
@@ -1883,6 +2100,7 @@ void Engine::save_engine(std::ostream& os) const {
         write_vec(os, L.g.post);
         write_vec(os, L.g.weight);
         write_vec(os, L.g.delay);
+        if (has_trn) write_vec(os, L.col_habituation);
     }
 
     const uint32_t ni = (uint32_t)inter_.size();
@@ -1903,10 +2121,11 @@ void Engine::save_engine(std::ostream& os) const {
 void Engine::load_engine(std::istream& is) {
     uint32_t magic = 0;
     read_pod(is, magic);
-    if (magic != 0x43584532u && magic != 0x43584531u) {
+    if (magic != 0x43584533u && magic != 0x43584532u && magic != 0x43584531u) {
         throw std::runtime_error("formato de motor invalido");
     }
     const bool legacy_cxe1 = (magic == 0x43584531u);
+    const bool is_cxe3     = (magic == 0x43584533u);
 
     read_pod(is, p_.n_layers);
     read_pod(is, p_.layer_size);
@@ -1946,6 +2165,13 @@ void Engine::load_engine(std::istream& is) {
     read_pod(is, p_.slow_ctx_tau_m);
     read_pod(is, p_.slow_ctx_gain);
     read_pod(is, p_.seed);
+    if (is_cxe3) {
+        read_pod(is, p_.n_macro_cols);
+        read_pod(is, p_.trn_top_k);
+    } else {
+        p_.n_macro_cols = 0;
+        p_.trn_top_k = 4;
+    }
 
     build_sensory_map();
     ctx_hist_.assign((size_t)p_.n_ctx * p_.n_chars, 0.0f);
@@ -1976,6 +2202,8 @@ void Engine::load_engine(std::istream& is) {
         read_vec(is, L.g.post);
         read_vec(is, L.g.weight);
         read_vec(is, L.g.delay);
+        if (is_cxe3) read_vec(is, L.col_habituation);
+        else L.col_habituation.clear();
         L.g.n_syn = L.g.post.size();
         n_neurons_ += L.n;
 
@@ -1997,6 +2225,12 @@ void Engine::load_engine(std::istream& is) {
                 L.nmda_trace.assign((size_t)L.n_assoc, 0.0f);
                 L.nmda_active.assign((size_t)L.n_assoc, 0);
                 L.nmda_last_sym.assign((size_t)L.n_assoc, -10000);
+                if (p_.n_macro_cols > 1) {
+                    const size_t mc = (size_t)p_.n_macro_cols;
+                    L.col_energy.assign(mc, 0.0f);
+                    L.col_gain.assign(mc, 1.0f);
+                    if (L.col_habituation.size() != mc) L.col_habituation.assign(mc, 0.0f);
+                }
             }
         }
         int max_d = p_.d_max;
@@ -2447,6 +2681,297 @@ void EpisodicCA3::load(std::istream& is) {
     }
     exc_buf_.assign(engrams_.size(), 0.0f);
     touched_engrams_.clear();
+}
+
+// ===========================================================================
+// PROYECCION MOTORA COMPACTA BAJO DEMANDA EN FP16 (CompactCorticalReadout, CXK1)
+// ===========================================================================
+void CompactCorticalReadout::init(int n_features, float lr, int init_slots) {
+    F_ = std::max(1, n_features);
+    cap_slots_ = (init_slots <= 128) ? 128 : 256;
+    n_active_ = 0;
+    n_rows_ = 0;
+    lr_ = lr;
+    consol_pull_ = 0.0f;
+    cal_steps_ = 0;
+    calibrated_ = false;
+
+    byte_to_slot_.assign(kMaxVocab, -1);
+    slot_to_byte_.clear();
+    row_id_.assign((size_t)F_, -1);
+    row_to_feat_.clear();
+    W_fp16_.clear();
+    W_anc_fp16_.clear();
+    imp_.clear();
+    scale_.assign((size_t)F_, 1.0f);
+    sq_sum_.assign((size_t)F_, 0.0f);
+    b_.assign(kMaxVocab, 0.0f);
+    logits_.assign(kMaxVocab, 0.0f);
+    probs_.assign(kMaxVocab, 0.0);
+    err_.assign(kMaxVocab, 0.0f);
+}
+
+size_t CompactCorticalReadout::memory_bytes() const {
+    return row_id_.capacity() * sizeof(i32) +
+           row_to_feat_.capacity() * sizeof(i32) +
+           W_fp16_.capacity() * sizeof(uint16_t) +
+           W_anc_fp16_.capacity() * sizeof(uint16_t) +
+           imp_.capacity() * sizeof(float) +
+           scale_.capacity() * sizeof(float);
+}
+
+void CompactCorticalReadout::expand_slots_to_256() {
+    if (cap_slots_ >= 256) return;
+    const int old_cap = cap_slots_;
+    cap_slots_ = 256;
+    if (n_rows_ > 0) {
+        std::vector<uint16_t> nw(n_rows_ * 256, 0);
+        for (size_t r = 0; r < n_rows_; ++r) {
+            std::memcpy(&nw[r * 256], &W_fp16_[r * (size_t)old_cap], (size_t)old_cap * sizeof(uint16_t));
+        }
+        W_fp16_.swap(nw);
+        if (!W_anc_fp16_.empty()) {
+            std::vector<uint16_t> na(n_rows_ * 256, 0);
+            for (size_t r = 0; r < n_rows_; ++r) {
+                std::memcpy(&na[r * 256], &W_anc_fp16_[r * (size_t)old_cap], (size_t)old_cap * sizeof(uint16_t));
+            }
+            W_anc_fp16_.swap(na);
+        }
+    }
+}
+
+int CompactCorticalReadout::ensure_byte_slot(int byte_val) {
+    const int b = byte_val & 0xFF;
+    if (byte_to_slot_[(size_t)b] >= 0) return byte_to_slot_[(size_t)b];
+    if (n_active_ >= cap_slots_) expand_slots_to_256();
+    const int sl = n_active_++;
+    byte_to_slot_[(size_t)b] = sl;
+    slot_to_byte_.push_back(b);
+    return sl;
+}
+
+i32 CompactCorticalReadout::ensure_row(i32 feat) {
+    i32 r = row_id_[(size_t)feat];
+    if (r >= 0) return r;
+    r = (i32)n_rows_++;
+    row_id_[(size_t)feat] = r;
+    row_to_feat_.push_back(feat);
+    W_fp16_.resize(n_rows_ * (size_t)cap_slots_, 0);
+    if (!W_anc_fp16_.empty()) W_anc_fp16_.resize(n_rows_ * (size_t)cap_slots_, 0);
+    imp_.push_back(0.0f);
+    return r;
+}
+
+void CompactCorticalReadout::calibrate_step(const std::vector<std::pair<i32, float>>& feats) {
+    if (calibrated_) return;
+    cal_steps_++;
+    for (const auto& kv : feats) {
+        if (kv.first >= 0 && kv.first < F_)
+            sq_sum_[(size_t)kv.first] += kv.second * kv.second;
+    }
+}
+
+void CompactCorticalReadout::freeze_calibration() {
+    if (calibrated_) return;
+    const float denom = (float)std::max(1L, cal_steps_);
+    for (int i = 0; i < F_; ++i) {
+        const float rms = std::sqrt(sq_sum_[(size_t)i] / denom);
+        scale_[(size_t)i] = (rms > 0.05f) ? std::min(6.0f, 1.0f / rms) : 1.0f;
+    }
+    sq_sum_.clear();
+    sq_sum_.shrink_to_fit();
+    calibrated_ = true;
+}
+
+void CompactCorticalReadout::predict(const std::vector<std::pair<i32, float>>& feats,
+                                     double* probs,
+                                     double temperature) const {
+    if (n_active_ <= 0) {
+        const double u = 1.0 / (double)kMaxVocab;
+        for (int i = 0; i < kMaxVocab; ++i) probs[i] = u;
+        return;
+    }
+    scaled_feats_.clear();
+    double norm_sq = 0.0;
+    for (const auto& kv : feats) {
+        const i32 idx = kv.first;
+        if (idx < 0 || idx >= F_) continue;
+        const float z = kv.second * (calibrated_ ? scale_[(size_t)idx] : 1.0f);
+        if (std::fabs(z) < 1e-7f) continue;
+        scaled_feats_.push_back({idx, z});
+        norm_sq += (double)z * (double)z;
+    }
+    const float inv_n = norm_sq > 1e-6 ? (float)(1.0 / std::sqrt(norm_sq)) : 1.0f;
+    const int C = n_active_;
+    for (int s = 0; s < C; ++s) logits_[(size_t)s] = b_[(size_t)s];
+
+    for (const auto& kv : scaled_feats_) {
+        const i32 r = row_id_[(size_t)kv.first];
+        if (r < 0) continue;
+        const float z = kv.second * inv_n;
+        const uint16_t* __restrict__ w16 = &W_fp16_[(size_t)r * (size_t)cap_slots_];
+        for (int s = 0; s < C; ++s) {
+            logits_[(size_t)s] += z * fp16_to_fp32(w16[s]);
+        }
+    }
+
+    const double inv_t = 1.0 / std::max(0.05, temperature);
+    double mx = -1e30;
+    for (int s = 0; s < C; ++s) {
+        const double v = (double)logits_[(size_t)s] * inv_t;
+        if (v > mx) mx = v;
+    }
+    std::fill(probs, probs + kMaxVocab, 0.0);
+    double sum = 0.0;
+    for (int s = 0; s < C; ++s) {
+        const double e = std::exp(std::max(-60.0, (double)logits_[(size_t)s] * inv_t - mx));
+        probs[slot_to_byte_[(size_t)s]] = e;
+        sum += e;
+    }
+    const double inv_s = 1.0 / std::max(1e-30, sum);
+    for (int s = 0; s < C; ++s) probs[slot_to_byte_[(size_t)s]] *= inv_s;
+}
+
+double CompactCorticalReadout::step(int target_byte,
+                                    const std::vector<std::pair<i32, float>>& feats,
+                                    bool learn,
+                                    float mod) {
+    const int tb = target_byte & 0xFF;
+    const int t_slot = ensure_byte_slot(tb);
+
+    scaled_feats_.clear();
+    double norm_sq = 0.0;
+    for (const auto& kv : feats) {
+        const i32 idx = kv.first;
+        if (idx < 0 || idx >= F_) continue;
+        const float z = kv.second * (calibrated_ ? scale_[(size_t)idx] : 1.0f);
+        if (std::fabs(z) < 1e-7f) continue;
+        scaled_feats_.push_back({idx, z});
+        norm_sq += (double)z * (double)z;
+    }
+    const float inv_n = norm_sq > 1e-6 ? (float)(1.0 / std::sqrt(norm_sq)) : 1.0f;
+    const int C = n_active_;
+    for (int s = 0; s < C; ++s) logits_[(size_t)s] = b_[(size_t)s];
+
+    for (const auto& kv : scaled_feats_) {
+        const i32 r = row_id_[(size_t)kv.first];
+        if (r < 0) continue;
+        const float z = kv.second * inv_n;
+        const uint16_t* __restrict__ w16 = &W_fp16_[(size_t)r * (size_t)cap_slots_];
+        for (int s = 0; s < C; ++s) {
+            logits_[(size_t)s] += z * fp16_to_fp32(w16[s]);
+        }
+    }
+
+    float mx = -1e30f;
+    for (int s = 0; s < C; ++s) if (logits_[(size_t)s] > mx) mx = logits_[(size_t)s];
+    double sum = 0.0;
+    for (int s = 0; s < C; ++s) {
+        const double e = std::exp((double)(logits_[(size_t)s] - mx));
+        probs_[(size_t)s] = e;
+        sum += e;
+    }
+    const double inv_s = 1.0 / std::max(1e-30, sum);
+    for (int s = 0; s < C; ++s) probs_[(size_t)s] *= inv_s;
+
+    const double p_tgt = std::max(1e-12, probs_[(size_t)t_slot]);
+    const double loss_bits = -std::log2(p_tgt);
+
+    if (learn && lr_ > 0.0f && mod > 0.0f) {
+        const float eff_lr = lr_ * mod;
+        for (int s = 0; s < C; ++s) {
+            const float target = (s == t_slot) ? 1.0f : 0.0f;
+            err_[(size_t)s] = ((float)probs_[(size_t)s] - target) * eff_lr;
+            b_[(size_t)s] = std::max(-6.0f, std::min(6.0f, b_[(size_t)s] - 0.12f * err_[(size_t)s]));
+        }
+        const bool has_anc = (!W_anc_fp16_.empty() && consol_pull_ > 0.0f);
+        for (const auto& kv : scaled_feats_) {
+            const i32 r = ensure_row(kv.first);
+            const float z = kv.second * inv_n;
+            imp_[(size_t)r] = std::min(4.0f, imp_[(size_t)r] + 0.0005f * std::fabs(z));
+            const float pull = has_anc ? (consol_pull_ * imp_[(size_t)r] * eff_lr) : 0.0f;
+            uint16_t* __restrict__ w16 = &W_fp16_[(size_t)r * (size_t)cap_slots_];
+            const uint16_t* __restrict__ a16 = has_anc ? &W_anc_fp16_[(size_t)r * (size_t)cap_slots_] : nullptr;
+            for (int s = 0; s < C; ++s) {
+                float w = fp16_to_fp32(w16[s]) - z * err_[(size_t)s];
+                if (has_anc) w += pull * (fp16_to_fp32(a16[s]) - w);
+                w = std::max(-12.0f, std::min(12.0f, w));
+                w16[s] = fp32_to_fp16_sr(w, sr_rng_);
+            }
+        }
+    }
+    return loss_bits;
+}
+
+void CompactCorticalReadout::consolidate(float strength) {
+    consol_pull_ = std::max(0.0f, strength);
+    if (consol_pull_ <= 0.0f || W_fp16_.empty()) return;
+    if (W_anc_fp16_.size() != W_fp16_.size()) {
+        W_anc_fp16_ = W_fp16_;
+    } else {
+        for (size_t i = 0; i < W_fp16_.size(); ++i) {
+            const float wn = fp16_to_fp32(W_fp16_[i]);
+            const float wa = fp16_to_fp32(W_anc_fp16_[i]);
+            W_anc_fp16_[i] = fp32_to_fp16(0.65f * wn + 0.35f * wa);
+        }
+    }
+}
+
+void CompactCorticalReadout::scale_weights(float factor) {
+    for (uint16_t& h : W_fp16_) h = fp32_to_fp16(fp16_to_fp32(h) * factor);
+    for (float& x : b_) x *= factor;
+}
+
+void CompactCorticalReadout::save(std::ostream& os) const {
+    const uint32_t magic = 0x43584B31u; // "CXK1"
+    write_pod(os, magic);
+    write_pod(os, F_);
+    write_pod(os, cap_slots_);
+    write_pod(os, n_active_);
+    const uint64_t nr = (uint64_t)n_rows_;
+    write_pod(os, nr);
+    write_pod(os, lr_);
+    write_pod(os, consol_pull_);
+    write_pod(os, calibrated_);
+    write_vec(os, byte_to_slot_);
+    write_vec(os, slot_to_byte_);
+    write_vec(os, row_to_feat_);
+    write_vec(os, W_fp16_);
+    write_vec(os, W_anc_fp16_);
+    write_vec(os, imp_);
+    write_vec(os, scale_);
+    write_vec(os, b_);
+}
+
+void CompactCorticalReadout::load(std::istream& is) {
+    uint32_t magic = 0;
+    read_pod(is, magic);
+    if (magic != 0x43584B31u) throw std::runtime_error("formato CompactCorticalReadout invalido");
+    read_pod(is, F_);
+    read_pod(is, cap_slots_);
+    read_pod(is, n_active_);
+    uint64_t nr = 0;
+    read_pod(is, nr);
+    n_rows_ = (size_t)nr;
+    read_pod(is, lr_);
+    read_pod(is, consol_pull_);
+    read_pod(is, calibrated_);
+    read_vec(is, byte_to_slot_);
+    read_vec(is, slot_to_byte_);
+    read_vec(is, row_to_feat_);
+    read_vec(is, W_fp16_);
+    read_vec(is, W_anc_fp16_);
+    read_vec(is, imp_);
+    read_vec(is, scale_);
+    read_vec(is, b_);
+    row_id_.assign((size_t)std::max(1, F_), -1);
+    for (size_t r = 0; r < row_to_feat_.size(); ++r) {
+        const i32 f = row_to_feat_[r];
+        if (f >= 0 && f < F_) row_id_[(size_t)f] = (i32)r;
+    }
+    logits_.assign(kMaxVocab, 0.0f);
+    probs_.assign(kMaxVocab, 0.0);
+    err_.assign(kMaxVocab, 0.0f);
 }
 
 }  // namespace cortex
