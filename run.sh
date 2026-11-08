@@ -12,7 +12,7 @@
 # asi que no hace falta volver a bajarlo aunque el proyecto cambie.
 set -u
 
-BRANCH="arena/c7deda7f-nuby"
+BRANCH="arena/886cbd4f-nuby"
 REPO="alexsndersoto04-source/nuby-"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 

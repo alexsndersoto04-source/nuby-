@@ -8,7 +8,7 @@
 # Todo el trabajo ocurre en Kaggle. El telefono solo manda y recibe.
 set -u
 
-BRANCH="${CORTEX_BRANCH:-arena/c7deda7f-nuby}"
+BRANCH="${CORTEX_BRANCH:-arena/886cbd4f-nuby}"
 REPO="${CORTEX_REPO:-alexsndersoto04-source/nuby-}"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 

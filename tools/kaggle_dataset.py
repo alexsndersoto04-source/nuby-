@@ -25,7 +25,7 @@ import sys
 import urllib.request
 
 REPO = "alexsndersoto04-source/nuby-"
-BRANCH = "arena/c7deda7f-nuby"
+BRANCH = "arena/886cbd4f-nuby"
 SLUG = "corpus-espanol-cortex"
 WORK = os.path.expanduser("~/cortex_dataset")
 
@@ -42,8 +42,9 @@ MOTOR = [
     "cortex-lm/engine/cortex_lm.cpp",
     "cortex-lm/engine/cortex_lm.hpp",
     "cortex-lm/engine/cortex_lm_main.cpp",
-    "cortex-lm/tools/bench_rls.cpp",
-    "cortex-lm/tools/bench_res.cpp",
+    "cortex-lm/tools/bench_cortical.cpp",
+    "cortex-lm/tools/cerebro.cpp",
+    "cortex-lm/tools/generar_alineacion.py",
 ]
 
 # Commit fijo de reserva: si la rama da una copia cacheada o falla, se

@@ -1,4 +1,7 @@
 bin/
 *.bin
 data/*.txt
+data/bloques_continuos/
+data/bloques_usuario/
+data/registro_continuo.json
 !data/README.md

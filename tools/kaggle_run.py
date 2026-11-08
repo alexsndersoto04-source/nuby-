@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 
 REPO = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
-BRANCH = os.environ.get("CORTEX_BRANCH", "arena/c7deda7f-nuby")
+BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-nuby")
 SLUG_TITULO = os.environ.get("CORTEX_SLUG", "cortex-lm-banco-texto-real")
 TIMEOUT_MIN = int(os.environ.get("CORTEX_TIMEOUT_MIN", "90"))
 
@@ -145,10 +145,13 @@ def descargar(remoto, destino, local_base=None):
 
 # Ficheros del motor que viajan dentro del cuaderno.
 MOTOR = [
+    "cortex-lm/Makefile",
     "cortex-lm/engine/cortex_lm.cpp",
     "cortex-lm/engine/cortex_lm.hpp",
     "cortex-lm/engine/cortex_lm_main.cpp",
-    "cortex-lm/tools/bench_rls.cpp",
+    "cortex-lm/tools/bench_cortical.cpp",
+    "cortex-lm/tools/cerebro.cpp",
+    "cortex-lm/tools/generar_alineacion.py",
 ]
 
 

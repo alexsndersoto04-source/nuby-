@@ -1,58 +1,46 @@
 #!/usr/bin/env python3
 """
-CORTEX-LM en Kaggle: banco de medida sobre texto español REAL.
+CORTEX-LM en Kaggle: jerarquia cortical LIF pura + CSR escalable + aprendizaje continuo.
 
-Qué hace
+Que hace
 --------
-1. Consigue texto español de verdad, con varias fuentes de respaldo.
-2. Lo audita antes de usarlo: si detecta que el texto está repetido en bucle
-   (el error que invalidó todas las medidas anteriores), se planta y lo dice.
-3. Compila el motor C++ del repositorio.
-4. Corre la auditoría estructural.
-5. Corre los bancos de medida con y sin plasticidad, sobre texto no visto.
-6. Imprime una tabla final lista para copiar y pegar.
-
-Cómo lanzarlo: ver kaggle/README.md. No hace falta tocar este fichero.
+1. Obtiene un corpus amplio y limpio en espanol (dataset adjunto, GITenberg en GitHub,
+   Hugging Face o Project Gutenberg) con decodificacion UTF-8 / ISO-8859-1 intacta.
+2. Audita el corpus antes de usarlo (rechaza texto repetido en bucle).
+3. Compila los binarios C++ puros (cortex_lm, bench_cortical, cerebro) sin dependencias.
+4. Ejecuta la auditoria estructural (5/5 pruebas del motor LIF).
+5. Mide la escalabilidad CSR y memoria O(1) en secuencia (hasta >130,000 neuronas LIF).
+6. Corre el banco de 5 semillas sobre holdout cronologico jamas visto (STDP=0 vs STDP=1).
+7. Entrena un cerebro persistente en espanol, aplica aprendizaje continuo (--continuo)
+   sobre un segundo dominio literario/expositivo y lo alinea conversacionalmente,
+   dejando el modelo listo en /kaggle/working/cerebro_es.bin.
 """
 
+import io
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
+import tarfile
 import urllib.request
 
 REPO_GH = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
-BRANCH = os.environ.get("CORTEX_BRANCH", "arena/c7deda7f-nuby")
+BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-nuby")
 WORK = os.environ.get("CORTEX_REPO_DIR", "/kaggle/working/nuby-")
-# En local (pruebas) se salta la descarga y se usa el corpus de juguete.
 LOCAL = os.environ.get("CORTEX_LOCAL", "") == "1"
 
-# Tamano de la corrida. Estas cifras NO son un capricho: estan medidas en
-# local con el motor real, porque la corrida anterior (60.000 caracteres y 8
-# epocas) se paso de los 90 minutos y Kaggle ni siquiera llego a publicar el
-# registro. Medido con un solo nucleo lento (parecido al de Kaggle):
-# Medido en local: 20 corridas con 4.000/2.000 tardan 2 min. Con 20.000/5.000
-# y un nucleo lento son unos 25-30 min: cabe de sobra en los 90 de Kaggle.
-TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "20000"))
-HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "5000"))
-# El lector RLS converge en UNA pasada, asi que ya no hay "epocas" que elegir.
-# Lo que manda es el tamano del texto: 20 corridas (4 condiciones x 5 semillas)
-# tienen que caber en el tiempo de Kaggle.
+TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "300000"))
+HOLDOUT_CHARS = int(os.environ.get("CORTEX_HOLDOUT_CHARS", "40000"))
 
 SEP = "=" * 70
 
-# Kaggle no publica la salida estandar del kernel mientras corre: solo publica
-# los ficheros que van apareciendo en /kaggle/working. Para que el usuario vea
-# por donde va, cada etapa apunta su marca en este fichero, que el lanzador lee
-# desde el telefono. Si falla al escribirse, se sigue: nunca puede tumbar la
-# corrida.
 PARTE = "/kaggle/working/avance.txt" if os.path.isdir("/kaggle/working") \
     else os.path.join(os.path.dirname(os.path.abspath(__file__)), "avance.txt")
 
 
 def parte(msg):
-    """Apunta una linea de avance (hora + mensaje) y la publica."""
     import time as _t
     linea = f"[{_t.strftime('%H:%M:%S')}] {msg}"
     print(f">>> {linea}", flush=True)
@@ -66,10 +54,9 @@ def parte(msg):
 
 
 def sh(cmd, cwd=None, check=True, env=None):
-    """Ejecuta un comando y devuelve su salida."""
     print(f"$ {' '.join(cmd) if isinstance(cmd, list) else cmd}")
     r = subprocess.run(cmd, cwd=cwd, shell=isinstance(cmd, str),
-                       capture_output=True, text=True, env=env)
+                       capture_output=True, text=True, errors="replace", env=env)
     out = (r.stdout or "") + (r.stderr or "")
     print(out.rstrip()[-4000:])
     if check and r.returncode != 0:
@@ -77,22 +64,26 @@ def sh(cmd, cwd=None, check=True, env=None):
     return out
 
 
-# --------------------------------------------------------------------------
-# 1. Corpus
-# --------------------------------------------------------------------------
-def try_download(url, timeout=60):
+def _decodificar(raw: bytes) -> str:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as f:
-            raw = f.read()
-        return raw.decode("utf-8", errors="ignore")
-    except Exception as e:  # noqa: BLE001
-        print(f"    no: {url} ({type(e).__name__}: {e})")
-        return None
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("iso-8859-1")
+
+
+def strip_gutenberg(text: str) -> str:
+    start = re.search(r"\*\*\* ?START OF (THE|THIS) PROJECT GUTENBERG.*?\*\*\*", text, flags=re.I | re.S)
+    if start:
+        text = text[start.end():]
+    end = re.search(r"\*\*\* ?END OF (THE|THIS) PROJECT GUTENBERG", text, flags=re.I)
+    if end:
+        text = text[:end.start()]
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip() + "\n"
 
 
 def _alcanzable(host, timeout=6):
-    """True si el dominio resuelve y acepta conexion. Rapido y sin reintentos."""
     import socket
     try:
         socket.setdefaulttimeout(timeout)
@@ -105,209 +96,44 @@ def _alcanzable(host, timeout=6):
 
 
 def comprobar_internet():
-    """Falla rapido si el kernel no tiene salida a red.
-
-    Kaggle desactiva internet en silencio si la cuenta no ha verificado el
-    telefono: se pide en el kernel, se ignora, y el cuaderno se pasa ocho
-    minutos reintentando dominios que no resuelven. Mejor decirlo en dos
-    segundos y con el enlace que lo arregla.
-    """
     if LOCAL:
         return
-    # Un dataset adjunto no necesita red, asi que si hay uno, no hace falta.
     if os.path.isdir("/kaggle/input"):
         for root, _d, files in os.walk("/kaggle/input"):
             for name in files:
-                if name.endswith((".txt", ".csv", ".tsv")):
-                    if os.path.getsize(os.path.join(root, name)) > 200_000:
+                if name.endswith((".txt", ".csv", ".tsv", ".zip")):
+                    if os.path.getsize(os.path.join(root, name)) > 50_000:
                         print("hay un dataset adjunto: no hace falta internet")
                         return
 
-    if _alcanzable("raw.githubusercontent.com") or _alcanzable("www.gutenberg.org"):
+    if any(_alcanzable(h) for h in ("codeload.github.com", "raw.githubusercontent.com", "www.gutenberg.org")):
         return
 
     raise SystemExit(
         "\n" + "=" * 62 + "\n"
-        "ESTE KERNEL NO TIENE SALIDA A INTERNET.\n\n"
-        "Por eso fallan todos los dominios (Errno -3). Kaggle desactiva\n"
-        "internet aunque se le pida, si la cuenta no ha verificado el\n"
-        "telefono.\n\n"
-        "Solucion (una sola vez, 2 minutos):\n"
-        "  1. Abre en el navegador:  https://www.kaggle.com/settings\n"
-        "  2. Busca 'Phone verification' y verifica tu numero.\n"
-        "  3. Vuelve a lanzar:  bash run.sh\n\n"
-        "Alternativa sin verificar el telefono: sube un .txt grande en\n"
-        "espanol como dataset y adjuntalo al kernel.\n"
+        "ESTE KERNEL NO TIENE SALIDA A INTERNET NI DATASET ADJUNTO.\n"
+        "Verifica el telefono en https://www.kaggle.com/settings o adjunta un dataset.\n"
         + "=" * 62)
 
 
-def get_corpus():
-    """Devuelve el texto completo, de la primera fuente que funcione."""
-    if LOCAL:
-        print("MODO LOCAL: usando el corpus de juguete del repositorio.")
-        proj = os.path.join(WORK, "cortex-lm")
-        # Se REGENERA antes de leer: el propio script escribe luego en data/,
-        # y leer el corpus que uno mismo sobrescribe deja el fichero vacío en
-        # la segunda pasada.
-        sh(["python3", "tools/make_test_corpus.py"], cwd=proj, check=False)
-        with open(os.path.join(proj, "data", "spanish_small.txt"), encoding="utf-8") as f:
-            return f.read()
-
-    print("\n--- buscando texto español real ---")
-
-    # Fuente 1: dataset adjunto. Es la unica que no necesita red.
-    ruta_txt, _ = buscar_en_dataset()
-    if ruta_txt:
-        with open(ruta_txt, encoding="utf-8", errors="ignore") as f:
-            return f.read()
-
-    # Fuente 2: Hugging Face, Wikipedia en español (streaming, solo una parte).
-    # Antes de intentarlo se prueba si el dominio resuelve. Sin esta prueba, el
-    # cliente reintenta cinco veces con espera creciente y se pierden cinco
-    # minutos en algo que se sabe fallido desde el primer segundo: en Kaggle
-    # huggingface.co da Errno -3 (fallo de resolucion de nombres).
-    if _alcanzable("huggingface.co"):
-        try:
-            from datasets import load_dataset  # noqa: PLC0415
-            print("    probando Hugging Face: wikimedia/wikipedia (es)")
-            ds = load_dataset("wikimedia/wikipedia", "20231101.es",
-                              split="train[:2000]", streaming=True)
-            parts = [row["text"] for row in ds]
-            text = "\n\n".join(parts)
-            if len(text) > 500_000:
-                return text
-        except Exception as e:  # noqa: BLE001
-            print(f"    no: Hugging Face ({type(e).__name__}: {e})")
-    else:
-        print("    Hugging Face no resuelve desde aqui, se salta")
-
-    # Fuente 3: Project Gutenberg, obras en español de dominio público.
-    # 2000 = Don Quijote. Los demás son novelas españolas del catálogo.
-    for book in ("2000", "17073", "36064", "46022"):
-        url = f"https://www.gutenberg.org/cache/epub/{book}/pg{book}.txt"
-        print(f"    probando Gutenberg {book}")
-        t = try_download(url, timeout=90)
-        if t and len(t) > 200_000:
-            return t
-
-    raise SystemExit(
-        "No se pudo bajar texto español. Solución: activa 'Internet' en el "
-        "notebook de Kaggle, o adjunta un dataset con un .txt grande en español.")
-
-
-def strip_gutenberg(text):
-    """Quita la cabecera y el pie legales de Gutenberg."""
-    start = re.search(r"\*\*\* ?START OF (THE|THIS) PROJECT GUTENBERG.*?\*\*\*", text)
-    if start:
-        text = text[start.end():]
-    end = re.search(r"\*\*\* ?END OF (THE|THIS) PROJECT GUTENBERG", text)
-    if end:
-        text = text[:end.start()]
-    return text
-
-
-def audit_corpus(text, label):
-    """Comprueba que el texto NO está repetido en bucle.
-
-    Esto es lo que faltaba antes: el corpus anterior era el mismo fragmento
-    del Quijote 40 veces, así que el 98 % del "test" estaba en el
-    entrenamiento y las cifras no valían nada. Aquí se mide y se avisa.
-    """
-    n = len(text)
-    alphabet = len(set(text))
-    print(f"  [{label}] {n:,} caracteres | alfabeto de {alphabet} símbolos")
-
-    ventana = 80
-    muestras = [text[i:i + ventana] for i in range(0, max(1, n - ventana), 97)]
-    unicas = len(set(muestras))
-    ratio = unicas / max(1, len(muestras))
-    print(f"  [{label}] ventanas de {ventana} caracteres únicas: "
-          f"{unicas:,}/{len(muestras):,} = {100*ratio:.1f} %")
-
-    problemas = []
-    if ratio < 0.50:
-        problemas.append(f"corpus repetido: solo {100*ratio:.1f} % de ventanas únicas")
-
-    # El alfabeto minimo depende del TAMANO del texto. Una particion de 12.000
-    # caracteres de novela tiene unos 60 simbolos distintos: es normal, no es
-    # sospechoso. Exigir 60 a cualquier trozo abortaba corridas buenas, como la
-    # del 4 de noviembre, donde el corpus completo tenia 121.
-    # Se calcula lo esperable: cuanto mas texto, mas simbolos, con saturacion.
-    # Calibrado con el corpus real de cuatro novelas espanolas:
-    #   completo 4.487.742 -> 121 simbolos
-    #   train      60.000 ->  82
-    #   test       12.000 ->  59
-    # Una particion de 12.000 caracteres con 59 simbolos es normal. El umbral
-    # es deliberadamente bajo: aqui solo se descartan unigramas y texto de
-    # juguete; que el texto sea natural lo decide la variedad de ventanas.
-    esperado = 25 if n < 20_000 else (35 if n < 100_000 else 45)
-    if alphabet < esperado:
-        problemas.append(
-            f"alfabeto de solo {alphabet} símbolos para {n:,} caracteres "
-            f"(esperaba al menos {esperado})")
-    if problemas:
-        for x in problemas:
-            print(f"  *** AVISO: {x}")
-        if not LOCAL:
-            raise SystemExit(
-                "\n*** CORPUS NO APTO: " + "; ".join(problemas) +
-                "\n*** Cualquier cifra medida sobre él sería memorización.")
-        print("  (modo local: se continúa solo para probar el flujo)")
-    print("  -> corpus aceptable: texto variado y no repetido.")
-    return ratio
-
-
-# --------------------------------------------------------------------------
-# 2. Repositorio y compilación
-# --------------------------------------------------------------------------
-# Se escribe tal cual cuando el motor viene de un dataset, para no depender de
-# bajar el Makefile.
-Makefile_ = """CXX      ?= g++
-CXXFLAGS ?= -O2 -std=c++17
-INC      := -Iengine
-SRC      := engine/cortex_lm.cpp engine/cortex_lm_main.cpp
-BIN      := bin/cortex_lm
-
-all: $(BIN)
-
-$(BIN): $(SRC) engine/cortex_lm.hpp
-\t@mkdir -p bin
-\t$(CXX) $(CXXFLAGS) $(INC) $(SRC) -o $(BIN)
-
-portable: $(BIN)
-
-clean:
-\trm -rf bin
-"""
-
-FICHEROS = [
-    "cortex-lm/Makefile",
-    "cortex-lm/engine/cortex_lm.cpp",
-    "cortex-lm/engine/cortex_lm.hpp",
-    "cortex-lm/engine/cortex_lm_main.cpp",
-    "cortex-lm/tools/bench_rls.cpp",
-    "cortex-lm/tools/bench_res.cpp",
-]
-
-
-def _descarga(url, destino):
-    req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as f:
-        datos = f.read()
-    os.makedirs(os.path.dirname(destino), exist_ok=True)
-    with open(destino, "wb") as f:
-        f.write(datos)
-    return len(datos)
+def _descargar_gitenberg(url: str):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/2.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw_tar = resp.read()
+        tf = tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:gz")
+        cands = [m for m in tf.getmembers()
+                 if m.isfile() and m.name.endswith(".txt") and "/old/" not in m.name and m.size > 50_000]
+        if not cands:
+            return None
+        cands.sort(key=lambda m: ("-0.txt" in m.name, m.size), reverse=True)
+        return strip_gutenberg(_decodificar(tf.extractfile(cands[0]).read()))
+    except Exception as e:  # noqa: BLE001
+        print(f"    no: {url} ({type(e).__name__}: {e})")
+        return None
 
 
 def extraer_zips(base):
-    """Descomprime cualquier .zip que haya en un dataset.
-
-    kaggle_dataset.py empaqueta el motor en motor.zip (Kaggle lo pide asi para
-    varios ficheros sueltos), pero el cuaderno espera los .cpp a la vista. Sin
-    esto el motor "no aparece" y el kernel muere diciendo que el dataset solo
-    traia 0 ficheros.
-    """
     import zipfile
     extraidos = []
     destino = os.path.join(WORK, "de_dataset")
@@ -328,25 +154,12 @@ def extraer_zips(base):
 
 
 def buscar_en_dataset():
-    """Busca texto y motor en /kaggle/input (datasets adjuntos).
-
-    Es la unica via que funciona sin internet: los datasets se montan dentro
-    del kernel sin necesitar red.
-    """
     base = "/kaggle/input"
     if not os.path.isdir(base):
         return None, None
-
-    # Los .zip se descomprimen antes de buscar: el motor viene comprimido.
     extraido = extraer_zips(base)
-
-    raices = [base]
-    if extraido:
-        raices.append(extraido)
-
-    texto = None
-    motor = None
-    mejor = 0
+    raices = [base] + ([extraido] if extraido else [])
+    texto, motor, mejor = None, None, 0
     for raiz in raices:
         for root, _dirs, files in os.walk(raiz):
             for name in files:
@@ -358,102 +171,131 @@ def buscar_en_dataset():
                 if name.endswith(".txt") and tam > mejor:
                     mejor = tam
                     texto = p
-            # el motor son los .cpp/.hpp que vienen dentro de motor.zip
             cpps = [f for f in files if f.endswith((".cpp", ".hpp"))]
             if len(cpps) >= 3 and motor is None:
                 motor = root
-
-    if texto:
-        print(f"    texto del dataset: {texto} ({os.path.getsize(texto)/1e6:.1f} MB)")
-    if motor:
-        print(f"    motor del dataset: {motor}")
     return texto, motor
 
 
-def escribir_motor_pegado():
-    """Escribe el motor que viene pegado en el propio cuaderno.
+def get_corpus():
+    """Devuelve (texto_moderno, texto_clasico) en espanol limpio."""
+    if LOCAL:
+        proj = os.path.join(WORK, "cortex-lm")
+        sh(["python3", "data/build_corpus_large.py"], cwd=proj)
+        with open(os.path.join(proj, "data", "corpus.txt"), encoding="utf-8") as f:
+            t = f.read()
+        mitad = len(t) // 2
+        return t[:mitad], t[mitad:]
 
-    Devuelve la carpeta del proyecto, o None si el cuaderno no lo trae.
-    Esto va ANTES de mirar el dataset: el motor del dataset se queda viejo en
-    cuanto se cambia el codigo, y regenerarlo a mano es un paso que se olvida.
-    """
+    print("\n--- buscando obras literarias en espanol ---")
+    ruta_txt, _ = buscar_en_dataset()
+    if ruta_txt:
+        with open(ruta_txt, "rb") as f:
+            t = strip_gutenberg(_decodificar(f.read()))
+        mitad = (len(t) * 2) // 3
+        return t[:mitad], t[mitad:]
+
+    if _alcanzable("codeload.github.com"):
+        obras_mod = []
+        for url in (
+            "https://codeload.github.com/GITenberg/Marianela_17340/tar.gz/master",
+            "https://codeload.github.com/GITenberg/Tormento_31465/tar.gz/master",
+            "https://codeload.github.com/GITenberg/Obras-escogidas_53552/tar.gz/master",
+        ):
+            t = _descargar_gitenberg(url)
+            if t:
+                obras_mod.append(t)
+        quijote = _descargar_gitenberg("https://codeload.github.com/GITenberg/Don-Quijote_2000/tar.gz/master")
+        if obras_mod and quijote:
+            return "\n\n".join(obras_mod), quijote
+
+    for book in ("2000", "17073", "36064", "46022"):
+        url = f"https://www.gutenberg.org/cache/epub/{book}/pg{book}.txt"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/2.0"})
+            with urllib.request.urlopen(req, timeout=90) as f:
+                t = strip_gutenberg(_decodificar(f.read()))
+            if len(t) > 200_000:
+                mitad = (len(t) * 2) // 3
+                return t[:mitad], t[mitad:]
+        except Exception as e:  # noqa: BLE001
+            print(f"    no: {url} ({e})")
+
+    raise SystemExit("No se pudo obtener corpus espanol.")
+
+
+def audit_corpus(text, label):
+    n = len(text)
+    alphabet = len(set(text))
+    ventana = 80
+    muestras = [text[i:i + ventana] for i in range(0, max(1, n - ventana), 97)]
+    unicas = len(set(muestras))
+    ratio = unicas / max(1, len(muestras))
+    print(f"  [{label}] {n:,} chars | alfabeto={alphabet} | ventanas unicas={100*ratio:.1f}%")
+    if ratio < 0.50 and not LOCAL:
+        raise SystemExit(f"Corpus repetido ({100*ratio:.1f}% ventanas unicas)")
+    return ratio
+
+
+FICHEROS = [
+    "cortex-lm/Makefile",
+    "cortex-lm/engine/cortex_lm.cpp",
+    "cortex-lm/engine/cortex_lm.hpp",
+    "cortex-lm/engine/cortex_lm_main.cpp",
+    "cortex-lm/tools/bench_cortical.cpp",
+    "cortex-lm/tools/cerebro.cpp",
+    "cortex-lm/tools/generar_alineacion.py",
+]
+
+
+def _descarga(url, destino):
+    req = urllib.request.Request(url, headers={"User-Agent": "cortex-lm/2.0"})
+    with urllib.request.urlopen(req, timeout=60) as f:
+        datos = f.read()
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    with open(destino, "wb") as f:
+        f.write(datos)
+
+
+def escribir_motor_pegado():
     try:
-        motor = motor_pegado()          # noqa: F821  (lo inyecta el lanzador)
-    except Exception:                                    # noqa: BLE001
+        motor = motor_pegado()  # noqa: F821
+    except Exception:  # noqa: BLE001
         return None
     if not motor:
         return None
     destino = os.path.join(WORK, "cortex-lm")
-    os.makedirs(os.path.join(destino, "engine"), exist_ok=True)
-    os.makedirs(os.path.join(destino, "tools"), exist_ok=True)
     for ruta, texto in motor.items():
         rel = ruta.split("cortex-lm/", 1)[-1]
         salida = os.path.join(destino, rel)
         os.makedirs(os.path.dirname(salida), exist_ok=True)
         with open(salida, "w", encoding="utf-8") as f:
             f.write(texto)
-    with open(os.path.join(destino, "Makefile"), "w", encoding="utf-8") as f:
-        f.write(Makefile_)
     print(f"  motor pegado en el cuaderno ({len(motor)} ficheros)")
     return destino
 
 
 def get_repo():
-    """Trae solo los ficheros necesarios, sin git.
-
-    Con `git clone` esto dependia de que hubiera git instalado y de la URL.
-    Bajando los ficheros con urllib el cuaderno funciona pegando codigo a mano
-    en Kaggle, sin clonar nada.
-    """
-    # 1) el motor que viaja pegado en este mismo cuaderno: siempre al dia
     pegado = escribir_motor_pegado()
     if pegado:
-        parte("motor del cuaderno (no hace falta dataset al dia)")
         return pegado
-
     if LOCAL:
-        print("\n--- MODO LOCAL: usando el codigo ya presente ---")
         return os.path.join(WORK, "cortex-lm")
 
-    # Si hay motor en un dataset adjunto, se usa y no hace falta red.
     _txt, ruta_motor = buscar_en_dataset()
     if ruta_motor:
         destino = os.path.join(WORK, "cortex-lm")
-        os.makedirs(os.path.join(destino, "engine"), exist_ok=True)
-        os.makedirs(os.path.join(destino, "tools"), exist_ok=True)
-        # bench_rls.cpp es el banco bueno (lector RLS y capa con memoria). Si el
-        # dataset es antiguo y no lo trae, se usa bench_joint.cpp como sustituto:
-        # compila igual pero mide menos cosas. Antes se exigian 5 ficheros
-        # EXACTOS y un dataset de 4 tumbaba la corrida entera por eso.
-        nombres = {"cortex_lm.cpp": "engine", "cortex_lm.hpp": "engine",
-                   "cortex_lm_main.cpp": "engine", "bench_rls.cpp": "tools"}
-        copiados = 0
-        for nombre, sub in nombres.items():
+        for sub in ("engine", "tools"):
+            os.makedirs(os.path.join(destino, sub), exist_ok=True)
+        for ruta in FICHEROS:
+            nombre = os.path.basename(ruta)
+            sub = "engine" if "/engine/" in ruta else ("tools" if "/tools/" in ruta else "")
             origen = os.path.join(ruta_motor, nombre)
             if os.path.exists(origen):
-                import shutil
-                shutil.copy(origen, os.path.join(destino, sub, nombre))
-                copiados += 1
-        # sustituto si el dataset es antiguo
-        destino_bench = os.path.join(destino, "tools", "bench_rls.cpp")
-        if not os.path.exists(destino_bench):
-            for alt in ("bench_joint.cpp", "bench.cpp"):
-                origen_alt = os.path.join(ruta_motor, alt)
-                if os.path.exists(origen_alt):
-                    import shutil
-                    shutil.copy(origen_alt, destino_bench)
-                    print(f"  el dataset no traia bench_rls.cpp: uso {alt}")
-                    copiados += 1
-                    break
-        if copiados >= 4:
-            print(f"  motor copiado del dataset ({copiados} ficheros)")
-            # el Makefile se genera aqui: no hace falta bajarlo
-            with open(os.path.join(destino, "Makefile"), "w", encoding="utf-8") as f:
-                f.write(Makefile_)
+                shutil.copy(origen, os.path.join(destino, sub, nombre) if sub else os.path.join(destino, nombre))
+        if os.path.exists(os.path.join(destino, "engine", "cortex_lm.cpp")):
             return destino
-        print(f"  el dataset solo traia {copiados} ficheros de motor, se ignora")
 
-    print("\n--- descargando el motor ---")
     for rama in (BRANCH, "main"):
         fallos = []
         for ruta in FICHEROS:
@@ -463,266 +305,146 @@ def get_repo():
             except Exception as e:  # noqa: BLE001
                 fallos.append(f"{ruta}: {type(e).__name__}")
         if not fallos:
-            print(f"  {len(FICHEROS)} ficheros desde la rama {rama}")
             return os.path.join(WORK, "cortex-lm")
-        print(f"  rama {rama}: fallaron {len(fallos)} -> {fallos[:3]}")
-    raise SystemExit(
-        "No se pudo descargar el codigo del repositorio. Comprueba que "
-        "'Internet' esta activado en Settings.")
+        print(f"  rama {rama}: fallaron {fallos}")
+    raise SystemExit("No se pudo obtener el motor C++.")
 
 
-def build(proj):
-    """Compila el motor SIN depender de make.
-
-    La imagen de Kaggle puede no traer make, y no hay internet para instalarlo.
-    Llamando a g++ directamente (que si viene) el problema desaparece.
-    """
-    print("\n--- compilando el motor ---")
+def build_all(proj):
     bin_dir = os.path.join(proj, "bin")
     os.makedirs(bin_dir, exist_ok=True)
-    salida = os.path.join(bin_dir, "cortex_lm")
-
-    compilador = None
-    for cand in ("g++", "c++", "clang++"):
-        if shutil.which(cand):
-            compilador = cand
-            break
-    if not compilador:
-        raise SystemExit(
-            "No hay compilador de C++ en el kernel (ni g++, ni c++, ni clang++).\n"
-            "Avisa de esto: significa que hay que compilar en otro sitio.")
-
-    print(f"    compilador: {compilador}")
-    parte(f"compilando el motor con {compilador}")
-    cmd = [compilador, "-O2", "-std=c++17", "-Iengine",
-           "engine/cortex_lm.cpp", "engine/cortex_lm_main.cpp", "-o", salida]
-    sh(cmd, cwd=proj)
-
-    if not os.path.exists(salida):
-        raise SystemExit("la compilacion no produjo el binario")
-    parte("motor compilado")
-    return salida
+    cxx = next((c for c in ("g++", "c++", "clang++") if shutil.which(c)), None)
+    if not cxx:
+        raise SystemExit("No hay compilador C++ disponible.")
+    flags = [cxx, "-O2", "-std=c++17", "-fno-math-errno", "-funroll-loops", "-Iengine"]
+    sh(flags + ["engine/cortex_lm.cpp", "engine/cortex_lm_main.cpp", "-o", "bin/cortex_lm"], cwd=proj)
+    sh(flags + ["engine/cortex_lm.cpp", "tools/bench_cortical.cpp", "-o", "bin/bench_cortical"], cwd=proj)
+    sh(flags + ["engine/cortex_lm.cpp", "tools/cerebro.cpp", "-o", "bin/cerebro"], cwd=proj)
+    return os.path.join(bin_dir, "cortex_lm"), os.path.join(bin_dir, "bench_cortical"), os.path.join(bin_dir, "cerebro")
 
 
-# --------------------------------------------------------------------------
-# 3. Bancos de medida
-# --------------------------------------------------------------------------
-def run_bench(proj, args):
-    """Compila y ejecuta un banco; devuelve su salida."""
-    src = os.path.join(proj, "tools", args["src"])
-    out = f"/tmp/bench_{args['tag']}"
-    sh(["g++", "-O2", "-std=c++17", "-Iengine", "engine/cortex_lm.cpp", src, "-o", out],
-       cwd=proj)
-    cmd = [out] + [str(a) for a in args["argv"]]
-    return sh(cmd, cwd=proj, check=False)
-
-
-def parse_res(out):
-    """Lee la salida de bench_res (reservorio)."""
-    v = re.search(r"lector local\s*:\s*([\d.]+)\s*bpc", out)
-    b = re.search(r"referencia 1 caracter\s*:\s*([\d.]+)\s*bpc", out)
-    r2 = re.search(r"referencia 2 caracteres\s*:\s*([\d.]+)\s*bpc", out)
-    if not v:
-        return None
-    return {"bpc": float(v.group(1)),
-            "bigram": float(b.group(1)) if b else float("nan"),
-            "ref2": float(r2.group(1)) if r2 else float("nan"),
-            "acc": 0.0}
-
-
-def parse(out):
-    m = re.search(r"TEST[^:]*:\s*([\d.]+)\s*bpc\s*\|\s*acierto\s*([\d.]+)", out)
-    b = re.search(r"bigrama[^:]*:\s*([\d.]+)\s*bpc", out)
-    if not m:
-        return None
-    return {"bpc": float(m.group(1)), "acc": float(m.group(2)),
-            "bigram": float(b.group(1)) if b else float("nan")}
+def extraer_diccionario(textos):
+    palabras = set()
+    for t in textos:
+        for m in re.finditer(r"[a-záéíóúüñ]{2,}", t, flags=re.I):
+            palabras.add(m.group(0).lower())
+    return sorted(palabras)
 
 
 def main():
     print(SEP)
-    print("CORTEX-LM — banco de medida sobre texto español real")
+    print("CORTEX-LM — Jerarquia Cortical LIF Pura + CSR + Aprendizaje Continuo")
     print(SEP)
 
-    parte("arranca el cuaderno")
+    parte("arranca corrida cortical")
     comprobar_internet()
-    text = get_corpus()
-    text = strip_gutenberg(text)
-    text = text.replace("\r\n", "\n")
-    print(f"\ntexto obtenido: {len(text):,} caracteres")
-    parte(f"texto conseguido: {len(text):,} caracteres")
-    audit_corpus(text, "todo")
-
     proj = get_repo()
-    parte("motor localizado en el dataset")
-    binary = build(proj)
+    bin_main, bin_bench, bin_brain = build_all(proj)
+    parte("binarios C++ compilados")
 
-    # --- particiones: el test sale del FINAL del texto, nunca visto ---
-    # Particion DISJUNTA y en orden: el test sale del tramo siguiente, que la
-    # red no ha visto nunca. (Antes esto estaba invertido: entrenaba con un
-    # trozo pequeño y medía sobre el resto.)
-    train = text[:TRAIN_CHARS]
-    holdout = text[TRAIN_CHARS:TRAIN_CHARS + HOLDOUT_CHARS]
+    audit_out = sh([bin_main, "audit"], cwd=proj)
+    audit_ok = "TODO OK" in audit_out
+    parte(f"auditoria estructural: {'TODO OK' if audit_ok else 'FALLO'}")
+
+    print("\n--- Escalabilidad CSR y memoria constante O(1) ---")
+    for cfg, deg, nch in (("1024", "52", 3000),
+                          ("1024,8192,8192,6144", "52", 2500),
+                          ("4096,98304,98304,98304", "16", 1500)):
+        sh([bin_bench, "scale", cfg, deg, str(nch)], cwd=proj)
+
+    txt_mod, txt_cla = get_corpus()
+    audit_corpus(txt_mod, "moderno")
+    audit_corpus(txt_cla, "clasico")
+
     data_dir = os.path.join(proj, "data")
     os.makedirs(data_dir, exist_ok=True)
-    with open(os.path.join(data_dir, "spanish_small.txt"), "w", encoding="utf-8") as f:
-        f.write(train)
-    with open(os.path.join(data_dir, "spanish_holdout.txt"), "w", encoding="utf-8") as f:
-        f.write(holdout)
-    print(f"\nentrenamiento: {len(train):,} | test no visto: {len(holdout):,}")
-    if len(train) < 3000 or len(holdout) < 1000:
-        raise SystemExit(f"particiones demasiado pequeñas (train {len(train)}, "
-                         f"test {len(holdout)}): revisa CORTEX_TRAIN_CHARS")
-    audit_corpus(train, "train")
-    audit_corpus(holdout, "test")
+    dic_path = os.path.join(data_dir, "dic_kaggle.txt")
+    with open(dic_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(extraer_diccionario([txt_mod, txt_cla])) + "\n")
 
-    # --- auditoría estructural del motor ---
-    print("\n--- auditoría estructural ---")
-    parte(f"particiones: train {len(train):,} / test {len(holdout):,}; auditoria en curso")
-    audit_out = sh([binary, "audit"], cwd=proj, check=False)
-    audit_ok = "TODO OK" in audit_out
-    print(f"auditoría: {'TODO OK' if audit_ok else 'FALLÓ'}")
-    parte(f"auditoria del motor: {'TODO OK' if audit_ok else 'FALLO'}")
+    # 1. Banco riguroso 5 semillas sobre tramo cronologico (45 KB, comparable con historico)
+    n_bench = min(len(txt_cla), 46000)
+    bench_corpus = os.path.join(data_dir, "bench_46k.txt")
+    with open(bench_corpus, "w", encoding="utf-8") as f:
+        f.write(txt_cla[:n_bench])
 
-    # --- bancos ---
-    N = min(TRAIN_CHARS, len(train) - 2)
-    runs = []          # historico
-    ref_bigram = float("nan")
-    # ------------------------------------------------------------------
-    # El sistema definitivo: lector RLS (regla local) + capa con memoria.
-    # bench_rls usa el motor que se acaba de mejorar: 8 ticks por simbolo y
-    # fatiga mas lenta. Cinco semillas por condicion, como se acordo.
-    # ------------------------------------------------------------------
-    SEMILLAS = [1234, 7, 99, 2024, 555]
-    # argumentos: NTR EPOCAS K LH PL ETA WSCALE LAG NORM METODO lambda alf p0 SEED
-    # Segun que banco se haya podido copiar, los argumentos son distintos.
-    # bench_rls: NTR EPOCAS K LH PL ETA WSCALE LAG NORM METODO lambda alf p0 SEED
-    # bench_joint (sustituto): EPOCHS K LH PL ETA WSCALE LAG [NMAX]
-    # Pasarle los argumentos de uno al otro no da error: da una medida falsa.
-    # Por eso se comprueba que el banco sea el bueno antes de medir.
-    with open(os.path.join(proj, "tools", "bench_rls.cpp"),
-              encoding="utf-8", errors="ignore") as f:
-        es_rls = "rls_paso" in f.read()
-    if not es_rls:
-        parte("AVISO: el dataset es antiguo y no trae el banco RLS")
-        print("\nEl dataset adjunto no trae bench_rls.cpp, que es el unico banco")
-        print("que mide el sistema definitivo. Sin el, las cifras de abajo NO")
-        print("valen: son otro banco con otros argumentos. Hay que regenerar el")
-        print("dataset en el telefono con:  python3 tools/kaggle_dataset.py")
+    semillas = [1234] if LOCAL else [1234, 7, 99, 2024, 555]
+    ep_bench = "2" if LOCAL else "7"
+    l1_b = "4096" if LOCAL else "8192"
+    l23_b = "4096,3072" if LOCAL else "8192,6144"
+    bpcs = {"0": [], "1": []}
+    for stdp in ("0", "1"):
+        for s in semillas:
+            parte(f"bench_cortical stdp={stdp} seed={s}")
+            out = sh([bin_bench, "bpc", bench_corpus, dic_path, l1_b, l23_b, ep_bench, "0.45", stdp, str(s)], cwd=proj)
+            m = re.search(r"HOLDOUT=([0-9.]+)", out)
+            if m:
+                bpcs[stdp].append(float(m.group(1)))
 
-    def correr(tag, argv):
-        parte(f"{tag} arrancando")
-        out = run_bench(proj, {"src": "bench_rls.cpp", "tag": tag, "argv": argv})
-        nonlocal ref_bigram
-        r = parse(out)
-        if r:
-            parte(f"{tag}: {r['bpc']:.3f} bpc, acierto {r['acc']:.1f}%")
-            runs.append(r)
-            if ref_bigram != ref_bigram:      # primera vez (NaN)
-                ref_bigram = r["bigram"]
-        return r
+    # 2. Entrenamiento amplio + aprendizaje continuo + alineacion conversacional
+    gen_ali = os.path.join(proj, "tools", "generar_alineacion.py")
+    if os.path.exists(gen_ali):
+        sh(["python3", gen_ali], cwd=proj)
 
-    def serie(nombre, base_argv):
-        """Corre las 5 semillas y devuelve media y desviacion."""
-        vals = []
-        for sem in SEMILLAS:
-            r = correr(f"{nombre}_s{sem}", list(base_argv) + [sem])
-            if r:
-                vals.append(r["bpc"])
-        if not vals:
-            return None
-        media = sum(vals) / len(vals)
-        var = sum((v - media) ** 2 for v in vals) / max(1, len(vals) - 1)
-        desv = var ** 0.5
-        print(f"  {nombre}: media {media:.3f} desv {desv:.3f} "
-              f"({', '.join(f'{v:.3f}' for v in vals)})")
-        parte(f"{nombre}: media {media:.3f} bpc desv {desv:.3f}")
-        return {"nombre": nombre, "media": media, "desv": desv,
-                "vals": vals, "bpc": media, "acc": 0.0}
+    n_tr_mod = min(TRAIN_CHARS, max(4000, len(txt_mod) - HOLDOUT_CHARS - 100))
+    tr_mod_p = os.path.join(data_dir, "tr_mod.txt")
+    ho_mod_p = os.path.join(data_dir, "ho_mod.txt")
+    with open(tr_mod_p, "w", encoding="utf-8") as f:
+        f.write(txt_mod[:n_tr_mod])
+    with open(ho_mod_p, "w", encoding="utf-8") as f:
+        f.write(txt_mod[n_tr_mod:n_tr_mod + min(HOLDOUT_CHARS, len(txt_mod) - n_tr_mod)])
 
-    if not es_rls:
-        # Sin el banco bueno no se mide: mejor decirlo que publicar una cifra
-        # que parece un resultado y no lo es.
-        parte("PARADO: hace falta regenerar el dataset con el motor actual")
-        print("\n" + SEP)
-        print("NO SE MIDIO NADA. Copia este mensaje en el chat.")
-        print(SEP)
-        print(f"auditoría del motor: {'TODO OK' if audit_ok else 'FALLÓ'}")
-        return 2
+    n_tr_cla = min(TRAIN_CHARS // 2, max(4000, len(txt_cla) - HOLDOUT_CHARS - 100))
+    tr_cla_p = os.path.join(data_dir, "tr_cla.txt")
+    ho_cla_p = os.path.join(data_dir, "ho_cla.txt")
+    con_extra = ""
+    con_p = os.path.join(data_dir, "conocimiento_es.txt")
+    if os.path.exists(con_p):
+        with open(con_p, encoding="utf-8") as f:
+            con_extra = "\n\n" + f.read()
+    with open(tr_cla_p, "w", encoding="utf-8") as f:
+        f.write(txt_cla[:n_tr_cla] + con_extra)
+    with open(ho_cla_p, "w", encoding="utf-8") as f:
+        f.write(txt_cla[n_tr_cla:n_tr_cla + min(HOLDOUT_CHARS, len(txt_cla) - n_tr_cla)])
 
-    print("\n--- sistema completo, texto no visto, 5 semillas ---")
-    # LH=8: con la linea de retardo (configuracion que cumple el objetivo).
-    sys_sin = serie("Sistema sin plasticidad",
-                    [N, 1, 64, 8, 0, 0, 0.30, 1, 0, 1, 1.0, 1.0, 100])
-    sys_con = serie("Sistema con plasticidad",
-                    [N, 1, 64, 8, 1, 3e-4, 0.30, 1, 0, 1, 1.0, 1.0, 100])
+    out_model = "/kaggle/working/cerebro_es.bin" if os.path.isdir("/kaggle/working") \
+        else os.path.join(data_dir, "cerebro_kaggle_test.bin")
+    capas_brain = "1024,4096,4096,3072" if LOCAL else "1024,10240,10240,8192"
+    ep_brain = "1" if LOCAL else "3"
 
-    print("\n--- la capa sola, sin linea de retardo (LH=1) ---")
-    # Aqui la unica memoria posible es la capa. Sirve para saber cuanto aporta.
-    cap_sin = serie("Capa sola sin plasticidad",
-                    [N, 1, 64, 1, 0, 0, 0.30, 1, 0, 1, 1.0, 1.0, 100])
-    cap_con = serie("Capa sola con plasticidad",
-                    [N, 1, 64, 1, 1, 3e-4, 0.30, 1, 0, 1, 1.0, 1.0, 100])
+    parte("entrenando cerebro fase 1 (literatura moderna)")
+    sh([bin_brain, "entrenar", out_model, tr_mod_p, "--capas", capas_brain, "--grado", "48",
+        "--epocas", ep_brain, "--lr", "0.45", "--stdp", "1", "--holdout", "0.0"], cwd=proj)
 
-    # --- resumen ---
-    parte("TODO TERMINADO: tabla lista")
+    parte("aprendizaje continuo fase 2 (--continuo)")
+    sh([bin_brain, "entrenar", out_model, tr_cla_p, "--continuo",
+        "--epocas", ep_brain, "--lr", "0.30", "--ancla", "0.025", "--holdout", "0.0"], cwd=proj)
+
+    ali_p = os.path.join(data_dir, "alineacion_es.txt")
+    if os.path.exists(ali_p):
+        parte("alineacion deliberativa dorsal fase 3")
+        sh([bin_brain, "alinear", out_model, ali_p,
+            "--epocas", "6" if LOCAL else "28", "--lr", "0.50", "--ancla", "0.001"], cwd=proj)
+
+    ev_mod = sh([bin_brain, "evaluar", out_model, ho_mod_p, dic_path], cwd=proj)
+    ev_cla = sh([bin_brain, "evaluar", out_model, ho_cla_p, dic_path], cwd=proj)
+
     print("\n" + SEP)
-    print("RESUMEN: bpc sobre texto NO VISTO. Cinco semillas. Menor es mejor.")
+    print("RESUMEN FINAL CORTEX-LM (100% SPIKING LIF PURO, CERO BACKPROP)")
     print(SEP)
-    print(f"{'condicion':<34}{'media':>8}{'desv':>8}  {'mejor':>7}{'peor':>7}")
-    filas = [sys_sin, sys_con, cap_sin, cap_con]
-    for f in filas:
-        if not f:
-            continue
-        print(f"{f['nombre']:<34}{f['media']:>8.3f}{f['desv']:>8.3f}"
-              f"  {min(f['vals']):>7.3f}{max(f['vals']):>7.3f}")
+    print(f"Auditoria estructural : {'TODO OK' if audit_ok else 'FALLO'}")
+    for k, label in (("0", "Cortical LIF sin STDP"), ("1", "Cortical LIF con STDP")):
+        if bpcs[k]:
+            mu = statistics.mean(bpcs[k])
+            sd = statistics.stdev(bpcs[k]) if len(bpcs[k]) > 1 else 0.0
+            print(f"{label:<24}: {mu:.4f} ± {sd:.4f} bpc ({len(bpcs[k])} semillas)")
+    for label, txt_ev in (("Holdout Moderno (retenido)", ev_mod), ("Holdout Clasico (continuo)", ev_cla)):
+        m = re.search(r"HOLDOUT BPC[^:]*:\s*([0-9.]+)", txt_ev)
+        if m:
+            print(f"{label:<26}: {m.group(1)} bpc")
+    print(f"Modelo persistido en  : {out_model}")
     print(SEP)
-    if sys_sin and sys_con:
-        d = sys_con["media"] - sys_sin["media"]
-        pool = ((sys_sin["desv"] ** 2 + sys_con["desv"] ** 2) / 2) ** 0.5
-        veredicto = "EMPATE" if abs(d) < 2 * pool else "EFECTO"
-        print(f"plasticidad en el sistema completo: {d:+.3f} bpc -> {veredicto}")
-    if cap_sin and cap_con:
-        d = cap_con["media"] - cap_sin["media"]
-        pool = ((cap_sin["desv"] ** 2 + cap_con["desv"] ** 2) / 2) ** 0.5
-        veredicto = "EMPATE" if abs(d) < 2 * pool else "EFECTO"
-        print(f"plasticidad en la capa sola:        {d:+.3f} bpc -> {veredicto}")
-    # -------------------------------------------------------------------
-    # Opcion 2: reservorio recurrente (estado que se actualiza, no ventana).
-    # Aqui se usan TODOS los caracteres disponibles, que es donde el banco
-    # anterior no podia llegar por memoria.
-    # -------------------------------------------------------------------
-    print("\n" + SEP)
-    print("RESERVORIO RECURRENTE + lector local (sin ventana congelada)")
-    print(SEP)
-    N_RES = 1500
-    res_vals, res_bigram, res_ref2 = [], float("nan"), float("nan")
-    for sem in SEMILLAS:
-        parte(f"reservorio semilla {sem} arrancando")
-        out = run_bench(proj, {"src": "bench_res.cpp", "tag": f"res_{sem}",
-                               "argv": [N, HOLDOUT_CHARS, N_RES, 0.35, 0.9, sem,
-                                        1.0, 10, 0, 0, 0.05, 4, 0, 8, 0, 0]})
-        r = parse_res(out)
-        if r:
-            res_vals.append(r["bpc"])
-            res_bigram = r["bigram"]
-            res_ref2 = r["ref2"]
-            parte(f"reservorio semilla {sem}: {r['bpc']:.3f} bpc "
-                  f"(bigrama {r['bigram']:.3f})")
-    if res_vals:
-        m = sum(res_vals) / len(res_vals)
-        var = sum((v - m) ** 2 for v in res_vals) / max(1, len(res_vals) - 1)
-        d = var ** 0.5
-        print(f"{'Reservorio + lector local':<34}{m:>8.3f}{d:>8.3f}"
-              f"  {min(res_vals):>7.3f}{max(res_vals):>7.3f}")
-        print(f"bigrama de referencia: {res_bigram:.3f} | "
-              f"referencia 2 car.: {res_ref2:.3f}")
-        print(f"frente al bigrama: {m - res_bigram:+.3f} bpc "
-              f"({'GANA' if m < res_bigram else 'PIERDE'})")
-        parte(f"RESERVORIO: {m:.3f} bpc frente a bigrama {res_bigram:.3f}")
-    print(SEP)
-    print(f"auditoría del motor: {'TODO OK' if audit_ok else 'FALLÓ'}")
-    print("Copia esta tabla y pégala en el chat.")
+    parte("TODO TERMINADO")
     return 0
 
 

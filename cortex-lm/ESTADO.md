@@ -1,6 +1,14 @@
 # Estado del motor CORTEX-LM
 
-Acta de auditoría. Lo que se midió, lo que se encontró y lo que sigue abierto.
+Acta de auditoría e historial técnico del motor.
+
+> **Actualización actual (`CORTICAL-CSR-ACTA.md`, 2026-11-07):**
+> - **Jerarquía cortical spiking LIF pura de 4+ regiones + penacho apical Larkum + hipocampo `CA3-CA1`** (`engine/cortex_lm.{hpp,cpp}`, `tools/cerebro.cpp`): dendritas piramidales de 5 compartimentos (`4` basales saturantes $K=2,3,4$ + `1` penacho apical descendente `L3 -> L2` con compuerta de calcio Larkum), inhibición `k-WTA` por columna funcional, período crítico `STDP` local `O(1)`, decaimiento exacto dirigido por eventos (`pending_ticks`), trazas lentas NMDA multi-región con bloqueo $\text{Mg}^{2+}$ (`>= 0.28`) y depresión Tsodyks-Markram, manteniendo `./bin/cortex_lm audit` en `5/5 TODO OK` y cero backpropagation.
+> - **Escalabilidad real `CSR` + arreglos planos `SoA` (`./bin/bench_cortical scale`)**: probado hasta **`299,008` neuronas LIF puras en 4 regiones (`21,492,888` sinapsis CSR)** en `392.8 MB` de RAM (`455 chars/s`) con **`+0 KB` de deriva RSS** en secuencias largas.
+> - **Salto verificado en comprensión, razonamiento deliberativo y memoria (5 semillas: `1234, 7, 99, 2024, 555`)**:
+>   - `data/corpus.txt` (holdout no visto 20 %): baja de `2.870 BPC` (`BASE`), `2.503 BPC` (Witten-Bell `ctx=4`) y `2.4870 BPC` (3 capas) a **`2.4718 ± 0.0044 BPC`** (`64.8 ± 8.8 %` de palabras reales; mejor semilla `2.466 BPC`, hasta `79.5 %` de palabras reales).
+>   - Cerebro de 4 regiones (`{1024,10240,10240,8192}`, `29,696` neuronas LIF, `2.11M` sinapsis) alimentado con **toda la biblioteca (`3.80 MB` totales)** estrictamente mediante aprendizaje continuo (`tools/alimentar_continuo.py`, `--continuo`, vocabulario auto-expandido `81 -> 110` bytes UTF-8): mejora simultáneamente los **3 holdouts intocables jamás vistos** — Galdós **`2.2959 BPC`** (desde `2.3596`), Don Quijote **`2.2077 BPC` / `2.1821 BPC`** (desde `2.3702`, `70.3 %` de palabras reales) y poesía de Bécquer **`3.1155 BPC` / `3.1038 BPC`** (desde `3.2715`).
+>   - **Deliberación física con espigas (`\n~ pensamiento\n> respuesta`), cerrojo ejecutivo de memoria de trabajo (`q_wm`), diálogo multi-turno (`carry_context`) e hipocampo `CA3` en 1 disparo (`cerebro recordar`)**: `10/10` dominios en preguntas no vistas cortas y compuestas largas, `3/3` en turnos de seguimiento con pronombres ambiguos (`Quijote -> Sancho Panza`, `Venezuela -> Salto Ángel`, `corazón -> ADN`) y recuperación asociativa instantánea sin olvido (`./bin/cerebro interactivo data/cerebro_es.bin --pensar`).
 
 ---
 

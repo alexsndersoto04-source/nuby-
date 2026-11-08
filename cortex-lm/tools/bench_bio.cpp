@@ -163,14 +163,20 @@ struct Lector {
             }
         }
         double mx = -1e30, sm = 0.0;
+        const int D = H > 0 ? H : F;
+        const double * __restrict__ in_ptr = H > 0 ? h.data() : z.data();
         for (int c = 0; c < C; ++c) {
-            double a = b[c];
-            const double *w = &W[(size_t)c * (H > 0 ? H : F)];
-            if (H > 0) {
-                for (int k = 0; k < H; ++k) a += w[k] * h[k];
-            } else {
-                for (int k = 0; k < F; ++k) a += w[k] * z[k];
+            const double * __restrict__ w = &W[(size_t)c * D];
+            double a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
+            int k = 0;
+            for (; k + 3 < D; k += 4) {
+                a0 += w[k] * in_ptr[k];
+                a1 += w[k + 1] * in_ptr[k + 1];
+                a2 += w[k + 2] * in_ptr[k + 2];
+                a3 += w[k + 3] * in_ptr[k + 3];
             }
+            double a = b[c] + (a0 + a1) + (a2 + a3);
+            for (; k < D; ++k) a += w[k] * in_ptr[k];
             lg[c] = a;
             if (a > mx) mx = a;
         }
@@ -182,11 +188,10 @@ struct Lector {
             for (int c = 0; c < C; ++c) {
                 const double g = (pr[c] - (c == y ? 1.0 : 0.0)) * mod;
                 if (g == 0.0) continue;
-                const int D = H > 0 ? H : F;
-                double *w = &W[(size_t)c * D];
-                const double *in = H > 0 ? h.data() : z.data();
-                for (int k = 0; k < D; ++k) w[k] -= tasa * g * in[k];
-                b[c] -= tasa * g;
+                const double step_g = tasa * g;
+                double * __restrict__ w = &W[(size_t)c * D];
+                for (int k = 0; k < D; ++k) w[k] -= step_g * in_ptr[k];
+                b[c] -= step_g;
             }
         }
         return -std::log2(p);
