@@ -1142,7 +1142,7 @@ int Engine::step() {
             const float ap_cap = 0.14f * p_.v_th;
             const size_t nd = L.dend_list.size();
 
-            if (nd >= 32768 && max_cpu_threads() >= 4) {
+            if (nd >= 8192 && max_cpu_threads() >= 4) {
                 std::vector<float> exc_tmp(nd, -1.0f);
                 #ifdef _OPENMP
                 #pragma omp parallel for schedule(static)

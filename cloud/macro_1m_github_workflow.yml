@@ -1,0 +1,35 @@
+name: Corteza Viva Macro 1M (16GB RAM 24-7)
+
+on:
+  workflow_dispatch:
+    inputs:
+      perfil:
+        description: "Perfil cortical (macro-1m = 1,017,856 neuronas LIF)"
+        required: false
+        default: "macro-1m"
+  schedule:
+    - cron: "15 */5 * * *"
+
+concurrency:
+  group: cortex-lm-macro-1m-continuo
+  cancel-in-progress: false
+
+jobs:
+  corteza-viva-16gb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Descargar arquitectura CORTEX-LM Macro
+        uses: actions/checkout@v4
+        with:
+          ref: arena/886cbd4f-nuby
+
+      - name: Instalar dependencias Python de streaming
+        run: pip install --quiet huggingface_hub datasets
+
+      - name: Ejecutar Fabrica Continua 16GB + Tunel Web Vivo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PERFIL_CORTEX: ${{ inputs.perfil || 'macro-1m' }}
+          MAX_MINUTOS_CICLO: "320"
+        run: python3 cloud/ejecutar_fabrica_github_16gb.py
