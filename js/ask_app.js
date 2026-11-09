@@ -420,6 +420,25 @@
     return parts.join(" · ");
   }
 
+  // Detecta cuando el cerebro en la nube aún está entrenando y entrega ruido interno
+  // en lugar de una respuesta comprensible, para no mostrarte basura como si fuera respuesta.
+  function esTextoBasura(texto) {
+    if (!texto || texto.trim().length < 6) return true;
+    const t = texto.toLowerCase().replace(/[^\w\sáéíóúñ]/g, " ");
+    const palabras = t.split(/\s+/).filter(Boolean);
+    if (palabras.length < 4) return false;
+    const cortas = palabras.filter((p) => p.length <= 2).length;
+    if (cortas / palabras.length > 0.35) return true;
+    let repeticiones = 0;
+    for (let i = 0; i < palabras.length - 2; i++) {
+      const triple = palabras.slice(i, i + 3).join(" ");
+      for (let j = i + 1; j < palabras.length - 2; j++) {
+        if (palabras.slice(j, j + 3).join(" ") === triple) repeticiones++;
+      }
+    }
+    return repeticiones > 3;
+  }
+
   function appendMessageDom(msg, animateScroll = true) {
     const hero = document.getElementById("welcomeHero");
     if (hero) hero.style.display = "none";
@@ -589,6 +608,9 @@
         try {
           const d = JSON.parse(res.body);
           replyText = d.respuesta || "Estoy procesando ese concepto en mi corteza.";
+          if (esTextoBasura(replyText)) {
+            replyText = "Aún estoy entrenando en la nube y mis palabras no salen claras todavía. Déjame seguir aprendiendo un poco más y vuelve a escribirme en unos minutos.";
+          }
           meta = {
             pensamiento: d.pensamiento || "",
             ach: d.ach,

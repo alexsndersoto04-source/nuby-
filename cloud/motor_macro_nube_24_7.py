@@ -612,12 +612,12 @@ def sintetizar_voz_humana_mp3(texto: str, genero: str) -> bytes:
     if not limpio:
         return b""
 
-    voces_fem = ["es-CO-SalomeNeural", "es-MX-DaliaNeural", "es-VE-PaolaNeural"]
+    voces_fem = ["es-VE-PaolaNeural", "es-CO-SalomeNeural", "es-MX-DaliaNeural"]
     voces_masc = ["es-CO-GonzaloNeural", "es-AR-TomasNeural", "es-MX-JorgeNeural"]
     candidatas = voces_masc if str(genero).lower().startswith("m") else voces_fem
 
     async def _gen(voz_id: str) -> bytes:
-        com = edge_tts.Communicate(limpio, voice=voz_id, rate="-2%", pitch="+0Hz")
+        com = edge_tts.Communicate(limpio, voice=voz_id, rate="0%", pitch="+5Hz", volume="+20%")
         audio = bytearray()
         async for chunk in com.stream():
             if chunk.get("type") == "audio" and chunk.get("data"):
