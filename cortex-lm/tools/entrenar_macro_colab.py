@@ -164,6 +164,29 @@ def iterar_lotes_wikipedia_streaming(ya_vistos: set, num_lotes: int, bytes_por_l
                         return
         except Exception:
             continue
+    # Respaldo adicional inagotable por resúmenes aleatorios de Wikipedia ES si aún faltan lotes
+    intentos_rand = 0
+    while emitidos < num_lotes and intentos_rand < num_lotes * 40:
+        intentos_rand += 1
+        try:
+            req = urllib.request.Request(
+                "https://es.wikipedia.org/api/rest_v1/page/random/summary",
+                headers={"User-Agent": "CORTEX-LM-Macro-Trainer/1.0 (Academic Spiking Research)"},
+            )
+            with urllib.request.urlopen(req, timeout=12) as r:
+                datos = json.loads(r.read().decode("utf-8", errors="replace"))
+                tit = str(datos.get("title", "")).strip()
+                ext = str(datos.get("extract", "")).strip()
+                if tit and tit not in ya_vistos and len(ext) >= 120:
+                    ya_vistos.add(tit)
+                    buf.append(ext)
+                    buf_len += len(ext)
+                    if buf_len >= min(bytes_por_lote, 60_000):
+                        emitidos += 1
+                        yield f"wiki_rand_lote_{emitidos:04d}", "\n\n".join(buf)
+                        buf, buf_len = [], 0
+        except Exception:
+            continue
     if buf and emitidos < num_lotes:
         emitidos += 1
         yield f"wiki_api_lote_{emitidos:04d}", "\n\n".join(buf)
