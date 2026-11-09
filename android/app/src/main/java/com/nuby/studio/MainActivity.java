@@ -11,8 +11,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
 import android.util.Base64;
 import android.util.Log;
+import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -26,15 +30,21 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Contenedor nativo de Nuby Studio.
@@ -61,15 +71,48 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> fileCallback;
     private ExportSession exportSession;
-    /** Petición de micrófono del WebView esperando el permiso del sistema. */
     private PermissionRequest pendingPermission;
+    private TextToSpeech nativeTts;
+    private boolean ttsReady = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Grabar no debe cortarse si el teléfono quiere apagar la pantalla.
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            int flags = getWindow().getDecorView().getSystemUiVisibility();
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+
+        nativeTts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status == TextToSpeech.SUCCESS) {
+                    nativeTts.setLanguage(new Locale("es", "ES"));
+                    ttsReady = true;
+                    nativeTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                        @Override
+                        public void onStart(String utteranceId) {
+                            notifyJsVoiceState("speaking");
+                        }
+
+                        @Override
+                        public void onDone(String utteranceId) {
+                            notifyJsVoiceState("idle");
+                        }
+
+                        @Override
+                        public void onError(String utteranceId) {
+                            notifyJsVoiceState("idle");
+                        }
+                    });
+                }
+            }
+        });
 
         webView = new WebView(this);
         setContentView(webView);
@@ -90,13 +133,27 @@ public class MainActivity extends Activity {
         settings.setTextZoom(100);
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
-        webView.setBackgroundColor(0xFF0F1214);
+        webView.setBackgroundColor(0xFFFFFFFF);
         webView.setWebViewClient(new LocalContentClient());
         webView.setWebChromeClient(new StudioChromeClient());
         webView.addJavascriptInterface(new NativeBridge(), "NubyNative");
 
-        requestPermissionsIfNeeded();
         webView.loadUrl(BASE_URL + "index.html");
+    }
+
+    private void notifyJsVoiceState(final String state) {
+        if (webView == null) return;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                            "if(window.__askVoiceState)window.__askVoiceState('" + state + "');",
+                            null
+                    );
+                }
+            }
+        });
     }
 
     /**
@@ -125,6 +182,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (nativeTts != null) {
+            nativeTts.stop();
+            nativeTts.shutdown();
+            nativeTts = null;
+        }
         if (exportSession != null) {
             exportSession.close();
             exportSession = null;
@@ -419,6 +481,164 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isAndroid() {
             return true;
+        }
+
+        /**
+         * Petición HTTP(S) nativa libre de restricciones CORS del WebView para conectar
+         * directamente con el cerebro CORTEX-ML en la nube y con la bóveda Hugging Face.
+         */
+        @JavascriptInterface
+        public String httpRequest(String method, String urlStr, String body, String authHeader) {
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(urlStr);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(true);
+                conn.setRequestMethod(method == null || method.isEmpty() ? "GET" : method);
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(95000);
+                conn.setRequestProperty("Accept", "*/*");
+                if (authHeader != null && !authHeader.isEmpty()) {
+                    conn.setRequestProperty("Authorization", authHeader);
+                }
+                if (body != null && !body.isEmpty() && !"GET".equalsIgnoreCase(method)) {
+                    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                    conn.setDoOutput(true);
+                    conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                    OutputStream os = conn.getOutputStream();
+                    os.write(bytes);
+                    os.flush();
+                    os.close();
+                }
+                int code = conn.getResponseCode();
+                InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
+                String respText = "";
+                String contentType = conn.getContentType() != null ? conn.getContentType() : "";
+                if (is != null) {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = is.read(buf)) != -1) {
+                        baos.write(buf, 0, n);
+                    }
+                    is.close();
+                    if (contentType.contains("audio/")) {
+                        respText = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                    } else {
+                        respText = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+                    }
+                }
+                org.json.JSONObject out = new org.json.JSONObject();
+                out.put("ok", code >= 200 && code < 300);
+                out.put("status", code);
+                out.put("contentType", contentType);
+                out.put("body", respText);
+                return out.toString();
+            } catch (Exception e) {
+                try {
+                    org.json.JSONObject err = new org.json.JSONObject();
+                    err.put("ok", false);
+                    err.put("status", 0);
+                    err.put("error", e.getMessage() != null ? e.getMessage() : "Error de red");
+                    return err.toString();
+                } catch (Exception ignored) {
+                    return "{\"ok\":false,\"status\":0}";
+                }
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+
+        @JavascriptInterface
+        public void httpRequestAsync(final String reqId, final String method, final String urlStr,
+                                     final String body, final String authHeader) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final String res = httpRequest(method, urlStr, body, authHeader);
+                    final String b64 = Base64.encodeToString(res.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (webView != null) {
+                                webView.evaluateJavascript(
+                                        "if(window.__askHttpDone)window.__askHttpDone('"
+                                                + reqId + "','" + b64 + "');",
+                                        null
+                                );
+                            }
+                        }
+                    });
+                }
+            }).start();
+        }
+
+        /**
+         * Síntesis neuronal nativa de alta definición en Android (elige las voces neuronales
+         * en red de mayor calidad humana en español, diferenciando voz femenina y masculina cálida).
+         */
+        @JavascriptInterface
+        public boolean speakNeural(final String text, final String gender) {
+            if (!ttsReady || nativeTts == null || text == null || text.trim().isEmpty()) {
+                return false;
+            }
+            try {
+                boolean wantMale = gender != null && gender.toLowerCase(Locale.ROOT).startsWith("m");
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    Set<Voice> voices = nativeTts.getVoices();
+                    Voice best = null;
+                    int bestScore = -999;
+                    if (voices != null) {
+                        for (Voice v : voices) {
+                            Locale loc = v.getLocale();
+                            if (loc == null || !"es".equalsIgnoreCase(loc.getLanguage())) continue;
+                            String name = v.getName().toLowerCase(Locale.ROOT);
+                            String feats = v.getFeatures() != null ? v.getFeatures().toString().toLowerCase(Locale.ROOT) : "";
+                            int score = v.getQuality();
+                            if (v.isNetworkConnectionRequired()) score += 500; // Priorizar modelo neuronal HD en nube de Google
+                            if ("US".equalsIgnoreCase(loc.getCountry()) || "MX".equalsIgnoreCase(loc.getCountry())
+                                    || "CO".equalsIgnoreCase(loc.getCountry()) || "VE".equalsIgnoreCase(loc.getCountry())) {
+                                score += 60;
+                            }
+                            boolean isMaleVoice = name.contains("male") && !name.contains("female")
+                                    || feats.contains("gender=male")
+                                    || name.contains("-esd-") || name.contains("-esf-")
+                                    || name.contains("-eed-") || name.contains("-sfd-");
+                            boolean isFemaleVoice = name.contains("female")
+                                    || feats.contains("gender=female")
+                                    || name.contains("-sfb-") || name.contains("-esc-")
+                                    || name.contains("-eef-") || name.contains("-sfc-");
+                            if (wantMale && isMaleVoice) score += 250;
+                            else if (!wantMale && isFemaleVoice) score += 250;
+                            else if (wantMale && isFemaleVoice) score -= 200;
+                            else if (!wantMale && isMaleVoice) score -= 200;
+
+                            if (score > bestScore) {
+                                bestScore = score;
+                                best = v;
+                            }
+                        }
+                    }
+                    if (best != null) {
+                        nativeTts.setVoice(best);
+                    }
+                    nativeTts.setSpeechRate(0.97f);
+                    nativeTts.setPitch(wantMale ? 0.95f : 1.02f);
+                    Bundle params = new Bundle();
+                    nativeTts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "ask-" + System.currentTimeMillis());
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+            return false;
+        }
+
+        @JavascriptInterface
+        public void stopSpeaking() {
+            if (nativeTts != null) {
+                nativeTts.stop();
+                notifyJsVoiceState("idle");
+            }
         }
 
         @JavascriptInterface

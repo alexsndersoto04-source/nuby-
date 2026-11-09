@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="studio_bg">#FF0F1214</color>
-    <color name="studio_accent">#FF6D9BC3</color>
+    <color name="studio_bg">#FFFFFFFF</color>
+    <color name="studio_accent">#FF7C3AED</color>
 </resources>

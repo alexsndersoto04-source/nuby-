@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     ca-certificates \
     git \
-    && pip3 install --no-cache-dir --break-system-packages huggingface_hub datasets \
+    && pip3 install --no-cache-dir --break-system-packages huggingface_hub datasets edge-tts \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear usuario no-root compatible con Hugging Face Spaces (uid 1000) y nubes Docker

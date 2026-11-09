@@ -129,6 +129,12 @@ def main():
     puerto = int(os.environ.get("PORT", "7860"))
     ruta_modelo = DIR_CORTEX / "data" / "cerebro_macro_1m.bin"
 
+    # Asegurar motor de voz neuronal humana cálida (edge-tts) en el servidor de 16 GB RAM
+    try:
+        import edge_tts  # noqa: F401
+    except ImportError:
+        subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "edge-tts"], check=False)
+
     repo_id = preparar_boveda_hf(token)
     env = os.environ.copy()
     env["PORT"] = str(puerto)

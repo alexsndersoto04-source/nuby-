@@ -600,35 +600,110 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
             time.sleep(120)
 
 
+def sintetizar_voz_humana_mp3(texto: str, genero: str) -> bytes:
+    """
+    Sintetiza voz neuronal fluida, cálida y humana en español (24 kHz MP3)
+    usando voces prosódicas neuronales (femenina cálida / masculina cálida).
+    """
+    import asyncio
+    import edge_tts  # type: ignore
+
+    limpio = " ".join(texto.replace("~", " ").replace("«", " ").replace("»", " ").split()).strip()
+    if not limpio:
+        return b""
+
+    voces_fem = ["es-CO-SalomeNeural", "es-MX-DaliaNeural", "es-VE-PaolaNeural"]
+    voces_masc = ["es-CO-GonzaloNeural", "es-AR-TomasNeural", "es-MX-JorgeNeural"]
+    candidatas = voces_masc if str(genero).lower().startswith("m") else voces_fem
+
+    async def _gen(voz_id: str) -> bytes:
+        com = edge_tts.Communicate(limpio, voice=voz_id, rate="-2%", pitch="+0Hz")
+        audio = bytearray()
+        async for chunk in com.stream():
+            if chunk.get("type") == "audio" and chunk.get("data"):
+                audio.extend(chunk["data"])
+        return bytes(audio)
+
+    ultimo_err = None
+    for v in candidatas:
+        try:
+            datos = asyncio.run(_gen(v))
+            if datos:
+                return datos
+        except Exception as exc:
+            ultimo_err = exc
+            continue
+    raise RuntimeError(f"No se pudo sintetizar audio neuronal ({ultimo_err})")
+
+
 def crear_handler(gestor: GestorMacroNube):
     class Handler(BaseHTTPRequestHandler):
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+
         def do_GET(self):
-            if self.path == "/api/estado":
-                body = json.dumps(gestor.estado_json(), ensure_ascii=False).encode("utf-8")
+            if self.path.startswith("/api/estado"):
+                est = gestor.estado_json()
+                est["nombre"] = "Ask"
+                est["arquitectura"] = "CORTEX-ML"
+                body = json.dumps(est, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
+                self._cors()
                 self.end_headers()
                 self.wfile.write(body)
                 return
             body = HTML_NUBE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self._cors()
             self.end_headers()
             self.wfile.write(body)
 
         def do_POST(self):
-            if self.path != "/api/chat":
-                self.send_response(404)
-                self.end_headers()
-                return
             n = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(n).decode("utf-8", errors="replace")
             payload = json.loads(raw) if raw else {}
+
+            if self.path.startswith("/api/voz"):
+                texto = str(payload.get("texto", "")).strip()
+                voz = str(payload.get("voz", "femenina")).strip()
+                try:
+                    mp3 = sintetizar_voz_humana_mp3(texto, voz)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/mpeg")
+                    self.send_header("Content-Length", str(len(mp3)))
+                    self._cors()
+                    self.end_headers()
+                    self.wfile.write(mp3)
+                except Exception as exc:
+                    err = json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self._cors()
+                    self.end_headers()
+                    self.wfile.write(err)
+                return
+
+            if not self.path.startswith("/api/chat"):
+                self.send_response(404)
+                self._cors()
+                self.end_headers()
+                return
+
             msg = str(payload.get("mensaje", "")).strip()
             resp = gestor.enviar_chat(msg) if msg else {"respuesta": ""}
             body = json.dumps(resp, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self._cors()
             self.end_headers()
             self.wfile.write(body)
 
