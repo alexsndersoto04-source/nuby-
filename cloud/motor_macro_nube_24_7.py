@@ -522,17 +522,47 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
 
     def alimentar_en_sombra(archivo_lote: str, con_semantica: bool, id_fase: str, n_bytes: int):
         sombra = ruta_modelo.with_suffix(".sombra.bin")
-        shutil.copy2(ruta_modelo, sombra)
+        if sombra.exists():
+            try:
+                sombra.unlink()
+            except Exception:
+                pass
+        try:
+            shutil.copy2(ruta_modelo, sombra)
+        except Exception as exc:
+            gestor.log(f"Sin espacio en disco para sombra ({exc}); saltando lote {id_fase}.")
+            return
         cmd = [
             gestor.bin_cerebro, "alimentar", str(sombra), archivo_lote,
             "--bloque", str(bytes_lote), "--epocas", "1", "--lr", "0.24", "--ancla", "0.022",
         ]
         if con_semantica:
             cmd += ["--semantica", "--max-pasajes", "24"]
-        ejecutar_cmd(gestor, cmd, DIR_CORTEX)
+        try:
+            ejecutar_cmd(gestor, cmd, DIR_CORTEX)
+        except Exception as exc:
+            gestor.log(f"Lote {id_fase} falló ({exc}); se descarta y continúa con el siguiente.")
+            if sombra.exists():
+                try:
+                    sombra.unlink()
+                except Exception:
+                    pass
+            return
         if gestor.lotes_completados > 0 and gestor.lotes_completados % 6 == 0:
-            ejecutar_cmd(gestor, [gestor.bin_cerebro, "sonar", str(sombra), "--ciclos", "16"], DIR_CORTEX)
-        os.replace(sombra, ruta_modelo)
+            try:
+                ejecutar_cmd(gestor, [gestor.bin_cerebro, "sonar", str(sombra), "--ciclos", "16"], DIR_CORTEX)
+            except Exception as exc:
+                gestor.log(f"Sueño parcial omitido ({exc}).")
+        try:
+            os.replace(sombra, ruta_modelo)
+        except Exception as exc:
+            gestor.log(f"No se pudo aplicar sombra ({exc}); se conserva el modelo anterior.")
+            if sombra.exists():
+                try:
+                    sombra.unlink()
+                except Exception:
+                    pass
+            return
         reg["fases_completadas"].append(id_fase)
         reg["bytes_asimilados"] = int(reg.get("bytes_asimilados", 0)) + n_bytes
         guardar_registro(ruta_reg, reg)
