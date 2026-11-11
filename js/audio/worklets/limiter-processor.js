@@ -99,4 +99,4 @@ class LimiterProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('nuby-limiter', LimiterProcessor);
+registerProcessor('ask-limiter', LimiterProcessor);

@@ -20,7 +20,7 @@ jobs:
       - name: Descargar repositorio
         uses: actions/checkout@v4
         with:
-          ref: arena/886cbd4f-nuby
+          ref: arena/886cbd4f-ask
 
       - name: Instalar dependencias Python
         run: pip install --quiet huggingface_hub

@@ -1,4 +1,4 @@
-// Proyecto Android de Nuby Studio.
+// Proyecto Android de Ask.
 // La app es el mismo estudio web que ya funciona; aquí solo se empaqueta en un
 // WebView nativo con permiso de micrófono y guardado de archivos en Descargas.
 plugins {

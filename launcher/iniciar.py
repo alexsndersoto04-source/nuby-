@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lanzador de Nuby Studio.
+Lanzador de Ask.
 
 Levanta un servidor local (localhost) y abre el estudio en el navegador.
 Hace falta un servidor porque los navegadores solo permiten usar el micrófono

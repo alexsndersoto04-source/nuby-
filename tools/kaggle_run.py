@@ -27,8 +27,8 @@ import time
 import urllib.error
 import urllib.request
 
-REPO = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
-BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-nuby")
+REPO = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/ask-")
+BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-ask")
 SLUG_TITULO = os.environ.get("CORTEX_SLUG", "cortex-lm-banco-texto-real")
 TIMEOUT_MIN = int(os.environ.get("CORTEX_TIMEOUT_MIN", "90"))
 

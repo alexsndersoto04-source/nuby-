@@ -26,9 +26,9 @@ import sys
 import tarfile
 import urllib.request
 
-REPO_GH = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
-BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-nuby")
-WORK = os.environ.get("CORTEX_REPO_DIR", "/kaggle/working/nuby-")
+REPO_GH = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/ask-")
+BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-ask")
+WORK = os.environ.get("CORTEX_REPO_DIR", "/kaggle/working/ask-")
 LOCAL = os.environ.get("CORTEX_LOCAL", "") == "1"
 
 TRAIN_CHARS = int(os.environ.get("CORTEX_TRAIN_CHARS", "300000"))

@@ -1,7 +1,7 @@
 # ACTA: Jerarquía Cortical LIF de 4+ Regiones, Penacho Apical Larkum, Deliberación Interna e Hipocampo CA3
 
 Fecha: 2026-11-07
-Rama: `arena/886cbd4f-nuby`
+Rama: `arena/886cbd4f-ask`
 
 ## 1. Principio innegociable respetado al 100 %
 

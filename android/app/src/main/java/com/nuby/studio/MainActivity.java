@@ -1,4 +1,4 @@
-package com.nuby.studio;
+package com.ask.studio;
 
 import android.Manifest;
 import android.app.Activity;
@@ -47,7 +47,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Contenedor nativo de Nuby Studio.
+ * Contenedor nativo de Ask.
  *
  * La aplicación es el mismo estudio que funciona en el navegador, servido desde
  * https://localhost (origen seguro: sin esto el micrófono y los AudioWorklet no
@@ -57,13 +57,13 @@ import java.util.Set;
  *  - Permiso de micrófono (RECORD_AUDIO) y su concesión al WebView.
  *  - Mantener la pantalla encendida mientras se trabaja.
  *  - Elegir archivos de audio para importar.
- *  - Guardar el MP3/WAV exportado en Descargas/Nuby Studio.
+ *  - Guardar el MP3/WAV exportado en Descargas/Ask.
  */
 public class MainActivity extends Activity {
 
     private static final int REQ_PERMISSIONS = 1001;
     private static final int REQ_FILE = 1002;
-    private static final String TAG = "NubyStudio";
+    private static final String TAG = "AskStudio";
     private static final String HOST = "localhost";
     private static final String BASE_URL = "https://" + HOST + "/";
     private static final String ENCODING = "utf-8";
@@ -136,7 +136,7 @@ public class MainActivity extends Activity {
         webView.setBackgroundColor(0xFFFFFFFF);
         webView.setWebViewClient(new LocalContentClient());
         webView.setWebChromeClient(new StudioChromeClient());
-        webView.addJavascriptInterface(new NativeBridge(), "NubyNative");
+        webView.addJavascriptInterface(new NativeBridge(), "AskNative");
 
         webView.loadUrl(BASE_URL + "index.html");
     }
@@ -231,7 +231,7 @@ public class MainActivity extends Activity {
                     && results[index] != PackageManager.PERMISSION_GRANTED) {
                 denied = true;
                 toast("Sin permiso de micrófono no se puede grabar. "
-                        + "Actívalo en Ajustes › Aplicaciones › Nuby Studio › Permisos.");
+                        + "Actívalo en Ajustes › Aplicaciones › Ask › Permisos.");
             }
         }
 
@@ -271,8 +271,8 @@ public class MainActivity extends Activity {
             view.evaluateJavascript(
                     "(function(){try{"
                             + "var app=document.getElementById('app');"
-                            + "return (app?'NUBY-OK ':'NUBY-EMPTY ')+document.title;"
-                            + "}catch(error){return 'NUBY-ERROR '+error.message;}})()",
+                            + "return (app?'ASK-OK ':'ASK-EMPTY ')+document.title;"
+                            + "}catch(error){return 'ASK-ERROR '+error.message;}})()",
                     value -> Log.i(TAG, "ARRANQUE " + value)
             );
         }
@@ -363,7 +363,7 @@ public class MainActivity extends Activity {
         @Override
         public boolean onConsoleMessage(android.webkit.ConsoleMessage message) {
             if (message == null) return false;
-            Log.i("NubyJS", message.messageLevel() + " " + message.message()
+            Log.i("AskJS", message.messageLevel() + " " + message.message()
                     + " (" + message.sourceId() + ":" + message.lineNumber() + ")");
             return true;
         }
@@ -429,7 +429,7 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ Puente de guardado
-    /** Métodos que JavaScript ve como window.NubyNative. */
+    /** Métodos que JavaScript ve como window.AskNative. */
     public class NativeBridge {
         @JavascriptInterface
         public boolean start(String fileName, String mimeType) {
@@ -667,7 +667,7 @@ public class MainActivity extends Activity {
                                 Uri.fromParts("package", getPackageName(), null));
                         startActivity(intent);
                     } catch (Exception error) {
-                        toast("Abre Ajustes › Aplicaciones › Nuby Studio");
+                        toast("Abre Ajustes › Aplicaciones › Ask");
                     }
                 }
             });
@@ -688,7 +688,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Escribe el archivo exportado en Descargas/Nuby Studio. */
+    /** Escribe el archivo exportado en Descargas/Ask. */
     static class ExportSession {
         private final ContentResolver resolver;
         private final OutputStream stream;
@@ -707,7 +707,7 @@ public class MainActivity extends Activity {
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, displayName);
                 values.put(MediaStore.MediaColumns.MIME_TYPE, type);
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/Nuby Studio");
+                        Environment.DIRECTORY_DOWNLOADS + "/Ask");
                 values.put(MediaStore.MediaColumns.IS_PENDING, 1);
 
                 Uri inserted = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
@@ -731,11 +731,11 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
                 File publicDir = new File(
                         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                        "Nuby Studio");
+                        "Ask");
                 if (publicDir.exists() || publicDir.mkdirs()) dir = publicDir;
             }
             if (dir == null) {
-                dir = new File(activity.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Nuby Studio");
+                dir = new File(activity.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Ask");
                 if (!dir.exists() && !dir.mkdirs()) {
                     throw new IOException("No se pudo crear la carpeta de exportación");
                 }
@@ -766,9 +766,9 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {
                     // el archivo queda publicado de todas formas en la mayoría de equipos
                 }
-                return "Descargas/Nuby Studio/" + displayName;
+                return "Descargas/Ask/" + displayName;
             }
-            return file == null ? displayName : "Descargas/Nuby Studio/" + displayName;
+            return file == null ? displayName : "Descargas/Ask/" + displayName;
         }
 
         void close() {
@@ -793,9 +793,9 @@ public class MainActivity extends Activity {
         }
 
         private static String sanitize(String name) {
-            String clean = name == null ? "nuby-export" : name.trim();
+            String clean = name == null ? "ask-export" : name.trim();
             clean = clean.replaceAll("[\\\\/:*?\"<>|]", "-");
-            if (clean.isEmpty()) clean = "nuby-export";
+            if (clean.isEmpty()) clean = "ask-export";
             return clean.length() > 120 ? clean.substring(clean.length() - 120) : clean;
         }
     }

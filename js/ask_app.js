@@ -50,11 +50,11 @@
 
   async function askHttp(method, url, bodyObj, authHeader) {
     const bodyStr = bodyObj ? JSON.stringify(bodyObj) : "";
-    if (window.NubyNative && typeof window.NubyNative.httpRequestAsync === "function") {
+    if (window.AskNative && typeof window.AskNative.httpRequestAsync === "function") {
       const id = "r" + (reqSeq++);
       return new Promise((resolve) => {
         pendingHttp.set(id, resolve);
-        window.NubyNative.httpRequestAsync(id, method, url, bodyStr, authHeader || "");
+        window.AskNative.httpRequestAsync(id, method, url, bodyStr, authHeader || "");
         setTimeout(() => {
           if (pendingHttp.has(id)) {
             pendingHttp.delete(id);
@@ -292,8 +292,8 @@
         state.currentAudio = null;
       } catch (_) {}
     }
-    if (window.NubyNative && typeof window.NubyNative.stopSpeaking === "function") {
-      window.NubyNative.stopSpeaking();
+    if (window.AskNative && typeof window.AskNative.stopSpeaking === "function") {
+      window.AskNative.stopSpeaking();
     }
     if (window.speechSynthesis) {
       try {
@@ -338,8 +338,8 @@
     }
 
     // 2. Motor neuronal HD nativo de Android (selecciona voces en red de alta calidad humana)
-    if (window.NubyNative && typeof window.NubyNative.speakNeural === "function") {
-      const ok = window.NubyNative.speakNeural(clean, gender);
+    if (window.AskNative && typeof window.AskNative.speakNeural === "function") {
+      const ok = window.AskNative.speakNeural(clean, gender);
       if (ok) return;
     }
 
@@ -648,9 +648,9 @@
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const btn = document.getElementById("btnMic");
 
-    if (window.NubyNative && typeof window.NubyNative.hasMicrophone === "function") {
-      if (!window.NubyNative.hasMicrophone()) {
-        window.NubyNative.requestMicrophone();
+    if (window.AskNative && typeof window.AskNative.hasMicrophone === "function") {
+      if (!window.AskNative.hasMicrophone()) {
+        window.AskNative.requestMicrophone();
         return;
       }
     }

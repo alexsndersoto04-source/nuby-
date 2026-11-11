@@ -4,7 +4,7 @@
  * navegaciones (para recibir actualizaciones sin quedarse pegado).
  */
 
-const VERSION = 'nuby-studio-v1';
+const VERSION = 'ask-v1';
 const SHELL = [
   './',
   './index.html',

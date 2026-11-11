@@ -4,8 +4,8 @@
 # la primera vez (conservandolo intacto en ejecuciones futuras) y abre el chat en vivo.
 set -euo pipefail
 
-REPO="alexsndersoto04-source/nuby-"
-BRANCH="arena/886cbd4f-nuby"
+REPO="alexsndersoto04-source/ask-"
+BRANCH="arena/886cbd4f-ask"
 
 echo "=========================================================="
 echo "  CORTEX-LM (100% Spiking LIF en C++) — Modo Termux/Local"
@@ -30,12 +30,12 @@ if command -v pkg >/dev/null 2>&1; then
     fi
 fi
 
-# 2. Si este script se ejecuto suelto (con curl), clonar o actualizar la rama en ~/nuby-cortex
+# 2. Si este script se ejecuto suelto (con curl), clonar o actualizar la rama en ~/ask-cortex
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -d "${SCRIPT_DIR}/cortex-lm" ]; then
     ROOT_DIR="${SCRIPT_DIR}"
 else
-    ROOT_DIR="${HOME}/nuby-cortex"
+    ROOT_DIR="${HOME}/ask-cortex"
     if [ ! -d "${ROOT_DIR}/.git" ]; then
         echo "[1/4] Descargando repositorio CORTEX-LM (${BRANCH})..."
         git clone --depth 1 -b "${BRANCH}" "https://github.com/${REPO}.git" "${ROOT_DIR}"

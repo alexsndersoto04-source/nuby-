@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.nuby.studio'
+    namespace 'com.ask.studio'
     compileSdk 34
 
         defaultConfig {
-        applicationId 'com.nuby.studio'
+        applicationId 'com.ask.studio'
         minSdk 24
         targetSdk 34
         versionCode 7
@@ -15,17 +15,17 @@ android {
     }
 
     /**
-     * Firma fija: la clave está en android/nuby-release.p12 (ver README).
+     * Firma fija: la clave está en android/ask-release.p12 (ver README).
      * Al ser siempre la misma, una versión nueva se instala encima de la anterior
      * sin tener que desinstalar.
      */
     signingConfigs {
         release {
-            storeFile rootProject.file('nuby-release.p12')
+            storeFile rootProject.file('ask-release.p12')
             storeType 'PKCS12'
-            storePassword 'nuby-studio-apk'
-            keyAlias 'nuby'
-            keyPassword 'nuby-studio-apk'
+            storePassword 'ask-apk'
+            keyAlias 'ask'
+            keyPassword 'ask-apk'
         }
     }
 

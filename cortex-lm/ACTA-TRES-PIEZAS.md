@@ -1,6 +1,6 @@
 # ACTA — Las tres piezas biológicas: implementadas y medidas una a una
 
-Fecha: 2026-11-05. Rama `arena/c7deda7f-nuby`.
+Fecha: 2026-11-05. Rama `arena/c7deda7f-ask`.
 
 ## Qué se ha implementado (código real en el motor)
 

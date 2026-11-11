@@ -284,9 +284,9 @@ export function fillSelect(select, options, selectedValue) {
   }
 }
 
-/** ¿Estamos dentro de la app Android? (el contenedor nativo inyecta `NubyNative`). */
+/** ¿Estamos dentro de la app Android? (el contenedor nativo inyecta `AskNative`). */
 export function isNativeApp() {
-  return Boolean(typeof window !== 'undefined' && window.NubyNative && window.NubyNative.isAndroid?.());
+  return Boolean(typeof window !== 'undefined' && window.AskNative && window.AskNative.isAndroid?.());
 }
 
 /** Convierte bytes a base64 sin reventar la pila con archivos grandes. */
@@ -302,7 +302,7 @@ function bytesToBase64(bytes) {
 
 /**
  * Guarda un Blob como archivo.
- * - En la app Android lo escribe el código nativo en Descargas/Nuby Studio,
+ * - En la app Android lo escribe el código nativo en Descargas/Ask,
  *   porque las descargas del navegador no existen dentro de un WebView.
  * - En un navegador usa la descarga normal.
  * Devuelve una promesa (se puede ignorar: los botones no esperan).
@@ -330,8 +330,8 @@ export function downloadBlob(blob, filename) {
 
 /** Escribe el archivo en el almacenamiento del teléfono a través del puente nativo. */
 async function saveToAndroid(blob, filename) {
-  const bridge = window.NubyNative;
-  const safeName = String(filename || 'nuby-export').replace(/[\\/:*?"<>|]/g, '-');
+  const bridge = window.AskNative;
+  const safeName = String(filename || 'ask-export').replace(/[\\/:*?"<>|]/g, '-');
   const mime = blob.type || (/\.wav$/i.test(safeName) ? 'audio/wav' : 'audio/mpeg');
 
   if (!bridge.start(safeName, mime)) {

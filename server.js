@@ -86,6 +86,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Nuby Studio disponible en http://localhost:${PORT} (escuchando en ${HOST}:${PORT})`);
+  console.log(`Ask disponible en http://localhost:${PORT} (escuchando en ${HOST}:${PORT})`);
   console.log('Abre esa dirección en Chrome, Edge o Firefox. El micrófono requiere localhost o HTTPS.');
 });

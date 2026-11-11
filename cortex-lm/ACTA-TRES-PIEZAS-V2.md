@@ -1,6 +1,6 @@
 # Acta — las tres piezas con el motor arreglado (y por qué se apagan)
 
-**Fecha:** 2026-11-05 · **Rama:** `arena/c7deda7f-nuby` · **Motor:** LIF real, sin retropropagación
+**Fecha:** 2026-11-05 · **Rama:** `arena/c7deda7f-ask` · **Motor:** LIF real, sin retropropagación
 
 ## 1. Qué había que repetir
 
@@ -141,7 +141,7 @@ sino que el estado **cambie** con lo que se lleva escrito.
 ## Reproducir
 
 ```bash
-cd /home/user/nuby-/cortex-lm
+cd /home/user/ask-/cortex-lm
 g++ -std=c++20 -O3 -march=native -Iengine engine/cortex_lm.cpp tools/bench_bio.cpp -o /tmp/bbio
 g++ -std=c++20 -O3 -march=native -Iengine engine/cortex_lm.cpp tools/diag_estado.cpp -o /tmp/diag
 cd /home/user/wk2

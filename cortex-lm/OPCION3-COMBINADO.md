@@ -1,6 +1,6 @@
 # ACTA — Red + contador: el mejor sistema hasta ahora
 
-Fecha: 2026-11-04. Rama `arena/c7deda7f-nuby`.
+Fecha: 2026-11-04. Rama `arena/c7deda7f-ask`.
 
 ## Por qué se cambió de estrategia
 

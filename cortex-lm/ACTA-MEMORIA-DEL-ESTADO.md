@@ -1,6 +1,6 @@
 # Acta — cuánta memoria tiene de verdad el estado (y dos instrumentos que estaban mal)
 
-**Fecha:** 2026-11-05 · Rama `arena/c7deda7f-nuby`
+**Fecha:** 2026-11-05 · Rama `arena/c7deda7f-ask`
 
 ## 1. Lo que quedaba abierto
 
@@ -133,7 +133,7 @@ ninguna ayuda.
 ## Reproducir
 
 ```bash
-cd /home/user/nuby-/cortex-lm
+cd /home/user/ask-/cortex-lm
 g++ -std=c++20 -O3 -march=native -Iengine engine/cortex_lm.cpp tools/diag_mem.cpp -o /tmp/dmem
 g++ -std=c++20 -O3 -march=native -Iengine engine/cortex_lm.cpp tools/diag_var.cpp -o /tmp/dvar
 g++ -std=c++20 -O3 -march=native -Iengine engine/cortex_lm.cpp tools/bench_bio.cpp -o /tmp/bbio

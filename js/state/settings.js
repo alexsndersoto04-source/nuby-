@@ -6,7 +6,7 @@
  * un efecto real: ninguna es decorativa.
  */
 
-const STORAGE_KEY = 'nuby:settings';
+const STORAGE_KEY = 'ask:settings';
 
 /** Valores de fábrica. */
 export const SETTINGS_DEFAULTS = Object.freeze({

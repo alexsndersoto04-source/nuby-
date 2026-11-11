@@ -177,7 +177,7 @@ export class StudioEngine {
     // Medidor LUFS real (BS.1770) en paralelo, sin alterar el audio.
     if (this.workletsReady) {
       try {
-        this.lufsNode = new AudioWorkletNode(ctx, 'nuby-lufs', {
+        this.lufsNode = new AudioWorkletNode(ctx, 'ask-lufs', {
           numberOfInputs: 1,
           numberOfOutputs: 1,
           outputChannelCount: [2],

@@ -7,7 +7,7 @@
  * reventar el almacenamiento de localStorage.
  */
 
-const DB_NAME = 'nuby-studio';
+const DB_NAME = 'ask';
 const DB_VERSION = 1;
 const STORE_PROJECTS = 'projects';
 const STORE_BUFFERS = 'buffers';

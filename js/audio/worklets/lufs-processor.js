@@ -166,4 +166,4 @@ function kWeighting(fs) {
   return { shelf, highpass };
 }
 
-registerProcessor('nuby-lufs', LufsProcessor);
+registerProcessor('ask-lufs', LufsProcessor);

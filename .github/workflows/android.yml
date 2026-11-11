@@ -1,6 +1,6 @@
 name: Compilar APK
 
-# Genera el APK instalable de Nuby Studio.
+# Genera el APK instalable de Ask.
 # Se puede lanzar a mano desde la pestaña "Actions" → "Compilar APK" → "Run workflow".
 
 on:
@@ -65,8 +65,8 @@ jobs:
         run: |
           set -uo pipefail
           log=/tmp/firma.log
-          { keytool -list -keystore nuby-release.p12 -storetype PKCS12 \
-                     -storepass nuby-studio-apk -alias nuby; } > "$log" 2>&1
+          { keytool -list -keystore ask-release.p12 -storetype PKCS12 \
+                     -storepass ask-studio-apk -alias ask; } > "$log" 2>&1
           status=$?
           tail -n 20 "$log"
           if [ "$status" -ne 0 ]; then
@@ -95,38 +95,38 @@ jobs:
           set -euo pipefail
           SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
           echo "APK generado: $SRC"
-          cp "$SRC" ../Nuby-Studio.apk
-          ls -lh ../Nuby-Studio.apk
+          cp "$SRC" ../Ask.apk
+          ls -lh ../Ask.apk
           # Comprobación real: el APK debe estar firmado y contener el estudio.
-          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs ../Nuby-Studio.apk | head -n 5
-          unzip -l ../Nuby-Studio.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)'
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs ../Ask.apk | head -n 5
+          unzip -l ../Ask.apk | grep -E 'assets/www/(index.html|js/audio/engine.js|js/vendor/lamejs.js)'
 
       - name: Inspeccionar el APK
         working-directory: android
         run: |
           set +e
           AAPT="${ANDROID_HOME}/build-tools/34.0.0/aapt2"
-          PACKAGE=$("$AAPT" dump badging ../Nuby-Studio.apk 2>&1 | grep "^package:" | head -n 1)
-          ACTIVITY=$("$AAPT" dump badging ../Nuby-Studio.apk 2>&1 | grep "launchable-activity" | head -n 1)
-          PERMISOS=$("$AAPT" dump permissions ../Nuby-Studio.apk 2>&1 | grep "uses-permission" | sed 's/uses-permission: name=//' | tr -d "'" | tr '\n' ' ')
-          ARCHIVOS=$(unzip -l ../Nuby-Studio.apk | grep -c "assets/www/")
-          PESO=$(du -h ../Nuby-Studio.apk | cut -f1)
+          PACKAGE=$("$AAPT" dump badging ../Ask.apk 2>&1 | grep "^package:" | head -n 1)
+          ACTIVITY=$("$AAPT" dump badging ../Ask.apk 2>&1 | grep "launchable-activity" | head -n 1)
+          PERMISOS=$("$AAPT" dump permissions ../Ask.apk 2>&1 | grep "uses-permission" | sed 's/uses-permission: name=//' | tr -d "'" | tr '\n' ' ')
+          ARCHIVOS=$(unzip -l ../Ask.apk | grep -c "assets/www/")
+          PESO=$(du -h ../Ask.apk | cut -f1)
           echo "::warning::APK $PACKAGE"
           echo "::warning::APK $ACTIVITY"
           echo "::warning::APK permisos: $PERMISOS"
           echo "::warning::APK archivos web incluidos: $ARCHIVOS · tamaño: $PESO"
-          firma=$("$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs ../Nuby-Studio.apk 2>&1 | grep -i "sha-256" | head -n 1)
+          firma=$("$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs ../Ask.apk 2>&1 | grep -i "sha-256" | head -n 1)
           echo "::warning::APK firma: $firma"
-          grep -q "com.nuby.studio" <<< "$PACKAGE" || { echo "::error::El paquete del APK no es el esperado"; exit 1; }
+          grep -q "com.ask.studio" <<< "$PACKAGE" || { echo "::error::El paquete del APK no es el esperado"; exit 1; }
           [ "$ARCHIVOS" -ge 30 ] || { echo "::error::Faltan archivos del estudio en el APK"; exit 1; }
-          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify ../Nuby-Studio.apk \
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify ../Ask.apk \
             || { echo "::error::El APK no está firmado correctamente"; exit 1; }
 
       - name: Guardar el APK como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Nuby-Studio-APK
-          path: Nuby-Studio.apk
+          name: Ask-APK
+          path: Ask.apk
           if-no-files-found: error
           retention-days: 90
 
@@ -135,11 +135,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk
-          name: Nuby Studio — APK
+          name: Ask — APK
           body: |
-            APK firmado de Nuby Studio, generado automáticamente desde la rama principal.
-            Descarga **Nuby-Studio.apk** en "Assets" e instálalo en el teléfono.
-          files: Nuby-Studio.apk
+            APK firmado de Ask, generado automáticamente desde la rama arena/886cbd4f-ask.
+            Descarga **Ask.apk** en "Assets" e instálalo en el teléfono.
+          files: Ask.apk
           make_latest: true
 
   # Prueba real: instala el APK en un Android de verdad (emulador) y comprueba
@@ -159,7 +159,7 @@ jobs:
       - name: Descargar el APK
         uses: actions/download-artifact@v4
         with:
-          name: Nuby-Studio-APK
+          name: Ask-APK
 
       - name: Comprobar el entorno del emulador
         run: |
@@ -180,7 +180,7 @@ jobs:
             nproc
             free -m | head -n 2
             echo "--- APK ---"
-            ls -lh Nuby-Studio.apk
+            ls -lh Ask.apk
           } > /tmp/diag.txt 2>&1
           cat /tmp/diag.txt
           # Las anotaciones sí se pueden leer desde fuera, aunque el log no.
@@ -215,9 +215,9 @@ jobs:
             yes | "$SDKMANAGER" --licenses > /dev/null 2>&1
             "$SDKMANAGER" --install "$IMAGE" "emulator" "platform-tools"
             echo "### creando dispositivo"
-            echo no | "$AVDMANAGER" create avd -n nuby -k "$IMAGE" --device "pixel_5" --force
+            echo no | "$AVDMANAGER" create avd -n ask -k "$IMAGE" --device "pixel_5" --force
             echo "### arrancando"
-            nohup "$ANDROID_HOME/emulator/emulator" -avd nuby -no-window -no-snapshot \
+            nohup "$ANDROID_HOME/emulator/emulator" -avd ask -no-window -no-snapshot \
                   -no-boot-anim -gpu off -no-audio -camera-back none -camera-front none \
                   > /tmp/emulador-salida.log 2>&1 &
             adb start-server
@@ -225,7 +225,7 @@ jobs:
             for i in $(seq 1 60); do
               BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
               if [ "$BOOT" = "1" ]; then echo "### arrancado tras ${i}0 s"; break; fi
-              if ! pgrep -f "emulator -avd nuby" > /dev/null; then
+              if ! pgrep -f "emulator -avd ask" > /dev/null; then
                 echo "### el emulador terminó antes de arrancar"; break
               fi
               sleep 10
@@ -241,25 +241,25 @@ jobs:
             exit 1
           fi
 
-      - name: Instalar y probar Nuby Studio
+      - name: Instalar y probar Ask
         run: |
           set +e
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           log=/tmp/prueba.log
           {
-            adb install -r Nuby-Studio.apk
-            adb shell pm grant com.nuby.studio android.permission.RECORD_AUDIO || true
-            adb shell am start -W -n com.nuby.studio/.MainActivity
+            adb install -r Ask.apk
+            adb shell pm grant com.ask.studio android.permission.RECORD_AUDIO || true
+            adb shell am start -W -n com.ask.studio/.MainActivity
             sleep 35
             echo "--- proceso vivo ---"
-            adb shell pidof com.nuby.studio
-            adb logcat -d -s NubyStudio:* NubyJS:* > logcat.txt || true
+            adb shell pidof com.ask.studio
+            adb logcat -d -s AskStudio:* AskJS:* > logcat.txt || true
             cat logcat.txt
             adb exec-out screencap -p > pantalla.png || true
             ls -l pantalla.png
           } > "$log" 2>&1
           cat "$log"
-          if ! grep -q "NUBY-OK" logcat.txt 2>/dev/null; then
+          if ! grep -q "ASK-OK" logcat.txt 2>/dev/null; then
             tail -n 40 "$log" | while IFS= read -r line; do [ -n "$line" ] && echo "::error::PRUEBA $line"; done
             grep -iE "fatal|exception|error" logcat.txt 2>/dev/null | head -n 20 | while IFS= read -r line; do echo "::error::LOGCAT $line"; done
             exit 1
@@ -271,7 +271,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Nuby-Studio-captura
+          name: Ask-captura
           path: |
             pantalla.png
             logcat.txt

@@ -12,8 +12,8 @@
 # asi que no hace falta volver a bajarlo aunque el proyecto cambie.
 set -u
 
-BRANCH="arena/886cbd4f-nuby"
-REPO="alexsndersoto04-source/nuby-"
+BRANCH="arena/886cbd4f-ask"
+REPO="alexsndersoto04-source/ask-"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 
 # Evitar que curl reutilice una copia vieja: se pide con cabeceras de no-cache.
