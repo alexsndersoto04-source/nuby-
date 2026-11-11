@@ -68,7 +68,7 @@ export class StudioApp {
     this.cacheElements();
     this.buildViews();
 
-    const lastId = localStorage.getItem('nuby:lastProject');
+    const lastId = localStorage.getItem('ask:lastProject');
     if (lastId) {
       try {
         const saved = await db.loadProject(lastId);
@@ -357,7 +357,7 @@ export class StudioApp {
       this.project.updatedAt = Date.now();
       this.project.duration = projectDuration(this.project);
       await db.saveProject(JSON.parse(JSON.stringify(this.project)));
-      localStorage.setItem('nuby:lastProject', this.project.id);
+      localStorage.setItem('ask:lastProject', this.project.id);
       this.dirty = false;
       this.updateSaveState();
       return true;
@@ -433,7 +433,7 @@ export class StudioApp {
     this.redoStack = [];
     this.applyProjectToUi();
     this.updateUndoButtons();
-    localStorage.setItem('nuby:lastProject', this.project.id);
+    localStorage.setItem('ask:lastProject', this.project.id);
     if (this.engine) {
       this.transport.setLoop(this.project.session.loop);
       this.transport.setBpm(this.project.session.bpm);

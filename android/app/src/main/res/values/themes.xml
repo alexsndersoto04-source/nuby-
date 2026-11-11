@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Tema sobrio, sin barra de acción: la interfaz completa la pone el estudio. -->
-    <style name="StudioTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="StudioTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/studio_bg</item>
         <item name="android:statusBarColor">@color/studio_bg</item>
         <item name="android:navigationBarColor">@color/studio_bg</item>
         <item name="android:colorPrimary">@color/studio_bg</item>
         <item name="android:colorAccent">@color/studio_accent</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

@@ -1,0 +1,32 @@
+name: Conexion Modelo Ask
+
+on:
+  workflow_dispatch:
+    inputs:
+      perfil:
+        description: "Perfil cortical (macro-1m = 1,017,856 neuronas LIF)"
+        required: false
+        default: "macro-1m"
+
+concurrency:
+  group: conexion-modelo-ask
+  cancel-in-progress: false
+
+jobs:
+  conexion-ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+        with:
+          ref: arena/886cbd4f-ask
+
+      - name: Instalar dependencias Python
+        run: pip install --quiet huggingface_hub
+
+      - name: Ejecutar Servidor de Conexión Ask
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PORT: "7860"
+        run: python3 cloud/servidor_conexion.py

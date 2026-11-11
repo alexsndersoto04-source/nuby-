@@ -1,6 +1,6 @@
 # ACTA — Opción 1: alfabeto real + texto completo
 
-Fecha: 2026-11-04. Rama `arena/c7deda7f-nuby`.
+Fecha: 2026-11-04. Rama `arena/c7deda7f-ask`.
 
 ## Qué se hizo y por qué
 

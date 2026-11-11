@@ -119,7 +119,7 @@ export class InputRecorder {
   }
 
   createWorkletPath() {
-    const node = new AudioWorkletNode(this.ctx, 'nuby-recorder', {
+    const node = new AudioWorkletNode(this.ctx, 'ask-recorder', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1],

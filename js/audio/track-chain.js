@@ -52,7 +52,7 @@ export function buildTrackChain(ctx, fx, options = {}) {
   let gateFallback = null;
   if (useWorklets) {
     try {
-      gateNode = new AudioWorkletNode(ctx, 'nuby-gate', {
+      gateNode = new AudioWorkletNode(ctx, 'ask-gate', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [2],
@@ -262,7 +262,7 @@ export function buildMasterChain(ctx, master, options = {}) {
   let limiter = null;
   if (settings.limiter.on && options.worklets !== false) {
     try {
-      limiter = new AudioWorkletNode(ctx, 'nuby-limiter', {
+      limiter = new AudioWorkletNode(ctx, 'ask-limiter', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [2],

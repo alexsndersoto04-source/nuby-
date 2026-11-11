@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Empaqueta Nuby Studio en un ZIP listo para descargar y abrir con doble clic.
+Empaqueta Ask en un ZIP listo para descargar y abrir con doble clic.
 
 Uso:
     python3 tools/empaquetar.py
 
 Resultado:
-    dist/Nuby-Studio-1.0.zip
+    dist/Ask-1.0.zip
 
 El ZIP contiene la app, los lanzadores (Windows/macOS/Linux) y un LEEME.
 """
@@ -18,8 +18,8 @@ import zipfile
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DESTINO = os.path.join(RAIZ, "dist")
-NOMBRE = "Nuby-Studio-1.0.zip"
-CARPETA = "Nuby Studio"
+NOMBRE = "Ask-1.0.zip"
+CARPETA = "Ask"
 
 # Archivos y carpetas de la app que entran en el paquete.
 INCLUIR = [

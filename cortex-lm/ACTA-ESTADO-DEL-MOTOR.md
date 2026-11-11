@@ -1,6 +1,6 @@
 # ACTA — El fallo que tapaba todo: el motor no le enseñaba su estado
 
-Fecha: 2026-11-05. Rama `arena/c7deda7f-nuby`.
+Fecha: 2026-11-05. Rama `arena/c7deda7f-ask`.
 
 ## El hallazgo
 

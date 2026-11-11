@@ -401,10 +401,10 @@ export class Dialogs {
           bitrate,
           tags: {
             title: project.name,
-            artist: 'Nuby Studio',
+            artist: 'Ask',
             album: 'Sesión',
             year: String(new Date().getFullYear()),
-            comment: 'Creado con Nuby Studio',
+            comment: 'Creado con Ask',
           },
           onProgress: (value) => {
             bar.style.width = `${Math.round(68 + value * 28)}%`;
@@ -482,7 +482,7 @@ export class Dialogs {
         const name = safeFileName(`${project.name}-${track.name}`, 'stem');
         const blob =
           format === 'mp3'
-            ? await encodeMp3(channels, rendered.sampleRate, { bitrate, tags: { title: track.name, artist: 'Nuby Studio' } })
+            ? await encodeMp3(channels, rendered.sampleRate, { bitrate, tags: { title: track.name, artist: 'Ask' } })
             : new Blob([encodeWav(channels, rendered.sampleRate, { bitDepth: depth })], { type: 'audio/wav' });
         const filename = `${name}.${format === 'mp3' ? 'mp3' : 'wav'}`;
         this.stemBlobs.push({ blob, filename });
@@ -654,7 +654,7 @@ export class Dialogs {
   buildReport() {
     const lines = [];
     const now = new Date();
-    lines.push(`Nuby Studio ${APP_VERSION} · informe del ${now.toLocaleString()}`);
+    lines.push(`Ask ${APP_VERSION} · informe del ${now.toLocaleString()}`);
     lines.push(`Pantalla: ${window.innerWidth}×${window.innerHeight} CSS px · DPR ${window.devicePixelRatio}`);
     lines.push(`Navegador: ${navigator.userAgent}`);
     const ctx = this.engine?.ctx;
@@ -1004,7 +1004,7 @@ export class Dialogs {
   /** Sección de estado real del equipo (no es una preferencia). */
   buildSystemSection() {
     const engine = this.engine;
-    const native = window.NubyNative;
+    const native = window.AskNative;
     const input = engine?.input;
     const device = input?.stream
       ? input.deviceLabel ?? 'micrófono'
@@ -1124,7 +1124,7 @@ export class Dialogs {
           if (value) this.app.markDirty?.();
           break;
         case 'keepScreenOn':
-          window.NubyNative?.setKeepScreenOn?.(Boolean(value));
+          window.AskNative?.setKeepScreenOn?.(Boolean(value));
           break;
         case 'density':
           document.body.dataset.density = String(value);

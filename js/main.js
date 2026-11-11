@@ -1,10 +1,10 @@
 /**
- * Punto de entrada de Nuby Studio.
+ * Punto de entrada de Ask.
  */
 import { StudioApp } from './ui/app.js';
 
 const app = new StudioApp();
-window.nuby = app; // útil para depurar desde la consola
+window.ask = app; // útil para depurar desde la consola
 
 app.bootPromise = app.boot().catch((error) => {
   console.error(error);

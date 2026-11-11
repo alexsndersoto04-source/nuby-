@@ -84,4 +84,4 @@ function timeToCoeff(seconds, rate) {
   return 1 - Math.exp(-1 / (seconds * rate));
 }
 
-registerProcessor('nuby-gate', GateProcessor);
+registerProcessor('ask-gate', GateProcessor);

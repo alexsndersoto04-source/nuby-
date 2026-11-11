@@ -10,8 +10,8 @@
 # Uso:  bash termux_setup.sh
 set -u
 
-BRANCH="${CORTEX_BRANCH:-arena/c7deda7f-nuby}"
-REPO="${CORTEX_REPO:-alexsndersoto04-source/nuby-}"
+BRANCH="${CORTEX_BRANCH:-arena/c7deda7f-ask}"
+REPO="${CORTEX_REPO:-alexsndersoto04-source/ask-}"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 PY="/root/kv/bin/python"
 KAG="/root/kv/bin/kaggle"

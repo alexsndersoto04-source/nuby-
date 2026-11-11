@@ -102,4 +102,4 @@ class RecorderProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor('nuby-recorder', RecorderProcessor);
+registerProcessor('ask-recorder', RecorderProcessor);
