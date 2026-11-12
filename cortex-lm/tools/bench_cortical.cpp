@@ -4,7 +4,7 @@
 //
 // Modos:
 //   bench_cortical mem   <L1> <L2> <seed>
-//   bench_cortical bpc   <corpus> <dic> <L1> <L2> <epocas> <lr> <stdp> <seed>
+//   bench_cortical bpc   <corpus> <dic> <L1> <L2> <epocas> <lr> <stdp> <seed> [combined|stdp|homeo|none]
 //   bench_cortical scale <capas_csv> <max_deg> <chars_prueba>
 
 #include "cortex_lm.hpp"
@@ -197,20 +197,27 @@ static int modo_mem(int L1, const char* l2_rest, uint32_t seed) {
 // MODO 2: Evaluacion BPC cronologica 80/20 + generacion con diccionario
 // ============================================================================
 static int modo_bpc(const char* ruta_corpus, const char* ruta_dic,
-                    int L1, const char* l2_rest, int epocas, float lr0, int stdp_on, uint32_t seed) {
+                    int L1, const char* l2_rest, int epocas, float lr0,
+                    const std::string& plasticidad, uint32_t seed) {
     const std::string data = cargar_archivo(ruta_corpus);
     const auto dic = cargar_dic(ruta_dic);
     const size_t N = data.size();
     const size_t NTR = (size_t)(N * 0.80);
+
+    const bool plasticidad_stdp = plasticidad == "combined" || plasticidad == "stdp";
+    const bool plasticidad_homeo = plasticidad == "combined" || plasticidad == "homeo";
+    const bool periodo_critico = plasticidad != "none";
 
     Params p;
     p.cortical_hierarchy = true;
     p.layer_sizes = build_bench_layers(L1, l2_rest);
     p.max_out_degree = 52;
     p.ticks_per_char = 8;
-    if (!stdp_on) {
+    if (!plasticidad_stdp) {
         p.stdp_ltp = 0.0f;
         p.stdp_ltd = 0.0f;
+    }
+    if (!plasticidad_homeo) {
         p.homeo_thr_up = 0.0f;
         p.homeo_thr_down = 0.0f;
     }
@@ -224,8 +231,8 @@ static int modo_bpc(const char* ruta_corpus, const char* ruta_dic,
 
     std::vector<std::pair<i32, float>> feats;
 
-    // 1a. Periodo critico de desarrollo cortical (STDP no supervisado puro)
-    if (stdp_on != 0) {
+    // 1a. Exposicion no supervisada; permite aislar STDP y homeostasis.
+    if (periodo_critico) {
         eng.reset_state();
         eng.set_plasticity(true);
         const size_t N_CRIT = std::min<size_t>(NTR, 60000);
@@ -313,8 +320,8 @@ static int modo_bpc(const char* ruta_corpus, const char* ruta_dic,
     auto [ok_w, tot_w] = contar_palabras_reales(gen, dic);
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
 
-    std::printf("SEED=%-4u | {1024,%d,%s} (%zu syn) | stdp=%d | train=%.3f | HOLDOUT=%.3f bpc | palabras=%2d/%2d (%5.1f%%) | act=%.0f | %.1fs\n",
-                seed, L1, l2_rest, eng.n_synapses(), stdp_on,
+    std::printf("SEED=%-4u | {1024,%d,%s} (%zu syn) | plasticidad=%s | train=%.3f | HOLDOUT=%.3f bpc | palabras=%2d/%2d (%5.1f%%) | act=%.0f | %.1fs\n",
+                seed, L1, l2_rest, eng.n_synapses(), plasticidad.c_str(),
                 last_tr_bpc, ho_bpc, ok_w, tot_w,
                 tot_w ? 100.0 * ok_w / tot_w : 0.0, avg_act, secs);
     std::fflush(stdout);
@@ -454,7 +461,7 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "Uso:\n"
             "  %s mem   <L1> <L2> <seed>\n"
-            "  %s bpc   <corpus> <dic> <L1> <L2> <epocas> <lr> <stdp> <seed>\n"
+            "  %s bpc   <corpus> <dic> <L1> <L2> <epocas> <lr> <stdp> <seed> [combined|stdp|homeo|none]\n"
             "  %s scale <capas_csv> <max_deg> <chars_prueba>\n"
             "  %s macro <capas_csv> <macro_cols> <trn_top_k> <chars_prueba>\n",
             argv[0], argv[0], argv[0], argv[0]);
@@ -465,9 +472,18 @@ int main(int argc, char** argv) {
         return modo_mem(std::atoi(argv[2]), argv[3], (uint32_t)std::strtoul(argv[4], nullptr, 10));
     }
     if (modo == "bpc" && argc >= 10) {
+        const int legacy_stdp = std::atoi(argv[8]);
+        const std::string plasticidad = argc >= 11
+            ? argv[10]
+            : (legacy_stdp != 0 ? "combined" : "none");
+        if (plasticidad != "combined" && plasticidad != "stdp" &&
+            plasticidad != "homeo" && plasticidad != "none") {
+            std::fprintf(stderr, "Plasticidad invalida: usa combined, stdp, homeo o none\n");
+            return 1;
+        }
         return modo_bpc(argv[2], argv[3], std::atoi(argv[4]), argv[5],
                         std::atoi(argv[6]), std::strtof(argv[7], nullptr),
-                        std::atoi(argv[8]), (uint32_t)std::strtoul(argv[9], nullptr, 10));
+                        plasticidad, (uint32_t)std::strtoul(argv[9], nullptr, 10));
     }
     if (modo == "scale" && argc >= 5) {
         return modo_scale(argv[2], std::atoi(argv[3]), std::strtoull(argv[4], nullptr, 10));

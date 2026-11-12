@@ -1102,7 +1102,8 @@ static int cmd_alimentar(int argc, char** argv) {
         std::fprintf(stderr,
             "Uso: %s alimentar <modelo.bin> <texto1.txt> [texto2.txt ...] "
             "[--bloque 450000] [--epocas 1] [--lr 0.24] [--ancla 0.022] "
-            "[--alinear episodios.txt] [--epocas-ali 20] [--eval holdout.txt]\n", argv[0]);
+            "[--alinear episodios.txt] [--epocas-ali 20] [--eval holdout.txt] "
+            "[--plasticidad-local|--stdp-local|--homeostasis-local]\n", argv[0]);
         return 1;
     }
     const std::string ruta_modelo = argv[2];
@@ -1121,6 +1122,9 @@ static int cmd_alimentar(int argc, char** argv) {
     float lr = 0.24f;
     float ancla = 0.022f;
     bool indexar_semantica = false;
+    bool plasticidad_local = false;
+    bool stdp_local = false;
+    bool homeostasis_local = false;
     size_t max_pasajes_sem = 24;
 
     for (int i = 3; i < argc; ++i) {
@@ -1133,6 +1137,9 @@ static int cmd_alimentar(int argc, char** argv) {
         else if (a == "--epocas-ali" && i + 1 < argc) epocas_ali = std::atoi(argv[++i]);
         else if (a == "--eval" && i + 1 < argc) ruta_eval = argv[++i];
         else if (a == "--semantica") indexar_semantica = true;
+        else if (a == "--plasticidad-local") plasticidad_local = true;
+        else if (a == "--stdp-local") stdp_local = true;
+        else if (a == "--homeostasis-local") homeostasis_local = true;
         else if (a == "--max-pasajes" && i + 1 < argc) max_pasajes_sem = std::strtoull(argv[++i], nullptr, 10);
         else if (!a.empty() && a[0] != '-') rutas_texto.push_back(a);
     }
@@ -1141,9 +1148,12 @@ static int cmd_alimentar(int argc, char** argv) {
     cargar_cerebro_completo(ruta_modelo, st);
     const std::string txt_eval = ruta_eval.empty() ? "" : leer_archivo(ruta_eval);
 
-    std::printf("[ALIMENTAR CONTINUO] '%s' | %d regiones | %d neuronas LIF | %zu sinapsis CSR | dorsal=%s | CA3=%zu\n",
+    const bool activar_stdp = plasticidad_local || stdp_local;
+    const bool activar_homeo = plasticidad_local || homeostasis_local;
+    std::printf("[ALIMENTAR CONTINUO] '%s' | %d regiones | %d neuronas LIF | %zu sinapsis CSR | dorsal=%s | CA3=%zu | STDP-local=%s | homeostasis-local=%s\n",
                 ruta_modelo.c_str(), st.eng.num_layers(), st.eng.n_neurons(), st.eng.n_synapses(),
-                st.tiene_dorsal ? "SI" : "NO", st.ca3.num_engrams());
+                st.tiene_dorsal ? "SI" : "NO", st.ca3.num_engrams(),
+                activar_stdp ? "SI" : "NO", activar_homeo ? "SI" : "NO");
     std::fflush(stdout);
 
     std::vector<std::pair<i32, float>> feats;
@@ -1188,6 +1198,8 @@ static int cmd_alimentar(int argc, char** argv) {
                 auto t0 = std::chrono::steady_clock::now();
                 st.eng.reset_state();
                 st.eng.set_plasticity(false);
+                st.eng.set_stdp_enabled(activar_stdp);
+                st.eng.set_homeostasis_enabled(activar_homeo);
                 const float cur_lr = lr / (1.0f + 0.15f * ep);
                 st.rd_ventral.set_lr(cur_lr);
 

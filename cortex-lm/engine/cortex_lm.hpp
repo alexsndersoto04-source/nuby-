@@ -335,9 +335,16 @@ public:
                                std::vector<std::pair<i32, float>>& sdr,
                                int max_k = 192) const;
 
-    // Control de plasticidad STDP cortical (activar en entrenamiento, congelar en holdout/inferencia).
-    void set_plasticity(bool enabled) { stdp_enabled_ = enabled; }
-    bool plasticity_enabled() const { return stdp_enabled_; }
+    // Control retrocompatible: activa/desactiva STDP y homeostasis juntas.
+    void set_plasticity(bool enabled) {
+        stdp_enabled_ = enabled;
+        homeostasis_enabled_ = enabled;
+    }
+    bool plasticity_enabled() const { return stdp_enabled_ || homeostasis_enabled_; }
+    void set_stdp_enabled(bool enabled) { stdp_enabled_ = enabled; }
+    void set_homeostasis_enabled(bool enabled) { homeostasis_enabled_ = enabled; }
+    bool stdp_enabled() const { return stdp_enabled_; }
+    bool homeostasis_enabled() const { return homeostasis_enabled_; }
     // Modo ejecutivo prefrontal (sostiene trazas NMDA durante preguntas largas en via dorsal):
     void set_executive_mode(bool enabled) { executive_mode_ = enabled; }
     bool executive_mode() const { return executive_mode_; }
@@ -407,6 +414,7 @@ private:
     Params p_;
     int n_neurons_ = 0;
     bool stdp_enabled_ = true;
+    bool homeostasis_enabled_ = true;
     bool executive_mode_ = false;
     std::vector<Layer> layers_;
     std::vector<InterGraph> inter_;

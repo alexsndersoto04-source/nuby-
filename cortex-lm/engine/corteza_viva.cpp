@@ -193,7 +193,8 @@ size_t CortezaSemanticaCSR::asimilar_documento_vivo(
     size_t agregados = 0;
     std::vector<float> acc;
     std::vector<std::pair<i32, float>> sdr;
-    const bool prev_plast = eng.plasticity_enabled();
+    const bool prev_stdp = eng.stdp_enabled();
+    const bool prev_homeo = eng.homeostasis_enabled();
     eng.set_plasticity(false);
 
     for (const std::string& p : pasajes) {
@@ -221,7 +222,8 @@ size_t CortezaSemanticaCSR::asimilar_documento_vivo(
         }
     }
 
-    eng.set_plasticity(prev_plast);
+    eng.set_stdp_enabled(prev_stdp);
+    eng.set_homeostasis_enabled(prev_homeo);
     return agregados;
 }
 

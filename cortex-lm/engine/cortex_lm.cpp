@@ -1275,7 +1275,7 @@ int Engine::step() {
                 L.rate[(size_t)j] += 1.0f;
                 L.spike_count[(size_t)j]++;
                 L.theta[(size_t)j] = std::min(p_.theta_max, L.theta[(size_t)j] + L.theta_step_local);
-                if (stdp_enabled_ && p_.homeo_thr_up > 0.0f) {
+                if (homeostasis_enabled_ && p_.homeo_thr_up > 0.0f) {
                     L.homeo_thr[(size_t)j] = std::min(p_.homeo_thr_max,
                                                       L.homeo_thr[(size_t)j] + p_.homeo_thr_up);
                 }
@@ -1390,7 +1390,7 @@ void Engine::end_symbol() {
 
             // Relajacion homeostatica periodica cada 64 simbolos en capas asociativas
             // (coste amortizado despreciable: N/64 por simbolo).
-            if (is_cortical_assoc && stdp_enabled_ && p_.homeo_thr_down > 0.0f &&
+            if (is_cortical_assoc && homeostasis_enabled_ && p_.homeo_thr_down > 0.0f &&
                 ((symbols_ & 63L) == 63L)) {
                 const float step_down = p_.homeo_thr_down * 64.0f;
                 for (int j = 0; j < L.n_assoc; ++j) {
@@ -1424,7 +1424,7 @@ void Engine::end_symbol() {
                     for (int k = 0; k < top_c; ++k) {
                         const int win_mc = order_mc[(size_t)k].second;
                         L.col_gain[(size_t)win_mc] = 1.06f;
-                        if (stdp_enabled_) L.col_habituation[(size_t)win_mc] += 0.015f;
+                        if (homeostasis_enabled_) L.col_habituation[(size_t)win_mc] += 0.015f;
                     }
                 } else {
                     std::fill(L.col_gain.begin(), L.col_gain.end(), 1.0f);
