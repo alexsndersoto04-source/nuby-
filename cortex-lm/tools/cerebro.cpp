@@ -1103,7 +1103,7 @@ static int cmd_alimentar(int argc, char** argv) {
             "Uso: %s alimentar <modelo.bin> <texto1.txt> [texto2.txt ...] "
             "[--bloque 450000] [--epocas 1] [--lr 0.24] [--ancla 0.022] "
             "[--alinear episodios.txt] [--epocas-ali 20] [--eval holdout.txt] "
-            "[--plasticidad-local|--stdp-local|--homeostasis-local]\n", argv[0]);
+            "[--plasticidad-local|--stdp-local|--homeostasis-local] [--congelar-lector]\n", argv[0]);
         return 1;
     }
     const std::string ruta_modelo = argv[2];
@@ -1125,6 +1125,7 @@ static int cmd_alimentar(int argc, char** argv) {
     bool plasticidad_local = false;
     bool stdp_local = false;
     bool homeostasis_local = false;
+    bool congelar_lector = false;
     size_t max_pasajes_sem = 24;
 
     for (int i = 3; i < argc; ++i) {
@@ -1140,6 +1141,7 @@ static int cmd_alimentar(int argc, char** argv) {
         else if (a == "--plasticidad-local") plasticidad_local = true;
         else if (a == "--stdp-local") stdp_local = true;
         else if (a == "--homeostasis-local") homeostasis_local = true;
+        else if (a == "--congelar-lector") congelar_lector = true;
         else if (a == "--max-pasajes" && i + 1 < argc) max_pasajes_sem = std::strtoull(argv[++i], nullptr, 10);
         else if (!a.empty() && a[0] != '-') rutas_texto.push_back(a);
     }
@@ -1150,10 +1152,11 @@ static int cmd_alimentar(int argc, char** argv) {
 
     const bool activar_stdp = plasticidad_local || stdp_local;
     const bool activar_homeo = plasticidad_local || homeostasis_local;
-    std::printf("[ALIMENTAR CONTINUO] '%s' | %d regiones | %d neuronas LIF | %zu sinapsis CSR | dorsal=%s | CA3=%zu | STDP-local=%s | homeostasis-local=%s\n",
+    std::printf("[ALIMENTAR CONTINUO] '%s' | %d regiones | %d neuronas LIF | %zu sinapsis CSR | dorsal=%s | CA3=%zu | STDP-local=%s | homeostasis-local=%s | lector=%s\n",
                 ruta_modelo.c_str(), st.eng.num_layers(), st.eng.n_neurons(), st.eng.n_synapses(),
                 st.tiene_dorsal ? "SI" : "NO", st.ca3.num_engrams(),
-                activar_stdp ? "SI" : "NO", activar_homeo ? "SI" : "NO");
+                activar_stdp ? "SI" : "NO", activar_homeo ? "SI" : "NO",
+                congelar_lector ? "CONGELADO" : "ENTRENABLE");
     std::fflush(stdout);
 
     std::vector<std::pair<i32, float>> feats;
@@ -1209,7 +1212,7 @@ static int cmd_alimentar(int argc, char** argv) {
                     st.eng.feed((uint8_t)doc[i]);
                     if (i - s0 >= 32) {
                         st.eng.cortical_sparse_features(feats, 2);
-                        bits += st.rd_ventral.step((uint8_t)doc[i + 1], feats, true, 1.0f);
+                        bits += st.rd_ventral.step((uint8_t)doc[i + 1], feats, !congelar_lector, 1.0f);
                         cnt++;
                     }
                 }
