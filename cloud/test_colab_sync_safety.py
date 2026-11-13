@@ -29,6 +29,12 @@ class ColabSyncSafetyTests(unittest.TestCase):
             self.assertFalse(sync.LOCAL_MODEL.with_name(sync.LOCAL_MODEL.name + ".download").exists())
             self.assertEqual(sync.verify_checkpoint(sync.LOCAL_MODEL), sync.verify_checkpoint(source))
 
+    def test_cxx_little_endian_macro_magic_is_accepted(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "macro.bin"
+            path.write_bytes((0x4E554233).to_bytes(4, "little") + b"payload")
+            self.assertEqual(len(sync.verify_checkpoint(path)), 64)
+
     def test_invalid_download_preserves_existing_checkpoint(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

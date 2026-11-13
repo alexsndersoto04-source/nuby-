@@ -72,7 +72,9 @@ El checkpoint macro se audita por separado del motor local pequeño.
 - En `cloud/colab_sync.py`, la descarga ahora se copia a `.download`, valida
   firma NUBY/NUB3 y SHA-256, y solo entonces reemplaza el checkpoint local. Una
   descarga corrupta no pisa el archivo anterior; la subida también rechaza una
-  firma desconocida. El mensaje de error ya no invita a pegar tokens.
+  firma desconocida. El mensaje de error ya no invita a pegar tokens. Tras el
+  primer uso en Colab corregí un detalle de endianness: el `uint32_t` NUB3 de C++
+  aparece como `3BUN` en disco little-endian; ambas representaciones se aceptan.
 - `colab_train_cortex.ipynb` quedó en **etapa de auditoría de solo lectura**:
   prepara artículos train/holdout disjuntos, guarda títulos y parámetros de split,
   y genera manifiesto comparando CORTEX-LM con baseline; no ejecuta `alimentar`

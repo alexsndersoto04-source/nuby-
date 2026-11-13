@@ -21,7 +21,9 @@ from pathlib import Path
 HF_REPO = "alexsndersoto/cortex-macro-1m-backup"
 HF_MODEL_FILENAME = "cerebro_macro_1m.bin"
 LOCAL_MODEL = Path("cortex-lm/data/cerebro_macro_1m.bin")
-VALID_MAGICS = {b"NUBY", b"NUB3"}
+# Los headers se escriben como uint32_t nativo en C++. En x86 little-endian,
+# 0x4E554233 (comentado como NUB3) aparece en disco como los bytes "3BUN".
+VALID_MAGIC_VALUES = {0x4E554259, 0x4E554233}  # NUBY denso, NUB3 compacto
 
 
 def verify_checkpoint(path: Path) -> str:
@@ -29,8 +31,8 @@ def verify_checkpoint(path: Path) -> str:
         raise ValueError(f"Checkpoint ausente o truncado: {path}")
     with path.open("rb") as stream:
         magic = stream.read(4)
-    if magic not in VALID_MAGICS:
-        raise ValueError(f"Firma de checkpoint no reconocida: {magic!r}")
+    if not any(int.from_bytes(magic, order) in VALID_MAGIC_VALUES for order in ("little", "big")):
+        raise ValueError(f"Firma de checkpoint no reconocida: {magic!r} (hex={magic.hex()})")
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
