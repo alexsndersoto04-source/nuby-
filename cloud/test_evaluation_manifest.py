@@ -31,8 +31,9 @@ class EvaluationManifestTests(unittest.TestCase):
         self.assertTrue(all(score > 0 for score in scores))
 
     def test_cortex_output_parser_reads_bpc_and_byte_length(self):
-        output = "Cerebro cargado en 15.4 ms | 5 regiones\nHOLDOUT BPC (16347 chars): 3.2208 bpc\n"
+        output = "Cerebro cargado en 15.4 ms | 5 regiones | lector=256/256 bytes\nHOLDOUT BPC (16347 chars): 3.2208 bpc\n"
         self.assertEqual(EVALUATOR.parse_cortex_bpc(output), (16347, 3.2208))
+        self.assertEqual(EVALUATOR.parse_reader_vocab(output), 256)
         with self.assertRaises(ValueError):
             EVALUATOR.parse_cortex_bpc("sin métrica")
 

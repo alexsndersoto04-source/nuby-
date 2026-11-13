@@ -1448,8 +1448,9 @@ static int cmd_evaluar(int argc, char** argv) {
     if (sp != std::string::npos && sp > 30) ctx.resize(sp + 1);
     const std::string muestra = generar_prosa_libre(st.eng, st.rd_ventral, ctx, 300, 0.72, 1234);
 
-    std::printf("Cerebro cargado en %.1f ms | %d regiones | %d neuronas LIF | %zu sinapsis CSR | %zu engramas CA3\n",
-                load_ms, st.eng.num_layers(), st.eng.n_neurons(), st.eng.n_synapses(), st.ca3.num_engrams());
+    std::printf("Cerebro cargado en %.1f ms | %d regiones | %d neuronas LIF | %zu sinapsis CSR | lector=%d/256 bytes | %zu engramas CA3\n",
+                load_ms, st.eng.num_layers(), st.eng.n_neurons(), st.eng.n_synapses(),
+                st.rd_ventral.active_vocab_size(), st.ca3.num_engrams());
     std::printf("HOLDOUT BPC (%zu chars): %.4f bpc\n", txt.size(), bpc);
 
     if (!ruta_dic.empty()) {

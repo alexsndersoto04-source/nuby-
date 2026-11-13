@@ -2842,7 +2842,10 @@ double CompactCorticalReadout::step(int target_byte,
                                     bool learn,
                                     float mod) {
     const int tb = target_byte & 0xFF;
-    const int t_slot = ensure_byte_slot(tb);
+    // En inferencia el target no debe ampliar el vocabulario antes de calcular
+    // el softmax: eso filtraría conocimiento del byte que se está puntuando.
+    int t_slot = byte_to_slot_[(size_t)tb];
+    if (t_slot < 0 && learn) t_slot = ensure_byte_slot(tb);
 
     scaled_feats_.clear();
     double norm_sq = 0.0;
@@ -2879,7 +2882,9 @@ double CompactCorticalReadout::step(int target_byte,
     const double inv_s = 1.0 / std::max(1e-30, sum);
     for (int s = 0; s < C; ++s) probs_[(size_t)s] *= inv_s;
 
-    const double p_tgt = std::max(1e-12, probs_[(size_t)t_slot]);
+    // Un byte ausente en el vocabulario aprendido recibe una probabilidad piso,
+    // sin añadir una clase durante evaluación. En entrenamiento ya se añadió arriba.
+    const double p_tgt = (t_slot >= 0) ? std::max(1e-12, probs_[(size_t)t_slot]) : 1e-6;
     const double loss_bits = -std::log2(p_tgt);
 
     if (learn && lr_ > 0.0f && mod > 0.0f) {

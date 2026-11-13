@@ -82,6 +82,15 @@ El checkpoint macro se audita por separado del motor local pequeño.
 
 ### Pendientes antes de entrenamiento amplio
 
+- **La primera evaluación de Colab necesita recalcular la parte CORTEX-LM.**
+  Al inspeccionar el lector FP16, encontré que `CompactCorticalReadout::step`
+  añadía el byte objetivo al vocabulario aunque `learn=false`, filtrando el target
+  de un byte no visto. La ruta de inferencia ahora no cambia el vocabulario y
+  usa un piso de probabilidad fijo para bytes ausentes; `cerebro evaluar` muestra
+  `lector=N/256` y el evaluador lo incluye en el manifiesto. El baseline Witten–Bell
+  de orden 4 comunicado (3,0913 BPC) no depende de este código C++; el BPC CORTEX
+  comunicado (3,4479) no es final hasta repetir solo la evaluación sobre los
+  mismos archivos, con binario actualizado. No se debe entrenar antes de eso.
 - **Todavía hay varias rutas de entrenamiento duplicadas.** Aún falta decidir
   cuál queda como ruta canónica y migrar las demás para que llamen a la misma
   lógica de checkpoint, registro, split y evaluación.
@@ -130,7 +139,9 @@ El checkpoint macro se audita por separado del motor local pequeño.
   Cubren seguridad de candidatos, split UTF-8, hashes/manifiesto, baseline con
   bytes no vistos y descarga HF válida/corrupta.
 - `python3 -m unittest cloud.test_training_safety cloud.test_evaluation_manifest
-  cloud.test_colab_sync_safety -v`: **13 pruebas pasan**.
+  cloud.test_colab_sync_safety -v`: **14 pruebas pasan**. `./bin/cortex_lm audit`
+  añade una sexta comprobación: evalúa un byte ausente sin cambiar el vocabulario
+  y confirma que sí se añade cuando el lector está en modo entrenamiento.
 - `python3 -m py_compile` de los entrenadores, sincronizador HF, baseline y
   evaluador reproducible; `git diff --check`: pasan.
 - `tools/evaluar_reproducible.py` se probó end-to-end con un cerebro sintético

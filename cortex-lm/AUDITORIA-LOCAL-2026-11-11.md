@@ -357,6 +357,35 @@ split y genera el manifiesto comparativo. Se quitó de esta etapa la llamada a
 para obtener los hashes y métricas del checkpoint remoto; esta sesión no tiene
 acceso a Hugging Face.
 
+### Manifiesto recibido de Colab (solo informado por el usuario)
+
+Checkpoint SHA-256 `65109c7b784dc5c6707ac9efed266d37a665b15b92b17c2d175d8c28339a4b98`
+(3.391.315.238 bytes); binario evaluador SHA-256
+`c072dd3771a00e118a0222aea76a9e84e72562b5cfacce5f7158b45fefa04abc`.
+El holdout de 16.384 bytes contiene cinco títulos distintos de los 68 títulos
+registrados en el train nuevo de 200.000 bytes. Métricas comunicadas: CORTEX-LM
+3,4479 BPC; Witten–Bell órdenes 1–4: 3,8008 / 3,4067 / 3,1519 / 3,0913 BPC.
+En esta muestra el baseline orden 4 aventaja en 0,3566 BPC. El train del baseline
+es una muestra nueva, no el corpus histórico exacto del checkpoint; por ello es
+una comparación emparejada en el test, pero no una reproducción del entrenamiento
+histórico. El texto generado que aparece en el log es incoherente. La salida
+informa 0 engramas CA3.
+
+**Hallazgo posterior que obliga a recalcular solo la puntuación CORTEX:**
+`CompactCorticalReadout::step` incorporaba el byte objetivo al vocabulario antes
+de medir incluso con `learn=false`. Esto filtraba la identidad del target durante
+la evaluación cuando aparecía un byte no visto en el vocabulario guardado y podía
+hacer su BPC artificialmente bajo. Corregí el lector para que la inferencia no
+muta el vocabulario, asigne un piso fijo a objetivos ausentes y registre
+`lector_activo/256`; añadí una prueba de regresión al `audit` C++ y un smoke con
+símbolos UTF-8 ausentes confirmó que el hash del modelo queda intacto. Por tanto,
+**3,4479 todavía no es la cifra final de CORTEX-LM**: el baseline 3,0913 sigue
+siendo válido con el mismo holdout, pero hay que repetir la celda de evaluación
+usando exactamente los mismos archivos de `/content` y el binario recién
+compilado. El manifiesto también declara `created_utc=2026-11-13`, fecha futura
+frente al reloj de esta auditoría (2026-11-11); la hora del runtime no se usará
+como evidencia de procedencia.
+
 Nueva prueba comunicada por el usuario: sensibilidad a la tasa de aprendizaje
 del lector, una pasada sobre el mismo lote de 16.384 bytes y holdout, desde
 copias del checkpoint original y sin plasticidad local. Con `--lr 0.03` obtuvo

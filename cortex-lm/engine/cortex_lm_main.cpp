@@ -297,6 +297,31 @@ static int cmd_audit(const std::string&) {
         else std::printf("    ok: retiene la clave a traves del relleno\n");
     }
 
+    // 6. evaluación del lector compacto no debe filtrar el byte objetivo al vocabulario
+    {
+        CompactCorticalReadout rd;
+        rd.init(4, 0.08f);
+        rd.ensure_byte_slot('a');
+        const int antes = rd.active_vocab_size();
+        const std::vector<std::pair<i32, float>> feats = {{0, 1.0f}};
+        const double loss = rd.step('z', feats, false, 0.0f);
+        const bool solo_lectura = rd.active_vocab_size() == antes;
+        const bool piso_correcto = std::isfinite(loss) && std::fabs(loss + std::log2(1e-6)) < 1e-8;
+        std::printf("\n[6] lector compacto evalúa byte ausente sin ampliar vocabulario: %.2f bpc\n", loss);
+        if (!solo_lectura || !piso_correcto) {
+            std::printf("    FALLA: la evaluación modifica vocabulario o puntúa mal el byte ausente\n");
+            fails++;
+        } else {
+            rd.step('z', feats, true, 0.1f);
+            if (rd.active_vocab_size() != antes + 1) {
+                std::printf("    FALLA: entrenamiento no incorpora el byte nuevo\n");
+                fails++;
+            } else {
+                std::printf("    ok: inferencia inmutable; entrenamiento incorpora byte nuevo\n");
+            }
+        }
+    }
+
     std::printf("\n=== RESULTADO: %s ===\n", fails ? "FALLOS" : "TODO OK");
     return fails ? 1 : 0;
 }
