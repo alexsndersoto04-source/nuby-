@@ -24,8 +24,8 @@ import subprocess
 import sys
 import urllib.request
 
-REPO = "alexsndersoto04-source/ask-"
-BRANCH = "arena/886cbd4f-ask"
+REPO = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
+BRANCH = os.environ.get("CORTEX_BRANCH", "main")
 SLUG = "corpus-espanol-cortex"
 WORK = os.path.expanduser("~/cortex_dataset")
 

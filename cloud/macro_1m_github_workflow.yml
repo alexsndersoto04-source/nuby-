@@ -22,7 +22,8 @@ jobs:
       - name: Descargar arquitectura CORTEX-LM Macro
         uses: actions/checkout@v4
         with:
-          ref: arena/886cbd4f-ask
+          # Use the branch or tag that triggered this workflow.
+          ref: ${{ github.ref }}
 
       - name: Instalar dependencias Python de streaming
         run: pip install --quiet huggingface_hub datasets

@@ -23,7 +23,10 @@ def witten_bell_holdout(train: bytes, test: bytes, max_order: int = 4) -> list[f
     if max_order < 1:
         raise ValueError("max_order debe ser >= 1")
 
-    vocabulary = set(train)
+    # El alfabeto de evaluación son bytes, no solo los símbolos observados en
+    # train. Mantener los 256 símbolos evita asignar una probabilidad cero a
+    # cualquier byte nuevo (p. ej. UTF-8 de un carácter infrecuente).
+    vocabulary_size = 256
     unigram = Counter(train)
     # context -> continuations -> frequency
     counts: list[dict[bytes, Counter[int]]] = [defaultdict(Counter) for _ in range(max_order + 1)]
@@ -35,7 +38,7 @@ def witten_bell_holdout(train: bytes, test: bytes, max_order: int = 4) -> list[f
     def probability(target: int, history: bytes, order: int) -> float:
         if order == 0:
             alpha = 0.1
-            return (unigram[target] + alpha) / (len(train) + alpha * len(vocabulary))
+            return (unigram[target] + alpha) / (len(train) + alpha * vocabulary_size)
 
         followers = counts[order].get(history[-order:])
         if not followers:

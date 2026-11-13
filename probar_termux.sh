@@ -4,8 +4,8 @@
 # la primera vez (conservandolo intacto en ejecuciones futuras) y abre el chat en vivo.
 set -euo pipefail
 
-REPO="alexsndersoto04-source/ask-"
-BRANCH="arena/886cbd4f-ask"
+REPO="${CORTEX_REPO:-alexsndersoto04-source/nuby-}"
+BRANCH="${CORTEX_BRANCH:-main}"
 
 echo "=========================================================="
 echo "  CORTEX-LM (100% Spiking LIF en C++) — Modo Termux/Local"

@@ -15,6 +15,7 @@ Requisitos:
     - El binario C++ compilado: cortex-lm/bin/cerebro
 """
 
+import argparse
 import json
 import os
 import shutil
@@ -62,7 +63,10 @@ def hf_download(filename: str, destino: Path, token: str) -> bool:
             repo_type="dataset",
             token=token,
         )
-        shutil.copy2(ruta, destino)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        temporal = destino.with_name(destino.name + ".download")
+        shutil.copy2(ruta, temporal)
+        os.replace(temporal, destino)
         print(f"[OK] Descargado {filename} ({destino.stat().st_size / 1024 / 1024:.2f} MB)")
         return True
     except Exception as exc:
@@ -101,8 +105,9 @@ def cargar_registro() -> dict:
 
 def guardar_registro(reg: dict):
     LOCAL_REGISTRO.parent.mkdir(parents=True, exist_ok=True)
-    with open(LOCAL_REGISTRO, "w", encoding="utf-8") as f:
-        json.dump(reg, f, ensure_ascii=False, indent=2)
+    temporal = LOCAL_REGISTRO.with_name(LOCAL_REGISTRO.name + ".tmp")
+    temporal.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporal, LOCAL_REGISTRO)
 
 
 # ── Descarga de bloques de Wikipedia sin repetir ───────────────────────────
@@ -154,8 +159,18 @@ def descargar_bloque_wikipedia(articulos_vistos: set) -> tuple[str, set]:
 
 
 def entrenar_lote(texto_bloque: str, lote_num: int) -> bool:
-    """Escribe el bloque a un archivo temporal y ejecuta el binario C++."""
+    """Entrena en una copia temporal y promueve el checkpoint solo tras éxito."""
     LOCAL_MODEL.parent.mkdir(parents=True, exist_ok=True)
+    if not LOCAL_MODEL.exists():
+        print("[ERROR] No existe el checkpoint base; se cancela el lote.")
+        return False
+
+    tmp_modelo = LOCAL_MODEL.with_name(LOCAL_MODEL.name + ".pending")
+    try:
+        shutil.copy2(LOCAL_MODEL, tmp_modelo)
+    except Exception as exc:
+        print(f"[ERROR] No se pudo crear copia de seguridad para el lote: {exc}")
+        return False
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as tf:
         tf.write(texto_bloque)
@@ -165,7 +180,7 @@ def entrenar_lote(texto_bloque: str, lote_num: int) -> bool:
         cmd = [
             str(CEREBRO_BIN),
             "alimentar",
-            str(LOCAL_MODEL),
+            str(tmp_modelo),
             tmp_bloque,
             "--bloque", str(BLOQUE_CHARS),
             "--epocas", "1",
@@ -182,29 +197,60 @@ def entrenar_lote(texto_bloque: str, lote_num: int) -> bool:
             print(resultado.stderr[-2000:] if len(resultado.stderr) > 2000 else resultado.stderr)
             return False
 
-        # Mostrar última línea de salida útil
+        # Verificar que el archivo candidato conserva la firma del checkpoint antes de promoverlo.
+        if not tmp_modelo.is_file() or tmp_modelo.stat().st_size < 4:
+            print(f"[ERROR] El lote {lote_num} no produjo un checkpoint legible.")
+            return False
+        with LOCAL_MODEL.open("rb") as original, tmp_modelo.open("rb") as candidato:
+            if original.read(4) != candidato.read(4):
+                print(f"[ERROR] Cambió la firma del checkpoint; se conserva el original.")
+                return False
+
+        # Promoción atómica: una interrupción no deja un modelo parcial en la ruta activa.
+        os.replace(tmp_modelo, LOCAL_MODEL)
         lineas = [l for l in resultado.stdout.strip().split("\n") if l.strip()]
-        if lineas:
-            print(f"[SALIDA] {lineas[-1]}")
+        for linea in lineas:
+            if "train=" in linea or "[COMPLETADO]" in linea:
+                print(f"[SALIDA] {linea}")
         return True
 
     except subprocess.TimeoutExpired:
         print(f"[ERROR] El lote {lote_num} excedió el tiempo límite (1 hora).")
         return False
+    except Exception as exc:
+        print(f"[ERROR] No se pudo promover el checkpoint del lote {lote_num}: {exc}")
+        return False
     finally:
         if os.path.exists(tmp_bloque):
             os.remove(tmp_bloque)
+        if tmp_modelo.exists():
+            tmp_modelo.unlink()
 
 
 # ── Flujo principal ───────────────────────────────────────────────────────
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Descarga o entrena el checkpoint CORTEX-LM por lotes.")
+    parser.add_argument("--solo-descargar", action="store_true",
+                        help="Descarga modelo y registro, verifica el archivo y termina sin entrenar.")
+    parser.add_argument("--max-lotes", type=int, default=MAX_LOTES_POR_SESION,
+                        help=f"Máximo de lotes de entrenamiento en esta sesión (default: {MAX_LOTES_POR_SESION}).")
+    args = parser.parse_args(argv)
+    if args.max_lotes < 0:
+        parser.error("--max-lotes debe ser >= 0")
+
     token = get_token()
 
     # 1. Descargar cerebro y registro existentes
     hf_download(HF_MODEL_FILENAME, LOCAL_MODEL, token)
     hf_download(HF_REGISTRO_FILENAME, LOCAL_REGISTRO, token)
+
+    if not LOCAL_MODEL.exists():
+        raise SystemExit("ERROR: No existe el checkpoint descargado; no se iniciará entrenamiento.")
+    if args.solo_descargar:
+        print(f"[OK] Descarga verificada: {LOCAL_MODEL} ({LOCAL_MODEL.stat().st_size:,} bytes). Sin entrenamiento.")
+        return
 
     reg = cargar_registro()
     articulos_vistos = set(reg.get("articulos_procesados", []))
@@ -224,7 +270,7 @@ def main():
     lote = reg.get("lotes_completados", 0) + 1
     lotes_sesion = 0
 
-    while lotes_sesion < MAX_LOTES_POR_SESION:
+    while lotes_sesion < args.max_lotes:
         print(f"\n=== Lote {lote} ===")
 
         bloque, nuevos_ids = descargar_bloque_wikipedia(articulos_vistos)

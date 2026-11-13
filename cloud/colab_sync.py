@@ -12,19 +12,37 @@ Requisitos:
     - pip install huggingface_hub
 """
 
+import hashlib
 import os
+import shutil
 import sys
 from pathlib import Path
 
 HF_REPO = "alexsndersoto/cortex-macro-1m-backup"
 HF_MODEL_FILENAME = "cerebro_macro_1m.bin"
 LOCAL_MODEL = Path("cortex-lm/data/cerebro_macro_1m.bin")
+VALID_MAGICS = {b"NUBY", b"NUB3"}
+
+
+def verify_checkpoint(path: Path) -> str:
+    if not path.is_file() or path.stat().st_size < 4:
+        raise ValueError(f"Checkpoint ausente o truncado: {path}")
+    with path.open("rb") as stream:
+        magic = stream.read(4)
+    if magic not in VALID_MAGICS:
+        raise ValueError(f"Firma de checkpoint no reconocida: {magic!r}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def get_token():
+
     token = os.environ.get("HF_TOKEN", "").strip()
     if not token:
-        print("ERROR: Falta HF_TOKEN. En Colab: os.environ['HF_TOKEN'] = 'tu_token'")
+        print("ERROR: Falta HF_TOKEN. Configura el secreto HF_TOKEN en Colab Secrets; no pegues el token en una celda.")
         sys.exit(1)
     return token
 
@@ -40,10 +58,15 @@ def cmd_download(token):
         repo_type="dataset",
         token=token,
     )
-    # Copiar a la ruta local esperada por el motor C++
-    import shutil
-    shutil.copy2(path, LOCAL_MODEL)
-    print(f"OK: modelo listo en {LOCAL_MODEL} ({LOCAL_MODEL.stat().st_size / 1024 / 1024:.1f} MB)")
+    temporal = LOCAL_MODEL.with_name(LOCAL_MODEL.name + ".download")
+    try:
+        shutil.copy2(path, temporal)
+        digest = verify_checkpoint(temporal)
+        os.replace(temporal, LOCAL_MODEL)
+    except Exception:
+        temporal.unlink(missing_ok=True)
+        raise
+    print(f"OK: modelo listo en {LOCAL_MODEL} ({LOCAL_MODEL.stat().st_size / 1024 / 1024:.1f} MB), SHA-256={digest}")
 
 
 def cmd_upload(token):
@@ -52,8 +75,13 @@ def cmd_upload(token):
     if not LOCAL_MODEL.exists():
         print(f"ERROR: No existe {LOCAL_MODEL}. No hay nada que subir.")
         sys.exit(1)
+    try:
+        digest = verify_checkpoint(LOCAL_MODEL)
+    except ValueError as exc:
+        print(f"ERROR: {exc}. Se cancela la subida.")
+        sys.exit(1)
 
-    print(f"Subiendo {LOCAL_MODEL} a {HF_REPO}...")
+    print(f"Subiendo {LOCAL_MODEL} a {HF_REPO} (SHA-256={digest})...")
     api = HfApi(token=token)
     api.create_repo(repo_id=HF_REPO, repo_type="dataset", exist_ok=True)
     api.upload_file(

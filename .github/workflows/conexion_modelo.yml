@@ -20,7 +20,8 @@ jobs:
       - name: Descargar repositorio
         uses: actions/checkout@v4
         with:
-          ref: arena/886cbd4f-ask
+          # Build the same ref that triggered the workflow instead of a stale Arena branch.
+          ref: ${{ github.ref }}
 
       - name: Instalar dependencias Python
         run: pip install --quiet huggingface_hub

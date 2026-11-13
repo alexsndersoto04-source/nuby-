@@ -226,9 +226,12 @@ struct EstadoCerebro {
 };
 
 static void guardar_cerebro_completo(const std::string& ruta, const EstadoCerebro& st) {
-    std::ofstream out(ruta, std::ios::binary | std::ios::trunc);
+    // Escribir al lado del destino y promover al final: un corte de sesión no debe
+    // truncar el único checkpoint recuperable (especialmente en aprendizaje continuo).
+    const std::string temporal = ruta + ".tmp";
+    std::ofstream out(temporal, std::ios::binary | std::ios::trunc);
     if (!out) {
-        std::fprintf(stderr, "Error: no se puede guardar '%s'\n", ruta.c_str());
+        std::fprintf(stderr, "Error: no se puede crear checkpoint temporal '%s'\n", temporal.c_str());
         std::exit(1);
     }
     const uint32_t header = st.es_compacto ? kMagicMacroBrain : kMagicBrain;
@@ -259,6 +262,38 @@ static void guardar_cerebro_completo(const std::string& ruta, const EstadoCerebr
             out.write(reinterpret_cast<const char*>(&len), sizeof(len));
             if (len > 0) out.write(s.data(), len);
         }
+    }
+    out.flush();
+    if (!out) {
+        out.close();
+        std::remove(temporal.c_str());
+        std::fprintf(stderr, "Error: escritura incompleta del checkpoint temporal '%s'\n", temporal.c_str());
+        std::exit(1);
+    }
+    out.close();
+    if (out.fail()) {
+        std::remove(temporal.c_str());
+        std::fprintf(stderr, "Error: no se pudo cerrar checkpoint temporal '%s'\n", temporal.c_str());
+        std::exit(1);
+    }
+
+    // POSIX reemplaza atómicamente. En plataformas donde rename no reemplaza
+    // destinos existentes, conservar un .bak hasta completar la promoción.
+    if (std::rename(temporal.c_str(), ruta.c_str()) != 0) {
+        const std::string respaldo = ruta + ".bak";
+        std::remove(respaldo.c_str());
+        if (std::rename(ruta.c_str(), respaldo.c_str()) != 0) {
+            std::remove(temporal.c_str());
+            std::fprintf(stderr, "Error: no se pudo promover '%s'; checkpoint anterior intacto.\n", temporal.c_str());
+            std::exit(1);
+        }
+        if (std::rename(temporal.c_str(), ruta.c_str()) != 0) {
+            std::rename(respaldo.c_str(), ruta.c_str());
+            std::remove(temporal.c_str());
+            std::fprintf(stderr, "Error: falló la promoción de '%s'; se intentó restaurar respaldo.\n", ruta.c_str());
+            std::exit(1);
+        }
+        std::remove(respaldo.c_str());
     }
 }
 

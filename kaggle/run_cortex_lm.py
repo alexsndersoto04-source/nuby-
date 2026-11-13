@@ -26,8 +26,8 @@ import sys
 import tarfile
 import urllib.request
 
-REPO_GH = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/ask-")
-BRANCH = os.environ.get("CORTEX_BRANCH", "arena/886cbd4f-ask")
+REPO_GH = os.environ.get("CORTEX_REPO", "alexsndersoto04-source/nuby-")
+BRANCH = os.environ.get("CORTEX_BRANCH", "main")
 WORK = os.environ.get("CORTEX_REPO_DIR", "/kaggle/working/ask-")
 LOCAL = os.environ.get("CORTEX_LOCAL", "") == "1"
 

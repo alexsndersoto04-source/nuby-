@@ -63,7 +63,7 @@ El cerebro se alimenta por lotes de Wikipedia en español y libros clásicos (`-
 
 ## Compilación
 
-El APK se compila automáticamente en GitHub Actions en cada push a `arena/886cbd4f-nuby`. El artefacto se sube como `Ask-APK` (`Ask.apk`).
+El APK se compila automáticamente en GitHub Actions en cada push. El workflow construye la misma referencia que disparó la ejecución y sube el artefacto como `Ask-APK` (`Ask.apk`).
 
 ## Notas
 

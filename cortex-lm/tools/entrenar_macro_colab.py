@@ -23,6 +23,7 @@ Uso típico en Google Colab:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,8 +71,34 @@ La fotosíntesis convierte energía luminosa, agua y dióxido de carbono en gluc
 
 
 def run_cmd(cmd, cwd):
-    print(f"\n$ {' '.join(cmd)}", flush=True)
+    print(f"\n$ {' '.join(map(str, cmd))}", flush=True)
     subprocess.run(cmd, cwd=cwd, check=True)
+
+
+def actualizar_checkpoint_sobre_copia(cmd, ruta_modelo: Path, cwd):
+    """Ejecuta alimentar/alinear/sonar sobre copia y la promueve solo tras éxito."""
+    if not ruta_modelo.is_file():
+        raise FileNotFoundError(f"No existe checkpoint base: {ruta_modelo}")
+    candidato = ruta_modelo.with_name(ruta_modelo.name + ".candidate")
+    if candidato.exists():
+        candidato.unlink()
+    shutil.copy2(ruta_modelo, candidato)
+    comando = list(cmd)
+    if len(comando) < 3:
+        candidato.unlink(missing_ok=True)
+        raise ValueError("El comando debe tener ruta del checkpoint en el argumento 2")
+    comando[2] = str(candidato)
+    try:
+        run_cmd(comando, cwd)
+        with ruta_modelo.open("rb") as original, candidato.open("rb") as nuevo:
+            firma_original = original.read(4)
+            firma_nueva = nuevo.read(4)
+        if len(firma_nueva) != 4 or firma_nueva != firma_original:
+            raise RuntimeError("El candidato no conserva la firma del checkpoint")
+        os.replace(candidato, ruta_modelo)
+    finally:
+        if candidato.exists():
+            candidato.unlink()
 
 
 def cargar_registro(ruta_reg: Path) -> dict:
@@ -85,7 +112,29 @@ def cargar_registro(ruta_reg: Path) -> dict:
 
 def guardar_registro(ruta_reg: Path, reg: dict):
     ruta_reg.parent.mkdir(parents=True, exist_ok=True)
-    ruta_reg.write_text(json.dumps(reg, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = ruta_reg.with_name(ruta_reg.name + ".tmp")
+    tmp.write_text(json.dumps(reg, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, ruta_reg)
+
+
+def separar_texto_por_bytes(texto: str, limite: int) -> list[str]:
+    """Parte UTF-8 por tamaño de bytes, buscando límite de párrafo sin romper caracteres."""
+    if limite <= 0:
+        raise ValueError("limite debe ser positivo")
+    raw = texto.encode("utf-8")
+    partes = []
+    inicio = 0
+    while inicio < len(raw):
+        fin = min(inicio + limite, len(raw))
+        if fin < len(raw):
+            parrafo = raw.find(b"\n\n", fin, min(fin + 8000, len(raw)))
+            if parrafo >= 0:
+                fin = parrafo + 2
+            while fin < len(raw) and (raw[fin] & 0xC0) == 0x80:
+                fin += 1
+        partes.append(raw[inicio:fin].decode("utf-8"))
+        inicio = fin
+    return partes
 
 
 def descargar_resumen_wiki_es(titulo: str, timeout: int = 12) -> str:
@@ -130,7 +179,7 @@ def iterar_lotes_wikipedia_streaming(ya_vistos: set, num_lotes: int, bytes_por_l
             bloque = "\n\n".join(parrafos)
             ya_vistos.add(titulo)
             buf.append(bloque)
-            buf_len += len(bloque)
+            buf_len += len(bloque.encode("utf-8"))
             if buf_len >= bytes_por_lote:
                 emitidos += 1
                 yield f"wiki_hf_lote_{emitidos:04d}", "\n\n".join(buf)
@@ -155,7 +204,7 @@ def iterar_lotes_wikipedia_streaming(ya_vistos: set, num_lotes: int, bytes_por_l
             if ext:
                 ya_vistos.add(titulo)
                 buf.append(ext)
-                buf_len += len(ext)
+                buf_len += len(ext.encode("utf-8"))
                 if buf_len >= min(bytes_por_lote, 28_000):
                     emitidos += 1
                     yield f"wiki_api_lote_{emitidos:04d}", "\n\n".join(buf)
@@ -180,7 +229,7 @@ def iterar_lotes_wikipedia_streaming(ya_vistos: set, num_lotes: int, bytes_por_l
                 if tit and tit not in ya_vistos and len(ext) >= 120:
                     ya_vistos.add(tit)
                     buf.append(ext)
-                    buf_len += len(ext)
+                    buf_len += len(ext.encode("utf-8"))
                     if buf_len >= min(bytes_por_lote, 60_000):
                         emitidos += 1
                         yield f"wiki_rand_lote_{emitidos:04d}", "\n\n".join(buf)
@@ -226,15 +275,18 @@ def main():
     if args.capas:
         capas_csv = args.capas
 
-    # 3. Creación inicial del cerebro Macro (solo si aún no existe en Drive)
+    # 3. Creación inicial del cerebro Macro en archivo candidato, sin dejar un .bin parcial activo.
     if not ruta_modelo.exists():
+        modelo_inicial = ruta_modelo.with_name(ruta_modelo.name + ".initializing")
+        if modelo_inicial.exists():
+            modelo_inicial.unlink()
         with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as tf:
             tf.write(texto_arranque)
             tmp_init = tf.name
         try:
             run_cmd(
                 [
-                    str(bin_cerebro), "entrenar", str(ruta_modelo), tmp_init,
+                    str(bin_cerebro), "entrenar", str(modelo_inicial), tmp_init,
                     "--capas", capas_csv,
                     "--grado", str(grado),
                     "--columnas", str(ncols),
@@ -249,23 +301,28 @@ def main():
             )
             run_cmd(
                 [
-                    str(bin_cerebro), "alinear", str(ruta_modelo), ruta_ali,
+                    str(bin_cerebro), "alinear", str(modelo_inicial), ruta_ali,
                     "--epocas", "22", "--lr", "0.40", "--ancla", "0.01",
                 ],
                 cwd=str(raiz),
             )
             run_cmd(
                 [
-                    str(bin_cerebro), "asimilar", str(ruta_modelo), tmp_init,
+                    str(bin_cerebro), "asimilar", str(modelo_inicial), tmp_init,
                     "--max-pasajes", "50", "--ciclos", "18",
                 ],
                 cwd=str(raiz),
             )
+            if not modelo_inicial.is_file() or modelo_inicial.stat().st_size < 4:
+                raise RuntimeError("La creación no produjo un checkpoint válido.")
+            os.replace(modelo_inicial, ruta_modelo)
             reg["fases_completadas"].append("arranque_macro")
             guardar_registro(ruta_reg, reg)
         finally:
             if os.path.exists(tmp_init):
                 os.remove(tmp_init)
+            if modelo_inicial.exists():
+                modelo_inicial.unlink()
 
     # 4. Alimentación continua de clásicos públicos en español (descarga temporal y borrado inmediato)
     if args.lotes_libros > 0 and "libros_gitenberg" not in reg["fases_completadas"]:
@@ -278,22 +335,20 @@ def main():
                 )
                 texto_lib = Path(tmp_corpus).read_text(encoding="utf-8", errors="ignore")
                 os.remove(tmp_corpus)
-                tramos = [
-                    texto_lib[i : i + args.bytes_lote]
-                    for i in range(0, len(texto_lib), args.bytes_lote)
-                ][: args.lotes_libros]
+                tramos = separar_texto_por_bytes(texto_lib, args.bytes_lote)[: args.lotes_libros]
                 for idx, tramo in enumerate(tramos, 1):
                     id_fase = f"libro_lote_{idx:03d}"
                     if id_fase in reg["fases_completadas"]:
                         continue
                     lote_path = os.path.join(tmpdir, f"{id_fase}.txt")
                     Path(lote_path).write_text(tramo, encoding="utf-8")
-                    run_cmd(
+                    actualizar_checkpoint_sobre_copia(
                         [
                             str(bin_cerebro), "alimentar", str(ruta_modelo), lote_path,
                             "--bloque", str(args.bytes_lote), "--epocas", "1",
                             "--lr", "0.24", "--ancla", "0.022",
                         ],
+                        ruta_modelo,
                         cwd=str(raiz),
                     )
                     os.remove(lote_path)
@@ -315,13 +370,14 @@ def main():
                 tmp_lote = tf.name
             try:
                 t0 = time.time()
-                run_cmd(
+                actualizar_checkpoint_sobre_copia(
                     [
                         str(bin_cerebro), "alimentar", str(ruta_modelo), tmp_lote,
                         "--bloque", str(args.bytes_lote), "--epocas", "1",
                         "--lr", "0.24", "--ancla", "0.022",
                         "--semantica", "--max-pasajes", "20",
                     ],
+                    ruta_modelo,
                     cwd=str(raiz),
                 )
                 print(f"[STREAMING OK] {nombre_lote} consolidado y lote temporal eliminado ({time.time()-t0:.1f}s).")
@@ -333,7 +389,11 @@ def main():
                     os.remove(tmp_lote)
 
     # 6. Consolidación final por Sueño Cortical de Ondas Lentas
-    run_cmd([str(bin_cerebro), "sonar", str(ruta_modelo), "--ciclos", "18"], cwd=str(raiz))
+    actualizar_checkpoint_sobre_copia(
+        [str(bin_cerebro), "sonar", str(ruta_modelo), "--ciclos", "18"],
+        ruta_modelo,
+        cwd=str(raiz),
+    )
     tam_mb = ruta_modelo.stat().st_size / (1024 * 1024)
     print(f"\n=== CEREBRO MACRO VIVO LISTO EN '{ruta_modelo}' ({tam_mb:.1f} MB) ===", flush=True)
 

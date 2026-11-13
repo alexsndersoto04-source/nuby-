@@ -43,6 +43,7 @@ from entrenar_macro_colab import (  # noqa: E402
     cargar_registro,
      guardar_registro,
     iterar_lotes_wikipedia_streaming,
+    separar_texto_por_bytes,
 )
 
 HTML_NUBE = r"""<!DOCTYPE html>
@@ -520,7 +521,8 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
     # Poner el cerebro EN LÍNEA inmediatamente mientras el aprendizaje --continuo corre en copia sombra
     gestor.recargar_tubo()
 
-    def alimentar_en_sombra(archivo_lote: str, con_semantica: bool, id_fase: str, n_bytes: int):
+    def alimentar_en_sombra(archivo_lote: str, con_semantica: bool, id_fase: str, n_bytes: int) -> bool:
+        """Aplica un lote y confirma su registro solo si el checkpoint sombra se instala."""
         sombra = ruta_modelo.with_suffix(".sombra.bin")
         if sombra.exists():
             try:
@@ -530,8 +532,8 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
         try:
             shutil.copy2(ruta_modelo, sombra)
         except Exception as exc:
-            gestor.log(f"Sin espacio en disco para sombra ({exc}); saltando lote {id_fase}.")
-            return
+            gestor.log(f"Sin espacio en disco para sombra ({exc}); lote {id_fase} queda pendiente.")
+            return False
         cmd = [
             gestor.bin_cerebro, "alimentar", str(sombra), archivo_lote,
             "--bloque", str(bytes_lote), "--epocas", "1", "--lr", "0.24", "--ancla", "0.022",
@@ -541,13 +543,13 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
         try:
             ejecutar_cmd(gestor, cmd, DIR_CORTEX)
         except Exception as exc:
-            gestor.log(f"Lote {id_fase} falló ({exc}); se descarta y continúa con el siguiente.")
+            gestor.log(f"Lote {id_fase} falló ({exc}); queda pendiente para reintento.")
             if sombra.exists():
                 try:
                     sombra.unlink()
                 except Exception:
                     pass
-            return
+            return False
         if gestor.lotes_completados > 0 and gestor.lotes_completados % 6 == 0:
             try:
                 ejecutar_cmd(gestor, [gestor.bin_cerebro, "sonar", str(sombra), "--ciclos", "16"], DIR_CORTEX)
@@ -556,13 +558,13 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
         try:
             os.replace(sombra, ruta_modelo)
         except Exception as exc:
-            gestor.log(f"No se pudo aplicar sombra ({exc}); se conserva el modelo anterior.")
+            gestor.log(f"No se pudo aplicar sombra ({exc}); se conserva el modelo anterior y el lote queda pendiente.")
             if sombra.exists():
                 try:
                     sombra.unlink()
                 except Exception:
                     pass
-            return
+            return False
         reg["fases_completadas"].append(id_fase)
         reg["bytes_asimilados"] = int(reg.get("bytes_asimilados", 0)) + n_bytes
         guardar_registro(ruta_reg, reg)
@@ -571,6 +573,7 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
         gestor.recargar_tubo()
         if gestor.lotes_completados % 4 == 0:
             intentar_subir_hf(gestor, ruta_modelo, ruta_reg)
+        return True
 
     # 2. Clásicos públicos en español
     if lotes_libros > 0 and "libros_gitenberg_completos" not in reg["fases_completadas"]:
@@ -585,7 +588,8 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
                 )
                 texto_lib = Path(tmp_corpus).read_text(encoding="utf-8", errors="ignore")
                 os.remove(tmp_corpus)
-                tramos = [texto_lib[i : i + bytes_lote] for i in range(0, len(texto_lib), bytes_lote)][:lotes_libros]
+                tramos = separar_texto_por_bytes(texto_lib, bytes_lote)[:lotes_libros]
+                libros_ok = True
                 for idx, tramo in enumerate(tramos, 1):
                     id_f = f"libro_{idx:03d}"
                     if id_f in reg["fases_completadas"]:
@@ -593,10 +597,14 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
                     gestor.fase_actual = f"Libro continuo {idx}/{len(tramos)}"
                     lp = os.path.join(tmpdir, f"{id_f}.txt")
                     Path(lp).write_text(tramo, encoding="utf-8")
-                    alimentar_en_sombra(lp, False, id_f, len(tramo.encode("utf-8")))
+                    if not alimentar_en_sombra(lp, False, id_f, len(tramo.encode("utf-8"))):
+                        libros_ok = False
                     os.remove(lp)
-                reg["fases_completadas"].append("libros_gitenberg_completos")
-                guardar_registro(ruta_reg, reg)
+                if libros_ok:
+                    reg["fases_completadas"].append("libros_gitenberg_completos")
+                    guardar_registro(ruta_reg, reg)
+                else:
+                    gestor.log("Algún lote de clásicos quedó pendiente; no marco la fase completa.")
             except Exception as exc:
                 gestor.log(f"Aviso libros ({exc}); continuando con Wikipedia ES.")
 
@@ -604,17 +612,23 @@ def hilo_fabrica_continua(gestor: GestorMacroNube):
     vistos = set(reg.get("articulos_wiki", []))
     while True:
         procesados_ciclo = 0
+        vistos_antes = set(vistos)
         for nombre_lote, contenido in iterar_lotes_wikipedia_streaming(vistos, lotes_wiki, bytes_lote):
+            articulos_lote = vistos - vistos_antes
             id_unico = f"{nombre_lote}_{len(reg['fases_completadas']):04d}"
             gestor.fase_actual = f"Wikipedia ES ({id_unico})"
             with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as tf:
                 tf.write(contenido)
                 tmp_w = tf.name
             try:
-                alimentar_en_sombra(tmp_w, True, id_unico, len(contenido.encode("utf-8")))
-                reg["articulos_wiki"] = sorted(list(vistos))[-5000:]
-                guardar_registro(ruta_reg, reg)
-                procesados_ciclo += 1
+                if alimentar_en_sombra(tmp_w, True, id_unico, len(contenido.encode("utf-8"))):
+                    reg["articulos_wiki"] = sorted(list(vistos))[-5000:]
+                    guardar_registro(ruta_reg, reg)
+                    procesados_ciclo += 1
+                else:
+                    vistos.difference_update(articulos_lote)
+                    gestor.log(f"Artículos del lote {id_unico} no registrados; se volverán a intentar.")
+                vistos_antes = set(vistos)
             finally:
                 if os.path.exists(tmp_w):
                     os.remove(tmp_w)

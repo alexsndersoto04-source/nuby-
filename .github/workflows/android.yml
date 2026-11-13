@@ -137,7 +137,7 @@ jobs:
           tag_name: apk
           name: Ask — APK
           body: |
-            APK firmado de Ask, generado automáticamente desde la rama arena/886cbd4f-ask.
+            APK firmado de Ask, generado automáticamente desde la referencia que disparó el workflow.
             Descarga **Ask.apk** en "Assets" e instálalo en el teléfono.
           files: Ask.apk
           make_latest: true

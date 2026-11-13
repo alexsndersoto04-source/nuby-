@@ -7,8 +7,8 @@
 # el momento, asi que este fichero no hay que volver a bajarlo.
 set -u
 
-BRANCH="arena/c7deda7f-ask"
-REPO="alexsndersoto04-source/ask-"
+BRANCH="${CORTEX_BRANCH:-main}"
+REPO="${CORTEX_REPO:-alexsndersoto04-source/nuby-}"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 CURL="curl -fsSL -H Cache-Control:no-cache -H Pragma:no-cache"
 

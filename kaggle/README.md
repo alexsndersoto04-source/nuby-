@@ -15,7 +15,7 @@ instala dentro de una Debian mínima, donde sí hay paquetes precompilados.
 
 ```bash
 pkg install -y curl
-curl -fsSL https://raw.githubusercontent.com/alexsndersoto04-source/ask-/arena/c7deda7f-ask/termux_setup.sh -o setup.sh && bash setup.sh
+curl -fsSL https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/main/termux_setup.sh -o setup.sh && bash setup.sh
 ```
 
 Instala Debian (~400 MB, tarda un rato), Python, la herramienta de Kaggle y
@@ -25,7 +25,7 @@ ponerlo.
 **Para lanzarlo:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexsndersoto04-source/ask-/arena/c7deda7f-ask/termux_run.sh -o run.sh && bash run.sh
+curl -fsSL https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/main/termux_run.sh -o run.sh && bash run.sh
 ```
 
 Eso sube el trabajo, espera y al final imprime la tabla. Si quieres lanzarlo y
@@ -52,7 +52,7 @@ el número una vez y vuelve a lanzar. El script te da el enlace exacto.
 
 1. Entra en <https://www.kaggle.com/code> y pulsa **New Notebook**.
 2. Abre en otra pestaña:
-   `https://raw.githubusercontent.com/alexsndersoto04-source/ask-/arena/c7deda7f-ask/kaggle/run_cortex_lm.py`
+   `https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/main/kaggle/run_cortex_lm.py`
    y copia todo el texto.
 3. En el cuaderno, borra lo que trae y pega lo copiado.
 4. **Settings**: Internet **ON**, Accelerator **None**.
@@ -74,7 +74,7 @@ del teléfono.
    abre en otra pestaña
 
    ```
-   https://raw.githubusercontent.com/alexsndersoto04-source/ask-/arena/c7deda7f-ask/kaggle/run_cortex_lm.py
+   https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/main/kaggle/run_cortex_lm.py
    ```
 
    y si no puedes copiar, basta con ejecutarlo sin pegarlo: crea una celda y
@@ -82,7 +82,7 @@ del teléfono.
 
    ```python
    import urllib.request
-   url = "https://raw.githubusercontent.com/alexsndersoto04-source/ask-/arena/c7deda7f-ask/kaggle/run_cortex_lm.py"
+   url = "https://raw.githubusercontent.com/alexsndersoto04-source/nuby-/main/kaggle/run_cortex_lm.py"
    code = urllib.request.urlopen(url).read().decode()
    exec(compile(code, "run_cortex_lm.py", "exec"), {"__name__": "__main__"})
    ```

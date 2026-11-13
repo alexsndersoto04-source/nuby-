@@ -8,8 +8,8 @@
 # Todo el trabajo ocurre en Kaggle. El telefono solo manda y recibe.
 set -u
 
-BRANCH="${CORTEX_BRANCH:-arena/886cbd4f-ask}"
-REPO="${CORTEX_REPO:-alexsndersoto04-source/ask-}"
+BRANCH="${CORTEX_BRANCH:-main}"
+REPO="${CORTEX_REPO:-alexsndersoto04-source/nuby-}"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 
 die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
