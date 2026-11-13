@@ -379,13 +379,23 @@ hacer su BPC artificialmente bajo. Corregí el lector para que la inferencia no
 muta el vocabulario, asigne un piso fijo a objetivos ausentes y registre
 `lector_activo/256` y los conteos de objetivos OOV; añadí una prueba de regresión
 al `audit` C++ y un smoke con símbolos UTF-8 ausentes confirmó que el hash del
-modelo queda intacto. Por tanto,
-**3,4479 todavía no es la cifra final de CORTEX-LM**: el baseline 3,0913 sigue
-siendo válido con el mismo holdout, pero hay que repetir la celda de evaluación
-usando exactamente los mismos archivos de `/content` y el binario recién
-compilado. El manifiesto también declara `created_utc=2026-11-13`, fecha futura
-frente al reloj de esta auditoría (2026-11-11); la hora del runtime no se usará
-como evidencia de procedencia.
+modelo queda intacto. El usuario repitió con el binario corregido y los mismos
+hashes de checkpoint/holdout/train: el vocabulario tiene 193/256 slots, pero hay
+**0 objetivos OOV de 16.351**. Por tanto, el defecto no afectó esta medición:
+CORTEX-LM confirma **3,4479 BPC** frente a **3,0913** del baseline Witten–Bell
+orden 4, diferencia **+0,3566 BPC**. El baseline entrenó con solo 200.000 bytes
+nuevos, pero no reproduce el corpus histórico del checkpoint. Se conserva como
+resultado negativo para este holdout, no como veredicto global. El lector solo
+tiene 193/256 slots activos y el holdout no contiene objetivos fuera de esos
+slots. El BPC de CORTEX se normaliza sobre esos 193 bytes, mientras que Witten–Bell
+lo hace sobre 256; el baseline reportado ya gana pese a esa ventaja de soporte
+para CORTEX. Un baseline condicionado a los mismos 193 símbolos tendría BPC igual
+o menor, así que el sentido de la diferencia no favorece al baseline por el
+vocabulario. La generación muestra texto incoherente; esto es una señal
+cualitativa concordante, no una métrica independiente. El manifiesto también
+declara `created_utc=2026-11-13`,
+fecha futura frente al reloj de esta auditoría (2026-11-11); la hora del runtime
+no se usará como evidencia de procedencia.
 
 Nueva prueba comunicada por el usuario: sensibilidad a la tasa de aprendizaje
 del lector, una pasada sobre el mismo lote de 16.384 bytes y holdout, desde

@@ -82,16 +82,20 @@ El checkpoint macro se audita por separado del motor local pequeño.
 
 ### Pendientes antes de entrenamiento amplio
 
-- **La primera evaluación de Colab necesita recalcular la parte CORTEX-LM.**
-  Al inspeccionar el lector FP16, encontré que `CompactCorticalReadout::step`
-  añadía el byte objetivo al vocabulario aunque `learn=false`, filtrando el target
-  de un byte no visto. La ruta de inferencia ahora no cambia el vocabulario y
-  usa un piso de probabilidad fijo para bytes ausentes; `cerebro evaluar` muestra
-  `lector=N/256` y cuenta objetivos/tipos OOV; el evaluador incluye esos conteos
-  en el manifiesto. El baseline Witten–Bell
-  de orden 4 comunicado (3,0913 BPC) no depende de este código C++; el BPC CORTEX
-  comunicado (3,4479) no es final hasta repetir solo la evaluación sobre los
-  mismos archivos, con binario actualizado. No se debe entrenar antes de eso.
+- **Corrección de evaluación FP16 verificada.** `CompactCorticalReadout::step`
+  antes añadía el byte objetivo al vocabulario aunque `learn=false`; ahora la
+  inferencia es de solo lectura, puntúa bytes ausentes con piso y registra
+  `lector=N/256` más objetivos/tipos OOV. En la repetición Colab, mismo hash de
+  checkpoint/holdout/train, lector 193/256 y 0 objetivos OOV. El BPC CORTEX no
+  cambió: **3,4479**. Así queda confirmado para este holdout que Witten–Bell orden
+  4 (**3,0913**) aventaja por **0,3566 BPC**. No es veredicto global: el corpus
+  del checkpoint histórico no está disponible para un baseline idéntico y solo
+  se midió una muestra de cinco artículos. El lector cubre 193/256 símbolos; como
+  el holdout tiene 0 OOV, el BPC de CORTEX está condicionado a 193 clases frente
+  al baseline completo de 256. Esa diferencia de soporte favorece a CORTEX y no
+  explica que pierda; al condicionar correctamente el baseline a los mismos
+  símbolos, su BPC no aumentaría. Sí es razón suficiente para no iniciar
+  entrenamiento amplio antes de una evaluación confirmatoria independiente.
 - **Todavía hay varias rutas de entrenamiento duplicadas.** Aún falta decidir
   cuál queda como ruta canónica y migrar las demás para que llamen a la misma
   lógica de checkpoint, registro, split y evaluación.
