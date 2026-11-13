@@ -525,6 +525,7 @@ public:
     // Registra un byte en el vocabulario activo si es nuevo (O(1), sin realocar W_).
     int ensure_byte_slot(int byte_val);
     int active_vocab_size() const { return n_active_; }
+    bool has_byte_slot(int byte_val) const { return byte_to_slot_[(size_t)(byte_val & 255)] >= 0; }
 
     void save(std::ostream& os) const;
     void load(std::istream& is);
@@ -612,6 +613,7 @@ public:
     void scale_weights(float factor);
     int  ensure_byte_slot(int byte_val);
     int  active_vocab_size() const { return n_active_; }
+    bool has_byte_slot(int byte_val) const { return byte_to_slot_[(size_t)(byte_val & 255)] >= 0; }
 
     void save(std::ostream& os) const;
     void load(std::istream& is);

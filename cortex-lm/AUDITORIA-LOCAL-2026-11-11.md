@@ -377,8 +377,9 @@ de medir incluso con `learn=false`. Esto filtraba la identidad del target durant
 la evaluación cuando aparecía un byte no visto en el vocabulario guardado y podía
 hacer su BPC artificialmente bajo. Corregí el lector para que la inferencia no
 muta el vocabulario, asigne un piso fijo a objetivos ausentes y registre
-`lector_activo/256`; añadí una prueba de regresión al `audit` C++ y un smoke con
-símbolos UTF-8 ausentes confirmó que el hash del modelo queda intacto. Por tanto,
+`lector_activo/256` y los conteos de objetivos OOV; añadí una prueba de regresión
+al `audit` C++ y un smoke con símbolos UTF-8 ausentes confirmó que el hash del
+modelo queda intacto. Por tanto,
 **3,4479 todavía no es la cifra final de CORTEX-LM**: el baseline 3,0913 sigue
 siendo válido con el mismo holdout, pero hay que repetir la celda de evaluación
 usando exactamente los mismos archivos de `/content` y el binario recién

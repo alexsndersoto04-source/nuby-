@@ -87,7 +87,8 @@ El checkpoint macro se audita por separado del motor local pequeño.
   añadía el byte objetivo al vocabulario aunque `learn=false`, filtrando el target
   de un byte no visto. La ruta de inferencia ahora no cambia el vocabulario y
   usa un piso de probabilidad fijo para bytes ausentes; `cerebro evaluar` muestra
-  `lector=N/256` y el evaluador lo incluye en el manifiesto. El baseline Witten–Bell
+  `lector=N/256` y cuenta objetivos/tipos OOV; el evaluador incluye esos conteos
+  en el manifiesto. El baseline Witten–Bell
   de orden 4 comunicado (3,0913 BPC) no depende de este código C++; el BPC CORTEX
   comunicado (3,4479) no es final hasta repetir solo la evaluación sobre los
   mismos archivos, con binario actualizado. No se debe entrenar antes de eso.

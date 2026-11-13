@@ -198,6 +198,9 @@ struct LectorHibrido {
     int active_vocab_size() const {
         return compacto ? fp16.active_vocab_size() : denso.active_vocab_size();
     }
+    bool has_byte_slot(int byte_val) const {
+        return compacto ? fp16.has_byte_slot(byte_val) : denso.has_byte_slot(byte_val);
+    }
     void save(std::ostream& os) const {
         if (compacto) fp16.save(os);
         else denso.save(os);
@@ -1442,6 +1445,20 @@ static int cmd_evaluar(int argc, char** argv) {
 
     const std::string txt = leer_archivo(ruta_ho);
     const double bpc = evaluar_bpc_texto(st.eng, st.rd_ventral, txt, 0);
+    // evaluar_bpc_texto calienta 32 bytes y empieza puntuando el target en
+    // índice 33. Contar OOV sin alterar el lector permite interpretar el piso.
+    size_t oov_targets = 0;
+    bool oov_type[256] = {};
+    const size_t scored_targets = txt.size() > 33 ? txt.size() - 33 : 0;
+    for (size_t i = 33; i < txt.size(); ++i) {
+        const uint8_t b = (uint8_t)txt[i];
+        if (!st.rd_ventral.has_byte_slot(b)) {
+            oov_targets++;
+            oov_type[b] = true;
+        }
+    }
+    size_t oov_types = 0;
+    for (bool seen : oov_type) if (seen) oov_types++;
 
     std::string ctx = txt.substr(0, std::min<size_t>(120, txt.size()));
     size_t sp = ctx.rfind(' ');
@@ -1452,6 +1469,8 @@ static int cmd_evaluar(int argc, char** argv) {
                 load_ms, st.eng.num_layers(), st.eng.n_neurons(), st.eng.n_synapses(),
                 st.rd_ventral.active_vocab_size(), st.ca3.num_engrams());
     std::printf("HOLDOUT BPC (%zu chars): %.4f bpc\n", txt.size(), bpc);
+    std::printf("HOLDOUT OOV targets: %zu/%zu bytes | %zu unseen byte values\n",
+                oov_targets, scored_targets, oov_types);
 
     if (!ruta_dic.empty()) {
         auto dic = cargar_dic(ruta_dic);

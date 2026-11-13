@@ -29,6 +29,7 @@ from baseline_ngram import witten_bell_holdout
 
 BPC_RE = re.compile(r"HOLDOUT BPC \((\d+) chars\): ([0-9]+(?:\.[0-9]+)?) bpc")
 VOCAB_RE = re.compile(r"lector=(\d+)/256 bytes")
+OOV_RE = re.compile(r"HOLDOUT OOV targets: (\d+)/(\d+) bytes \| (\d+) unseen byte values")
 
 
 def sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
@@ -51,6 +52,13 @@ def parse_reader_vocab(output: str) -> int:
     if not match:
         raise ValueError("No se encontró el tamaño de vocabulario del lector; recompila el binario actualizado")
     return int(match.group(1))
+
+
+def parse_oov_counts(output: str) -> tuple[int, int, int]:
+    match = OOV_RE.search(output)
+    if not match:
+        raise ValueError("No se encontraron los conteos OOV del holdout; recompila el binario actualizado")
+    return tuple(int(value) for value in match.groups())
 
 
 def atomic_json(path: Path, data: dict) -> None:
@@ -122,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"cerebro evaluar terminó con código {result.returncode}:\n{result.stderr[-4000:]}")
     measured_bytes, cortex_bpc = parse_cortex_bpc(result.stdout)
     active_vocab = parse_reader_vocab(result.stdout)
+    oov_targets, scored_targets, oov_types = parse_oov_counts(result.stdout)
     baseline = witten_bell_holdout(train, holdout, args.max_order)
 
     after = {name: {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
@@ -148,7 +157,9 @@ def main(argv: list[str] | None = None) -> int:
         },
         "files": before,
         "cortex_lm": {"bpc": cortex_bpc, "reader_active_vocab": active_vocab,
-                      "reader_vocab_capacity": 256, "command": command},
+                      "reader_vocab_capacity": 256, "oov_target_count": oov_targets,
+                      "scored_target_count": scored_targets, "oov_byte_values": oov_types,
+                      "command": command},
         "baseline": {
             "name": "Witten-Bell byte n-gram",
             "max_order": args.max_order,
@@ -166,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
         "holdout_bytes": len(holdout),
         "cortex_bpc": cortex_bpc,
         "reader_active_vocab": active_vocab,
+        "oov_target_count": oov_targets,
+        "scored_target_count": scored_targets,
+        "oov_byte_values": oov_types,
         "witten_bell_bpc_by_order": report["baseline"]["bpc_by_order"],
         "inputs_unchanged": unchanged,
         "minimum_size_passed": report["protocol"]["minimum_size_passed"],
